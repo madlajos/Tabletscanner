@@ -1,0 +1,12 @@
+{
+    "camera_params": {
+        "Width": 4200,
+        "Height": 2160,
+        "OffsetX": 0,
+        "OffsetY": 0,
+        "ExposureTime": 20000.0,
+        "Gain": 0.0,
+        "Gamma": 1.0,
+        "FrameRate": 10.0
+    }
+}
