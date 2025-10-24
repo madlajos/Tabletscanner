@@ -1,0 +1,29 @@
+<div class="center-popup-overlay">
+    <div class="center-popup-content">
+      <h2>A mérés eredménye:</h2>
+      <h1
+        class="result-icon"
+        [class.success]="measurementRecord.result.startsWith('✔')"
+        [class.failure]="measurementRecord.result.startsWith('✖')">
+        {{ measurementRecord.result }}
+      </h1>
+      <table class="results-table-popup">
+        <thead>
+          <tr>
+            <th>Eldugult</th>
+            <th>Részleges</th>
+            <th>Tiszta</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>{{ results[0] }}</td>
+            <td>{{ results[1] }}</td>
+            <td>{{ results[2] }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <button (click)="dismiss()">OK</button>
+    </div>
+  </div>
+  

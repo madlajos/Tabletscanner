@@ -1,0 +1,66 @@
+<div class="main-content">
+  <app-image-viewer></app-image-viewer>
+</div>
+
+<div class="settings-row">
+  <mat-sidenav-container class="sidenav-container">
+    <!-- Left: Control Panel + Results Table -->
+    <div class="control-panel-results-container">
+      <div class="control-panel-container">
+        <app-control-panel></app-control-panel>
+      </div>
+      <div class="results-table-container">
+        <app-results-table></app-results-table>
+      </div>
+      
+      <div class="error-popup-container">
+        <app-error-popup-list></app-error-popup-list>
+      </div>      
+    </div>
+    <!-- Right: Settings Panel -->
+    <mat-sidenav #sidenav mode="side" position="end" opened="false" class="sidenav">
+      <!-- Settings content -->
+      <mat-accordion multi="true">
+        <mat-expansion-panel expanded="true">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Turntable Control</mat-panel-title>
+          </mat-expansion-panel-header>
+          <app-turntable-control></app-turntable-control>
+        </mat-expansion-panel>
+        <mat-expansion-panel expanded="true">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Settings</mat-panel-title>
+          </mat-expansion-panel-header>
+          <app-camera-control></app-camera-control>
+        </mat-expansion-panel>
+        <mat-expansion-panel expanded="true">
+          <mat-expansion-panel-header>
+            <mat-panel-title>COM Devices</mat-panel-title>
+          </mat-expansion-panel-header>
+          <app-comport-control></app-comport-control>
+        </mat-expansion-panel>
+        <mat-expansion-panel expanded="true">
+          <mat-expansion-panel-header>
+            <mat-panel-title>SQL Database</mat-panel-title>
+          </mat-expansion-panel-header>
+          <app-sql-database></app-sql-database>
+        </mat-expansion-panel>
+      </mat-accordion>
+      <button (click)="logout()" class="logout-button">Kijelentkezés</button>
+    </mat-sidenav>
+    <button class="toggle-button" (click)="toggleSettingsPanel()">
+      <mat-icon>{{ sidenav.opened ? 'chevron_right' : 'chevron_left' }}</mat-icon>
+    </button>
+  </mat-sidenav-container>
+</div>
+
+<app-login-popup
+  [isVisible]="isLoginPopupVisible"
+  [loginError]="loginError"
+  (loginSuccess)="onLoginSuccess($event)"
+  (closePopup)="hideLoginPopup()">
+</app-login-popup>
+
+<div style="display: none;">
+  <app-barcode-scanner-control></app-barcode-scanner-control>
+</div>

@@ -1,0 +1,14 @@
+<div class="device" *ngFor="let device of devices">
+  <span>{{ device.name }}: {{ device.status }}</span>
+  <div class="button-group">
+    <button type="button"
+            (click)="toggleConnection(device)"
+            [ngClass]="{
+              'connect-button': true,
+              'connected': device.status.startsWith('Connected')
+            }">
+      <mat-icon *ngIf="device.status.startsWith('Connected'); else connectIcon">link_off</mat-icon>
+      <ng-template #connectIcon><mat-icon>link</mat-icon></ng-template>
+    </button>
+  </div>
+</div>

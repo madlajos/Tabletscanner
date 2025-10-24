@@ -1,0 +1,93 @@
+/* Overlay behind the login popup */
+.login-popup-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8); /* Dark overlay */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9998;
+  }
+  
+  /* Login popup container */
+  .login-popup {
+    position: relative;
+    width: 300px; /* Container width */
+    background-color: #333;
+    color: #fff;
+    padding: 20px 30px;
+    border-radius: 10px;
+    border: 2px solid var(--main-blue);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+    z-index: 9999;
+    text-align: center;
+  }
+  
+  /* Bold heading */
+  .login-popup h3 {
+    font-weight: bold !important;
+    margin-top: 0;
+    margin-bottom: 15px;
+  }
+  
+  /* For both text inputs and login button, enforce same width */
+  .login-popup input[type="text"],
+  .login-popup input[type="password"],
+  .login-popup .login-button {
+    display: block;
+    width: 100%;
+    max-width: 250px;
+    margin: 10px auto;
+    box-sizing: border-box;
+  }
+  
+  /* Style input fields */
+  .login-popup input[type="text"],
+  .login-popup input[type="password"] {
+    padding: 8px;
+    border: 1px solid #555;
+    border-radius: 5px;
+    background-color: #444;
+    color: #fff;
+  }
+  
+  /* Style login button */
+  .login-button {
+    padding: 10px;
+    margin-top: 10px;
+    background-color: var(--main-blue);
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    font-size: 1em;
+    cursor: pointer;
+    transition: background-color 0.2s ease-in-out;
+    font-weight: bold;
+  }
+  
+  .login-button:hover {
+    background-color: var(--hover-active-blue);
+  }
+  
+  /* Close button styling */
+  .login-close {
+    position: absolute;
+    top: 5px;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 1.5em;
+    cursor: pointer;
+  }
+  
+  /* Error message styling */
+  .login-popup .error {
+    color: #ff3333;
+    margin-top: 10px;
+    text-align: center;
+    font-weight: bold;
+  }

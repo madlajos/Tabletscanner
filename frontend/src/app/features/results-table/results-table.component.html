@@ -1,0 +1,41 @@
+<div class="results-panel">
+    <div class="results-panel-header">Mérési Eredmények</div>
+  
+    <div class="results-table-container">
+      <table class="results-table">
+        <thead>
+          <tr>
+            <th>Dátum</th>
+            <th>Idő</th>
+            <th>Azonosító</th>
+            <th>Vonalkód</th>
+            <th>Operátor</th>
+            <th>Eldugult</th>
+            <th>Részleges</th>
+            <th>Tiszta</th>
+            <th>Eredmény</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let result of results; let i = index" [class.odd-row]="i % 2 !== 0">
+            <td>{{ result.date }}</td>
+            <td>{{ result.time }}</td>
+            <td>{{ result.id }}</td>
+            <td>{{ result.barcode }}</td>
+            <td>{{ result.operator }}</td>
+            <td>{{ result.clogged }}</td>
+            <td>{{ result.partiallyClogged }}</td>
+            <td>{{ result.clean }}</td>
+            <td 
+              [ngClass]="{
+                'tick':   result.result.includes('✔'),
+                'cross':  result.result.includes('✖')
+              }">
+              {{ result.result }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  

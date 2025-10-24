@@ -1,0 +1,9 @@
+{
+  "E1100": "Kamera csatlakozási hiba",
+  "E1111": "Középső kamera csatlakozási hiba",
+  "E1121": "Oldalsó kamera csatlakozási hiba",
+  "E1201": "Asztalvezérlő csatlakozási hiba",
+  "E1301": "Vonalkódolvasó csatlakozási hiba",
+  "E1401": "Adatbázis csatlakozási hiba",
+  "GENERIC": "Váratlan hiba lépett fel"
+}

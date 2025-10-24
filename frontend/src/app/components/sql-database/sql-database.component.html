@@ -1,0 +1,27 @@
+<div class="sql-db-panel">
+    <div class="field">
+      <label for="db-server">Server:</label>
+      <input type="text" id="db-server" [(ngModel)]="server" (change)="onSettingChange('server', $event)" />
+    </div>
+    <div class="field">
+      <label for="db-name">Database:</label>
+      <input type="text" id="db-name" [(ngModel)]="db_name" (change)="onSettingChange('db_name', $event)" />
+    </div>
+    <div class="field">
+      <label for="db-username">Username:</label>
+      <input type="text" id="db-username" [(ngModel)]="username" (change)="onSettingChange('username', $event)" />
+    </div>
+    <div class="field">
+      <label for="db-password">Password:</label>
+      <input type="password" id="db-password" [(ngModel)]="password" (change)="onSettingChange('password', $event)" />
+    </div>
+    <div class="connection-status">
+      <span [ngClass]="{'connected': connected, 'disconnected': !connected}">
+        {{ connectionStatus }}
+      </span>
+    </div>
+    <button (click)="toggleConnection()">
+      {{ connected ? 'Disconnect' : 'Connect' }}
+    </button>
+  </div>
+  

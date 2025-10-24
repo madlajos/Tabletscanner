@@ -1,0 +1,174 @@
+<div class="camera-settings-container">
+
+  <!-- User Settings -->
+  <section class="user-settings">
+    <h3>User Settings</h3>
+    <table class="user-settings-table">  <!-- Apply same table style -->
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Class 1 Limit (%)</td>
+          <td>
+            <input type="number" [(ngModel)]="sizeLimits['class1']" (blur)="applySizeLimit('class1')"
+                   class="styled-input" [disabled]="measurementActive" />
+          </td>
+        </tr>
+        <tr>
+          <td>Class 2 Limit (%)</td>
+          <td>
+            <input type="number" [(ngModel)]="sizeLimits['class2']" (blur)="applySizeLimit('class2')"
+                   class="styled-input" [disabled]="measurementActive" />
+          </td>
+        </tr>
+        <tr>
+          <td>Class 1 Count Limit</td>
+          <td>
+            <input type="number" [(ngModel)]="sizeLimits['ng_limit']" (blur)="applySizeLimit('ng_limit')"
+                   class="styled-input" [disabled]="measurementActive" />
+          </td>
+        </tr>
+        <tr>
+          <td>Save Data to CSV</td>
+          <td>
+            <input type="checkbox" [(ngModel)]="saveSettings['save_csv']" (change)="applySaveSetting('save_csv')"
+                   class="styled-input" [disabled]="measurementActive" />
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2" class="csv-dir-cell">
+            <div class="csv-input-wrapper">
+              <!-- Small browse button first -->
+              <button
+                type="button"
+                (click)="openFolderBrowser()"
+                [disabled]="measurementActive"
+                class="csv-dir-btn">
+                <mat-icon>folder_open</mat-icon>
+              </button>
+
+              <!-- Path textbox second -->
+              <input
+                type="text"
+                class="styled-input dir-display"
+                [(ngModel)]="saveSettings['csv_dir']"
+                [disabled]="measurementActive"
+                readonly />
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td>Save Analysed Images</td>
+          <td>
+            <input type="checkbox" [(ngModel)]="saveSettings['save_images']" (change)="applySaveSetting('save_images')"
+                   class="styled-input" [disabled]="measurementActive" />
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Divider -->
+  <hr class="divider">
+
+  <!-- Developer Settings -->
+  <section class="developer-settings">
+    <h3>Developer Settings</h3>
+    
+    <table class="camera-settings-table">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>Main</th>
+          <th>Side</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Width</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.Width" (blur)="applySetting('Width', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.Width" (blur)="applySetting('Width', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+        <tr>
+          <td>Height</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.Height" (blur)="applySetting('Height', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.Height" (blur)="applySetting('Height', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+        <tr>
+          <td>OffsetX</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.OffsetX" (blur)="applySetting('OffsetX', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.OffsetX" (blur)="applySetting('OffsetX', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+        <tr>
+          <td>OffsetY</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.OffsetY" (blur)="applySetting('OffsetY', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.OffsetY" (blur)="applySetting('OffsetY', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+        <tr>
+          <td>Exposure Time</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.ExposureTime" (blur)="applySetting('ExposureTime', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.ExposureTime" (blur)="applySetting('ExposureTime', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+        <tr>
+          <td>Gain</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.Gain" (blur)="applySetting('Gain', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.Gain" (blur)="applySetting('Gain', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+        <tr>
+          <td>Gamma</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.Gamma" (blur)="applySetting('Gamma', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.Gamma" (blur)="applySetting('Gamma', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+        <tr>
+          <td>Frame Rate</td>
+          <td><input type="text" [(ngModel)]="mainCameraSettings.FrameRate" (blur)="applySetting('FrameRate', 'main')" [disabled]="!isMainConnected"></td>
+          <td><input type="text" [(ngModel)]="sideCameraSettings.FrameRate" (blur)="applySetting('FrameRate', 'side')" [disabled]="!isSideConnected"></td>
+        </tr>
+
+        <!-- Controls -->
+        <tr>
+          <td>Controls</td>
+          <td>
+            <div class="button-group">
+              <button type="button" (click)="sharedService.toggleConnection('main')" [ngClass]="{'connect-button': true, 'connected': isMainConnected}">
+                <mat-icon *ngIf="isMainConnected; else connectMainIcon">link_off</mat-icon>
+                <ng-template #connectMainIcon><mat-icon>link</mat-icon></ng-template>
+              </button>
+              <button type="button" (click)="sharedService.toggleStream('main')" [ngClass]="{'stream-button': true, 'streaming': isMainStreaming}" [disabled]="!isMainConnected">
+                <mat-icon *ngIf="isMainStreaming; else playMainIcon">stop</mat-icon>
+                <ng-template #playMainIcon><mat-icon>play_arrow</mat-icon></ng-template>
+              </button>
+            </div>
+          </td>
+          <td>
+            <div class="button-group">
+              <button type="button" (click)="sharedService.toggleConnection('side')" [ngClass]="{'connect-button': true, 'connected': isSideConnected}">
+                <mat-icon *ngIf="isSideConnected; else connectSideIcon">link_off</mat-icon>
+                <ng-template #connectSideIcon><mat-icon>link</mat-icon></ng-template>
+              </button>
+              <button type="button" (click)="sharedService.toggleStream('side')" [ngClass]="{'stream-button': true, 'streaming': isSideStreaming}" [disabled]="!isSideConnected">
+                <mat-icon *ngIf="isSideStreaming; else playSideIcon">stop</mat-icon>
+                <ng-template #playSideIcon><mat-icon>play_arrow</mat-icon></ng-template>
+              </button>
+            </div>
+          </td>
+        </tr>
+
+        <!-- Measurement Buttons Row -->
+        <tr>
+          <td>Analysis</td>
+          <td colspan="2" class="measurement-buttons">
+            <button (click)="sharedService.analyzeCenterCircle()" class="measurement-button">Center</button>
+            <button (click)="sharedService.analyzeInnerSlice()" class="measurement-button">Inner</button>
+            <button (click)="sharedService.analyzeOuterSlice()" class="measurement-button">Outer</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+</div>

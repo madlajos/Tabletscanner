@@ -1,0 +1,348 @@
+.control-panel {
+  background-color: #333;
+  color: #fff;
+  width: 100%;
+  height: 46vh;
+  padding: 15px;
+  border-radius: 10px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  display: grid;
+  flex-direction: column;
+  align-items: flex-start;
+  position: relative; /* Needed for absolute positioning */
+}
+
+.control-panel-header {
+  font-size: 16px;
+  font-weight: bold;
+  margin-bottom: 10px;
+  margin-top: -10px;
+}
+
+.control-panel-content {
+  display: grid;
+  grid-template-columns: 0.3fr 0.3fr;
+  align-items: start;
+  margin-right: 15%;
+}
+
+.input-box {
+  width: 60%;
+  padding: 5px;
+  background-color: var(--default-grey);
+  border: 1px solid  var(--border-grey);
+  color: white;
+  border-radius: 5px;
+  margin-top:8px;
+  margin-bottom:12px;
+}
+
+/* Hide up down arrow from nozzle ID */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Position buttons in the top-right */
+.button-container {
+  position: absolute;
+  top: 60px;
+  right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Relay Button - Portrait */
+.relay-button {
+  width: 80px;  
+  height: 50px; 
+  border: 2px solid transparent; /* Default no outline */
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--default-grey); /* Default */
+  transition: all 0.1s ease-in-out; /* Smooth transition for depth effect */
+}
+
+.save-raw-button {
+  width: 80px;  
+  height: 50px; 
+  border: 2px solid transparent; /* Default no outline */
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--default-grey); /* Default */
+  transition: all 0.1s ease-in-out; /* Smooth transition for depth effect */
+}
+
+/* Relay Button Hover - Add Custom Border */
+.relay-button:hover,
+.save-raw-button:hover {
+  border: 2px solid var(--border-grey);  /* Grey outline */
+}
+
+.relay-off:hover,
+.save-raw-button:hover {
+  background-color: var(--hover-grey); /* Darker grey when hovering while OFF */
+}
+
+.relay-on:hover {
+  background-color: var(--hover-active-blue); /* Darker blue when hovering while ON */
+}
+
+/* Lamp Button Images */
+.relay-button img {
+  width: 34px;  /* Adjust size */
+  height: auto;
+  margin-bottom: 2px;
+}
+
+.save-raw-button img {
+  width: 46px;  /* Adjust size */
+  height: auto;
+}
+
+.button-container {
+  display: flex;
+  gap: 14px; /* Adjust the gap between the two columns as needed */
+}
+
+.button-container .left-col,
+.button-container .right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* Adjust the vertical spacing within each column */
+}
+
+/* Relay ON - Always Show Outline */
+.relay-on {
+  background-color: var(--main-blue); /* Blue when ON */
+  border: 2px solid var(--border-grey); /* Always visible outline */
+  box-shadow: inset 2px 2px 6px rgba(0, 0, 0, 0.4); /* Creates the pressed-in effect */
+  transform: translateY(2px); /* Moves it slightly down */
+}
+
+/* Relay OFF */
+.relay-off {
+  background-color: var(--default-grey); /* Default Grey */
+}
+
+/* Simulate Pressed Button Effect */
+.relay-button:active {
+  box-shadow: inset 3px 3px 8px rgba(0, 0, 0, 0.6);
+  transform: translateY(3px); /* Move further down when clicked */
+}
+
+/* ---------------------------------------------------- */
+/* Side buttons (stacked) */
+.side-buttons {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between; /* Aligns top and bottom */
+  height: 100px; /* Same height as relay button */
+  gap: 6px; /* Space between buttons */
+  box-sizing: border-box;
+}
+
+/* Side Buttons */
+.side-button {
+  width: 80px; 
+  height: 50px;
+  font-size: 14px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.1s ease-in-out;
+  background-color: var(--default-grey);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 2px solid transparent;
+}
+
+/* Button Images */
+.side-button img {
+  width: 60px; /* Resize icons */
+  height: auto;
+}
+
+/* Hover Effect */
+.side-button:hover {
+  background-color: var(--hover-grey);
+  border: 2px solid var(--border-grey);  /* Grey outline */
+}
+
+/* Simulate Pressed-In Effect for Side Buttons */
+.side-button:active,
+.save-raw-button:active {
+  background-color: var(--main-blue); /* Darker when clicked */
+  box-shadow: inset 3px 3px 8px rgba(0, 0, 0, 0.6);
+  transform: translateY(3px); /* Move slightly down */
+}
+
+/* ---- New CSS for Measurement Elements ---- */
+/* Measurement Controls Container */
+.measurement-controls {
+  width: 100%;
+  margin: 10px 0;
+  display: flex;
+  justify-content: center;
+}
+
+/* We use the same styling as the relay button for the Start Measurement button */
+/* Start Measurement Button - inherits from relay-button */
+/* Base styling for the measurement button */
+.measurement-button {
+  width: 200px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 1.3em;
+  font-family: Arial, sans-serif;
+  transition: all 0.1s ease-in-out;
+  color: white;
+  margin-top: 20px;
+}
+
+/* Default inactive state for measurement button */
+.measurement-off {
+  background-color: #2a628c; /* Default grey */
+}
+
+/* Active state for measurement button, similar to relay-on styling */
+.measurement-on {
+  background-color: #5e0000; /* Blue when active */
+  box-shadow: inset 1px 1px 6px rgba(0, 0, 0, 0.4);
+  transform: translateY(2px);
+}
+
+/* Hover effect for inactive state */
+.measurement-button.measurement-off:hover {
+  background-color: var(--hover-active-blue);
+}
+
+/* Hover effect for active state */
+.measurement-button.measurement-on:hover {
+  background-color: #690000;
+}
+
+/* Pressed effect */
+.measurement-button:active {
+  box-shadow: inset 3px 3px 8px rgba(0, 0, 0, 0.6);
+  transform: translateY(3px);
+}
+
+/* Progress Bar Container */
+.progress-container {
+  width: 100%;
+  margin: 20px 0;
+  display: flex;
+  justify-content: center;
+}
+
+/* Progress Bar */
+.progress-bar {
+  position: relative;
+  width: 80%;
+  height: 30px;
+  background-color: var(--default-grey); /* Neutral background */
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  background-color: var(--main-blue);
+  height: 100%;
+  width: 0%;
+  border-radius: 15px;
+  transition: width 1s ease-in-out; /* 🔥 Smooth transition */
+  
+  /* Enhanced glow effect */
+  box-shadow: 
+    0 0 10px rgba(42, 150, 240, 0.8), 
+    0 0 20px rgba(42, 150, 240, 0.7);
+}
+
+@keyframes glowing {
+  0% { box-shadow: 0 0 10px rgba(42, 150, 240, 1); }
+  50% { box-shadow: 0 0 25px rgba(42, 150, 240, 0.8); }
+  100% { box-shadow: 0 0 10px rgba(42, 150, 240, 1); }
+}
+
+.progress-fill.animated {
+  animation: glowing 1.5s infinite alternate;
+}
+
+/* Progress Text inside the progress bar */
+.progress-text {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, 0);
+  line-height: 30px;
+  font-weight: bold;
+  color: white;
+  font-size: 1em;
+}
+
+/* Results Blocks Container */
+.results-container {
+  display: flex;
+  justify-content: space-around;
+  width: 100%;
+  margin-top: 10px;
+}
+
+/* Each Result Block */
+.result-block {
+  width: 30%;
+  background-color: var(--default-grey);
+  margin-left: 10px;
+  margin-right: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  text-align: center;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+}
+
+/* Result Block Label */
+.result-class {
+  font-size: 1.2em;
+  font-weight: bold;
+}
+
+/* Result Block Value */
+.result-value {
+  font-size: 2em;
+}
+
+/* Company Logo */
+.company-logo {
+  margin-bottom: 20px;
+  margin-top:6px;
+  width: 90%;
+  height: auto;
+  margin-left: 10px;
+}
+
+.company-logo img {
+  max-width: 150px;
+}
+
+.error-outline {
+  border: 1px solid red;
+  box-shadow: 0 0 8px 2px rgba(255, 0, 0, 0.2);
+  border-radius: 5px;
+}

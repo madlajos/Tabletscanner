@@ -1,0 +1,6 @@
+<div class="error-popup">
+    <p>{{ message }}</p>
+    <!-- Only display the close button if the error code is GENERIC -->
+    <button *ngIf="index === 'GENERIC'" type="button" class="error-close" (click)="dismiss()">x</button>
+  </div>
+  

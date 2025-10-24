@@ -1,0 +1,7 @@
+<div>
+  <ul>
+    <li *ngFor="let error of getMessages | async">
+      {{ error.message }}
+    </li>
+  </ul>
+</div>

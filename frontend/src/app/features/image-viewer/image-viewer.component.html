@@ -1,0 +1,40 @@
+<!-- Camera Wrapper -->
+<div class="camera-wrapper">
+  <!-- Side Camera -->
+  <div class="image-viewer-container side-camera">
+    <div class="top-bar">
+      <div class="camera-name">Oldalsó Kamera
+        <span class="status-indicator"
+            [ngClass]="{
+              'disconnected': !sharedService.getCameraConnectionStatus('side'),
+              'connected': sharedService.getCameraConnectionStatus('side') && !sharedService.getCameraStreamStatus('side'),
+              'streaming': sharedService.getCameraStreamStatus('side')
+            }">
+      </span>
+      </div>
+    </div>
+    <div class="live-view">
+      <div #sideVideoContainer></div>
+    </div>
+  </div>
+
+  <!-- Side Camera -->
+  <div class="image-viewer-container main-camera">
+    <div class="top-bar">
+      <div class="camera-name">Középső Kamera
+        <span class="status-indicator"
+            [ngClass]="{
+              'disconnected': !sharedService.getCameraConnectionStatus('main'),
+              'connected': sharedService.getCameraConnectionStatus('main') && !sharedService.getCameraStreamStatus('main'),
+              'streaming': sharedService.getCameraStreamStatus('main')
+            }">
+      </span>
+
+
+      </div>
+    </div>
+    <div class="live-view">
+      <div #mainVideoContainer></div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,11 @@
+<!-- Default error popups (usually in a list) -->
+<div class="error-popup-list">
+  <div *ngFor="let error of defaultErrors$ | async; let i = index" class="error-item" [ngStyle]="{'margin-top': i === 0 ? '0' : '10px'}">
+    <app-error-popup [message]="error.message" [index]="error.code" (close)="dismissError($event)"></app-error-popup>
+  </div>
+</div>
+
+<!-- Center error popups (modal overlay) -->
+<div *ngFor="let error of centerErrors$ | async">
+  <app-center-error-popup [message]="error.message" [index]="error.code" (close)="dismissError($event)"></app-center-error-popup>
+</div>

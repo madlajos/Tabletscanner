@@ -1,0 +1,21 @@
+<div *ngIf="isVisible" class="login-popup-overlay">
+    <div class="login-popup">
+      <button class="login-close" (click)="hide()">×</button>
+      <h3>Bejelentkezés</h3>
+      <form (ngSubmit)="login()">
+        <input type="text" 
+               [(ngModel)]="username" 
+               name="username"
+               placeholder="Felhasználónév" 
+               required />
+        <input type="password" 
+               [(ngModel)]="password" 
+               name="password"
+               placeholder="Jelszó" 
+               required />
+        <button type="submit" class="login-button">Bejelentkezés</button>
+      </form>
+      <p *ngIf="loginError" class="error">{{ loginError }}</p>
+    </div>
+  </div>
+  

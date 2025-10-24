@@ -1,0 +1,200 @@
+:host {
+  display: block;
+  padding-left: 0px;
+  padding-top: 12px;
+  padding-bottom: 6px;
+  font-family: 'Arial', sans-serif;
+}
+
+.camera-settings-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.camera-settings-table th,
+.camera-settings-table td {
+  text-align: center;
+  padding: 4px 6px;
+  color: #fff;
+  font-size: 12px;
+}
+
+/* Input Fields */
+.camera-settings-table input {
+  width: 90%;
+  padding: 3px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #333;
+  color: #fff;
+}
+
+/* Ensure Buttons Are Aligned Horizontally */
+td {
+  vertical-align: middle;
+  text-align: center;
+}
+
+.button-group {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 5px; /* Space between buttons */
+}
+
+/* Arrange Buttons Horizontally */
+td button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #555;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin: 0 2px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+/* Hover Effect */
+td button:hover {
+  background-color: #777;
+}
+
+/* Connected Button State */
+.connect-button.connected {
+  background-color: #2a628c;
+}
+
+/* Streaming Button State */
+.stream-button.streaming {
+  background-color: #2a628c;
+}
+
+/* ─────────────────────────────────── */
+/* User Settings Styles (New Additions) */
+/* ─────────────────────────────────── */
+
+.user-settings {
+  margin-bottom: 15px;
+}
+
+/* Table for User Settings */
+.user-settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 15px;
+}
+
+.user-settings-table th,
+.user-settings-table td {
+  text-align: center;
+  padding: 4px 6px;
+  color: #fff;
+  font-size: 12px;
+}
+
+/* Styling User Settings Inputs */
+.user-settings-table input {
+  width: 30%;
+  padding: 3px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #333;
+  color: #fff;
+}
+
+.user-settings-table th:nth-child(1),
+.user-settings-table td:nth-child(1) {
+  width: 60%;
+}
+
+.user-settings-table th:nth-child(2),
+.user-settings-table td:nth-child(2) {
+  width: 40%;
+}
+
+/* ─────────────────────────────────── */
+/* Section Headers (User & Developer Settings) */
+/* ─────────────────────────────────── */
+
+.user-settings h3,
+.developer-settings h3 {
+  font-size: 14px;
+  color: #ddd;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 6px;
+  background-color: #222;
+  border-radius: 4px;
+}
+
+
+/* ─────────────────────────────────── */
+/* Divider between User & Developer Settings */
+/* ─────────────────────────────────── */
+.divider {
+  border: none;
+  height: 2px;
+  background-color: #555;
+  margin: 15px 0;
+}
+
+/* ─────────────────────────────────── */
+/* Developer Settings Section */
+/* ─────────────────────────────────── */
+
+.developer-settings {
+  margin-bottom: 10px;
+}
+
+.measurement-button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: background-color 0.3s ease;
+}
+
+.measurement-button:hover {
+  background-color: #0056b3;
+}
+
+
+.user-settings-table input.dir-display {
+  width: 100%;   /* or 100% if you prefer */
+  text-align: left;
+}
+
+/* Flex row keeps button + input on same line */
+.csv-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;                 /* space between button & textbox */
+}
+
+/* Shrink the button only here */
+.csv-dir-btn {
+  padding: 2px 6px;         /* smaller than generic td button */
+  font-size: 11px;
+  max-width: 200px;          /* icon still visible but tight */
+  flex: none;               /* don’t grow/shrink */
+}
+
+/* Let the textbox take ALL remaining space */
+.csv-input-wrapper input.dir-display {
+  flex: 1 1 0;              /* grow, may shrink */
+  min-width: 0;             /* prevent flex overflow */
+  width: auto;              /* override table’s 30% rule */
+  text-align: left;
+}
+
+/* Optional: left-align the whole cell (removes centre rule) */
+.csv-dir-cell { text-align: left; }

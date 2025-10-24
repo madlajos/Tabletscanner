@@ -1,0 +1,55 @@
+.sql-db-panel {
+    padding: 15px;
+    border-radius: 10px;
+    color: #fff;
+    max-width: 400px;
+    margin: 10px 0;
+  }
+  
+  .field {
+    margin-bottom: 10px;
+  }
+  
+  .field label {
+    display: block;
+    margin-bottom: 4px;
+    font-weight: bold;
+  }
+  
+  .field input {
+    width: 100%;
+    padding: 5px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+  }
+  
+  .connection-status {
+    margin: 10px 0;
+    font-size: 0.9em;
+  }
+  
+  .connected {
+    color: lightgreen;
+  }
+  
+  .disconnected {
+    color: red;
+  }
+  
+  button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    background-color: #2a628c;
+    color: white;
+    cursor: pointer;
+  }
+  
+  button:hover {
+    background-color: #1f4e6b;
+  }
+  
+
+
+
+  
