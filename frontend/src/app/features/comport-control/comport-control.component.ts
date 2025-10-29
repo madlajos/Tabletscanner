@@ -8,7 +8,7 @@ import { ErrorNotificationService } from '../../services/error-notification.serv
 
 interface Device {
   name: string;    // Display name
-  apiName: string; // Used in API endpoints (e.g., 'turntable' or 'barcode')
+  apiName: string; // Used in API endpoints (e.g., 'turntable')
   status: string;
   action: string;
 }
@@ -24,7 +24,6 @@ export class ComportControlComponent implements OnInit {
 
   devices: Device[] = [
     { name: 'Turntable', apiName: 'turntable', status: 'Checking...', action: 'Connect' },
-    { name: 'Barcode Scanner', apiName: 'barcode', status: 'Checking...', action: 'Connect' }
   ];
 
   private readonly BASE_URL = 'http://localhost:5000/api';
@@ -115,8 +114,6 @@ export class ComportControlComponent implements OnInit {
           console.log(`${device.name} connected successfully.`);
           if (device.apiName === 'turntable') {
             this.errorNotificationService.removeError("Turntable disconnected");
-          } else if (device.apiName === 'barcode') {
-            this.errorNotificationService.removeError("Barcode Scanner disconnected");
           }
           this.checkStatus(); // Refresh status to update all devices
         }),

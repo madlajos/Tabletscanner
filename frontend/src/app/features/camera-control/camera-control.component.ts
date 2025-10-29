@@ -17,18 +17,40 @@ import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from
 })
 
 export class CameraControlComponent implements OnInit, OnDestroy {
-  mainCameraSettings: CameraSettings = { 
-    Width: 4200, Height: 2160, OffsetX: 0, OffsetY: 0,
-    ExposureTime: 20000, Gain: 0, Gamma: 1, FrameRate: 20 
-  };
-  sideCameraSettings: CameraSettings = { 
-    Width: 4200, Height: 2160, OffsetX: 0, OffsetY: 0,
-    ExposureTime: 20000, Gain: 0, Gamma: 1, FrameRate: 20
-  };
+
+  // Camera state
+  isConnected: boolean = false;
+  isStreaming: boolean = false;
   
+  // Polling handles
+  connectionPolling: Subscription | undefined;
+  reconnectionPolling: Subscription | undefined;
   unifiedPollingSub!: Subscription;
 
+  // Settings
+  cameraSettings: any = {};
+
+  // TODO: refactor to suit current settigns
+  saveSettings: SaveSettings = {
+    save_csv: false,
+    save_images: false,
+    csv_dir: ""
+  };
+
+  loadedFileName: string = '';
+  saveDirectory: string = 'C:\\Users\\Public\\Pictures';
+
+  // TODO: remove these after refactor
+  mainCameraSettings: any = this.cameraSettings;
+  sideCameraSettings: any = {};
+  sizeLimits: SizeLimits = { class1: 0, class2: 0, ng_limit: 0 };
+
+  private readonly CAMERA_ERR_CODE = "E1111";
+  
+  private readonly BASE_URL = 'http://localhost:5000/api';
+
   private settingsLoaded: boolean = false;
+
   settingOrder: string[] = [
     'Width',
     'Height',
@@ -40,39 +62,10 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     'FrameRate'
   ];
 
-  // Changed: Use the SizeLimits interface instead of a generic object.
-  sizeLimits: SizeLimits = {
-    class1: 5,
-    class2: 95,
-    ng_limit: 15
-  };
-
-  saveSettings: SaveSettings = {
-    save_csv: false,
-    save_images: false,
-    csv_dir: ""
-  };
-  
-  connectionPollingMain: Subscription | undefined;
-  connectionPollingSide: Subscription | undefined;
-  reconnectionPollingMain: Subscription | undefined;
-  reconnectionPollingSide: Subscription | undefined;
-
-  isMainConnected: boolean = false;
-  isSideConnected: boolean = false;
-  isMainStreaming: boolean = false;
-  isSideStreaming: boolean = false;
-
+ 
   measurementActive: boolean = false;
   private measurementActiveSub!: Subscription;
 
-  loadedFileName: string = '';
-  saveDirectory: string = 'C:\\Users\\Public\\Pictures';
-
-  private readonly MAIN_CAMERA_ERR_CODE = "E1111";
-  private readonly SIDE_CAMERA_ERR_CODE = "E1121";
-
-  private readonly BASE_URL = 'http://localhost:5000/api';
 
   constructor(private http: HttpClient,
     public sharedService: SharedService,
@@ -81,22 +74,17 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   ) { }
 
   ngOnInit(): void {
-    // First, delay the initial loading of camera settings.
-    // (This can be adjusted if needed.)
     if (!this.settingsLoaded) {
-        this.loadCameraSettings('main');
-        this.loadCameraSettings('side');
+        this.loadCameraSettings();
         this.settingsLoaded = true;
     }
   
     // Initial checks
-    this.checkCameraStatus('main');
-    this.checkCameraStatus('side');
-  
+    this.checkCameraStatus();
+    
     // Periodically check both connection and stream status
-    this.startConnectionPolling('main');
-    this.startConnectionPolling('side');
-  
+    this.startConnectionPolling();
+
     // Set the shared save directory.
     this.sharedService.setSaveDirectory(this.saveDirectory);
   
@@ -106,26 +94,22 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     });
   
     this.sharedService.cameraConnectionStatus$.subscribe(status => {
-      this.isMainConnected = status.main;
-      this.isSideConnected = status.side;
-      console.log(`Main Connected: ${this.isMainConnected}, Side Connected: ${this.isSideConnected}`);
+      this.isConnected = status;
     });
   
     this.sharedService.cameraStreamStatus$.subscribe(status => {
-      this.isMainStreaming = status.main;
-      this.isSideStreaming = status.side;
-      console.log(`Main Streaming: ${this.isMainStreaming}, Side Streaming: ${this.isSideStreaming}`);
+      this.isStreaming = status;
     });
   
-    // Modified GET call to expect a SizeLimits object.
+    // TODO: Refactor to set current 'other' settings
     this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
       .subscribe({
         next: response => {
           if (response && response.size_limits) {
-            this.sizeLimits = response.size_limits;
+            // this.sizeLimits = response.size_limits;
             // Publish the loaded settings to the shared service.
-            this.settingsUpdatesService.updateSizeLimits(this.sizeLimits);
-            console.log("Loaded size limits from backend:", this.sizeLimits);
+            // this.settingsUpdatesService.updateSizeLimits(this.sizeLimits);
+            // console.log("Loaded size limits from backend:", this.sizeLimits);
           }
         },
         error: error => {
@@ -150,10 +134,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.stopConnectionPolling('main');
-    this.stopConnectionPolling('side');
-    this.stopReconnectionPolling('main');
-    this.stopReconnectionPolling('side');
+    this.stopConnectionPolling();
+    this.stopReconnectionPolling();
 
     if (this.unifiedPollingSub) {
       this.unifiedPollingSub.unsubscribe();
@@ -164,14 +146,53 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     }
   }
 
+  // Backend calls
+  checkCameraStatus(): void {
+    this.http.get(`${this.BASE_URL}/status/camera`)
+      .subscribe({
+        next: (response: any) => {
+          if (response.connected) {
+            this.sharedService.setCameraConnectionStatus(true);
+            // Remove any existing error for this camera.
+            const errCode = this.CAMERA_ERR_CODE;
+            this.errorNotificationService.removeError(errCode);
+            // Stop any reconnection polling and resume normal polling.
+            this.stopReconnectionPolling();
+            this.startConnectionPolling();
+            // If streaming is reported false or local flag is false, start streaming.
+            if (!this.isStreaming) {
+              console.log("Camera connected but not streaming. Starting stream...");
+              this.startVideoStream();
+            }
+          } else {
+            // Camera not connected: update both connection and streaming status.
+            this.sharedService.setCameraConnectionStatus(false);
+            this.sharedService.setCameraStreamStatus(false);
+            this.stopConnectionPolling();
+            this.startReconnectionPolling();
+          }
+          console.log(`Camera status - Connected: ${response.connected}, Streaming: ${response.streaming}`);
+        },
+        error: (err) => {
+          console.error(`Error checking camera status:`, err);
+          // On error, assume both connection and streaming are lost.
+          this.sharedService.setCameraConnectionStatus(false);
+          this.sharedService.setCameraStreamStatus(false);
+          this.stopConnectionPolling();
+          this.startReconnectionPolling();
+        }
+      });
+  }
+
+  // TODO: Refactor to load current 'other' settings
   loadOtherSettings(): void {
     this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
       .subscribe({
         next: response => {
           if (response && response.size_limits) {
-            this.sizeLimits = response.size_limits;
-            this.settingsUpdatesService.updateSizeLimits(this.sizeLimits);
-            console.log("Loaded size limits from backend:", this.sizeLimits);
+            //this.sizeLimits = response.size_limits;
+            //this.settingsUpdatesService.updateSizeLimits(this.sizeLimits);
+            //console.log("Loaded size limits from backend:", this.sizeLimits);
           }
         },
         error: error => {
@@ -194,226 +215,149 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       });
   }
 
-  checkCameraStatus(cameraType: 'main' | 'side'): void {
-    this.http.get(`${this.BASE_URL}/status/camera?type=${cameraType}`)
-      .subscribe({
-        next: (response: any) => {
-          if (response.connected) {
-            this.sharedService.setCameraConnectionStatus(cameraType, true);
-            // Remove any existing error for this camera.
-            const errCode = cameraType === 'main' ? this.MAIN_CAMERA_ERR_CODE : this.SIDE_CAMERA_ERR_CODE;
-            this.errorNotificationService.removeError(errCode);
-            // Stop any reconnection polling and resume normal polling.
-            this.stopReconnectionPolling(cameraType);
-            this.startConnectionPolling(cameraType);
-            // If streaming is reported false or local flag is false, start streaming.
-            if (cameraType === 'main' && !this.isMainStreaming) {
-              console.log("Main camera connected but not streaming. Starting stream...");
-              this.startVideoStream('main');
-            } else if (cameraType === 'side' && !this.isSideStreaming) {
-              console.log("Side camera connected but not streaming. Starting stream...");
-              this.startVideoStream('side');
-            }
-          } else {
-            // Camera not connected: update both connection and streaming status.
-            this.sharedService.setCameraConnectionStatus(cameraType, false);
-            this.sharedService.setCameraStreamStatus(cameraType, false);
-            this.stopConnectionPolling(cameraType);
-            this.startReconnectionPolling(cameraType);
-          }
-          console.log(`${cameraType.toUpperCase()} status - Connected: ${response.connected}, Streaming: ${response.streaming}`);
-        },
-        error: (err) => {
-          console.error(`Error checking ${cameraType} camera status:`, err);
-          // On error, assume both connection and streaming are lost.
-          this.sharedService.setCameraConnectionStatus(cameraType, false);
-          this.sharedService.setCameraStreamStatus(cameraType, false);
-          this.stopConnectionPolling(cameraType);
-          this.startReconnectionPolling(cameraType);
-        }
+  startConnectionPolling(): void {
+      this.connectionPolling = interval(5000).subscribe(() => {
+        this.checkCameraStatus();
       });
+  }
+  
+  stopConnectionPolling(): void {
+    this.connectionPolling?.unsubscribe();
+    this.connectionPolling = undefined;
+  }
+  
+  startReconnectionPolling(): void {
+    if (!this.reconnectionPolling) {
+      this.reconnectionPolling = interval(3000).subscribe(() => {
+        this.tryReconnectCamera();
+      });
+    }
+  }
+  
+  stopReconnectionPolling(): void {
+      this.reconnectionPolling?.unsubscribe();
+      this.reconnectionPolling = undefined;
   }
 
-  startConnectionPolling(cameraType: 'main' | 'side'): void {
-    if (cameraType === 'main' && !this.connectionPollingMain) {
-      this.connectionPollingMain = interval(5000).subscribe(() => {
-        this.checkCameraStatus('main');
-      });
-    } else if (cameraType === 'side' && !this.connectionPollingSide) {
-      this.connectionPollingSide = interval(5000).subscribe(() => {
-        this.checkCameraStatus('side');
-      });
-    }
-  }
-  
-  stopConnectionPolling(cameraType: 'main' | 'side'): void {
-    if (cameraType === 'main') {
-      this.connectionPollingMain?.unsubscribe();
-      this.connectionPollingMain = undefined;
-    } else {
-      this.connectionPollingSide?.unsubscribe();
-      this.connectionPollingSide = undefined;
-    }
-  }
-  
-  startReconnectionPolling(cameraType: 'main' | 'side'): void {
-    if (cameraType === 'main' && !this.reconnectionPollingMain) {
-      this.reconnectionPollingMain = interval(3000).subscribe(() => {
-        this.tryReconnectCamera('main');
-      });
-    } else if (cameraType === 'side' && !this.reconnectionPollingSide) {
-      this.reconnectionPollingSide = interval(3000).subscribe(() => {
-        this.tryReconnectCamera('side');
-      });
-    }
-  }
-  
-  stopReconnectionPolling(cameraType: 'main' | 'side'): void {
-    if (cameraType === 'main') {
-      this.reconnectionPollingMain?.unsubscribe();
-      this.reconnectionPollingMain = undefined;
-    } else {
-      this.reconnectionPollingSide?.unsubscribe();
-      this.reconnectionPollingSide = undefined;
-    }
-  }
-
-  tryReconnectCamera(cameraType: 'main' | 'side'): void {
-    this.http.post(`${this.BASE_URL}/connect-camera?type=${cameraType}`, {})
+  tryReconnectCamera(): void {
+    this.http.post(`${this.BASE_URL}/connect-camera`, {})
       .subscribe({
         next: (response: any) => {
-          console.info(`${cameraType.toUpperCase()} camera reconnected:`, response.message);
-          this.sharedService.setCameraConnectionStatus(cameraType, true);
-          const errCode = cameraType === 'main' ? this.MAIN_CAMERA_ERR_CODE : this.SIDE_CAMERA_ERR_CODE;
+          console.info(`Camera reconnected:`, response.message);
+          this.sharedService.setCameraConnectionStatus(true);
+          const errCode = this.CAMERA_ERR_CODE;
           this.errorNotificationService.removeError(errCode);
-          this.stopReconnectionPolling(cameraType);
-          this.startConnectionPolling(cameraType);
+          this.stopReconnectionPolling();
+          this.startConnectionPolling();
         },
         error: (error) => {
-          console.warn(`${cameraType.toUpperCase()} camera reconnection attempt failed.`, error);
+          console.warn(`Camera reconnection attempt failed.`, error);
         }
       });
   }
 
-  checkCameraConnection(cameraType: 'main' | 'side'): void {
-    this.http.get(`${this.BASE_URL}/status/camera?type=${cameraType}`).subscribe(
+  checkCameraConnection(): void {
+    this.http.get(`${this.BASE_URL}/status/camera`).subscribe(
       (response: any) => {
-        this.sharedService.setCameraConnectionStatus(cameraType, response.connected);
+        this.sharedService.setCameraConnectionStatus(response.connected);
       },
-      error => console.error(`Error checking ${cameraType} camera status:`, error)
+      error => console.error(`Error checking camera status:`, error)
     );
   }
 
-  toggleConnection(cameraType: 'main' | 'side'): void {
-    if ((cameraType === 'main' && this.isMainConnected) || (cameraType === 'side' && this.isSideConnected)) {
-      this.disconnectCamera(cameraType);
+  toggleConnection(): void {
+    if (this.isConnected) {
+      this.disconnectCamera();
     } else {
-      this.connectCamera(cameraType);
+      this.connectCamera();
     }
   }
 
-  connectCamera(cameraType: 'main' | 'side'): void {
-    this.http.post(`${this.BASE_URL}/connect-camera?type=${cameraType}`, {}).subscribe(
+  connectCamera(): void {
+    this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe(
       (response: any) => {
-        this.sharedService.setCameraConnectionStatus(cameraType, true);
-        this.errorNotificationService.removeError(`${cameraType} camera disconnected`);
-        console.log(`${cameraType.toUpperCase()} camera connected.`);
+        this.sharedService.setCameraConnectionStatus(true);
+        this.errorNotificationService.removeError(`Camera disconnected`);
+        console.log(`Camera connected.`);
         // Optionally trigger a status refresh:
-        this.checkCameraStatus(cameraType);
+        this.checkCameraStatus();
       },
-      error => console.error(`Failed to connect ${cameraType} camera:`, error)
+      error => console.error(`Failed to connect camera:`, error)
     );
   }
   
-  fetchCameraSettings(cameraType: 'main' | 'side'): void {
-    this.http.get(`${this.BASE_URL}/get-camera-settings?type=${cameraType}`).subscribe(
+  fetchCameraSettings(): void {
+    this.http.get(`${this.BASE_URL}/get-camera-settings`).subscribe(
       (settings: any) => {
-        if (cameraType === 'main') {
-          this.mainCameraSettings = settings.camera_params;
-        } else {
-          this.sideCameraSettings = settings.camera_params;
-        }
-        console.log(`${cameraType.toUpperCase()} settings loaded:`, settings);
+        this.mainCameraSettings = settings.camera_params;        
+        console.log(`Camera settings loaded:`, settings);
       },
-      error => console.error(`Error loading ${cameraType} camera settings:`, error)
+      error => console.error(`Error loading camera settings:`, error)
     );
   }
 
-  disconnectCamera(cameraType: 'main' | 'side'): void {
-    this.http.post(`${this.BASE_URL}/disconnect-camera?type=${cameraType}`, {}).subscribe(
+  disconnectCamera(): void {
+    this.http.post(`${this.BASE_URL}/disconnect-camera`, {}).subscribe(
       (response: any) => {
-        this.sharedService.setCameraConnectionStatus(cameraType, false);
-        console.log(`${cameraType.toUpperCase()} camera disconnected.`);
-        this.checkCameraStatus(cameraType);
+        this.sharedService.setCameraConnectionStatus(false);
+        console.log(`Camera disconnected.`);
+        this.checkCameraStatus();
       },
-      error => console.error(`Failed to disconnect ${cameraType} camera:`, error)
+      error => console.error(`Failed to disconnect camera:`, error)
     );
   }
 
-  toggleStream(cameraType: 'main' | 'side'): void {
-    if ((cameraType === 'main' && this.isMainStreaming) ||
-        (cameraType === 'side' && this.isSideStreaming)) {
-      // If currently streaming, stop
-      this.stopVideoStream(cameraType);
+  toggleStream(): void {
+    if (this.isStreaming){
+      this.stopVideoStream();
     } else {
-      // Otherwise, start
-      this.startVideoStream(cameraType);
+      this.startVideoStream();
     }
   }
 
-  startVideoStream(cameraType: 'main' | 'side'): void {
-    this.sharedService.setCameraStreamStatus(cameraType, true);
-    console.log(`${cameraType.toUpperCase()} stream set to true in SharedService (UI only).`);
+  startVideoStream(): void {
+    this.sharedService.setCameraStreamStatus(true);
+    console.log(`Camera stream set to true in SharedService (UI only).`);
   }
 
-  stopVideoStream(cameraType: 'main' | 'side'): void {
-    this.http.post(`${this.BASE_URL}/stop-video-stream?type=${cameraType}`, {}).subscribe(
+  stopVideoStream(): void {
+    this.http.post(`${this.BASE_URL}/stop-video-stream`, {}).subscribe(
       () => {
-        this.sharedService.setCameraStreamStatus(cameraType, false);
-        console.log(`${cameraType.toUpperCase()} stream stopped.`);
+        this.sharedService.setCameraStreamStatus(false);
+        console.log(`Camera stream stopped.`);
       },
-      error => console.error(`Failed to stop ${cameraType} stream:`, error)
+      error => console.error(`Failed to stop camera stream:`, error)
     );
   }
 
-  loadCameraSettings(cameraType: 'main' | 'side'): void {
-    this.http.get<CameraSettings>(`${this.BASE_URL}/get-camera-settings?type=${cameraType}`)
+  loadCameraSettings(): void {
+    this.http.get<CameraSettings>(`${this.BASE_URL}/get-camera-settings`)
       .subscribe({
         next: (settings: CameraSettings) => {
-          if (cameraType === 'main') {
-            this.mainCameraSettings = settings;
-            this.settingsUpdatesService.updateMainCameraSettings(settings);
-            console.log(`Loaded main camera settings:`, settings);
-          } else {
-            this.sideCameraSettings = settings;
-            this.settingsUpdatesService.updateSideCameraSettings(settings);
-            console.log(`Loaded side camera settings:`, settings);
-          }
+          this.mainCameraSettings = settings;
+          this.settingsUpdatesService.updateMainCameraSettings(settings);
+          console.log(`Loaded main camera settings:`, settings);
+          
         },
-        error: error => console.error(`Error loading ${cameraType} camera settings:`, error)
+        error: error => console.error(`Error loading camera settings:`, error)
       });
   }
   
-  applySetting(setting: string, cameraType: 'main' | 'side'): void {
-    const value = cameraType === 'main' ? this.mainCameraSettings[setting] : this.sideCameraSettings[setting];
+  applySetting(setting: string): void {
+    const value = this.cameraSettings[setting];
     console.log(`Applying setting ${setting}: ${value}`);
 
     this.http.post(`${this.BASE_URL}/update-camera-settings`, {
-      camera_type: cameraType,
       setting_name: setting,
       setting_value: value
     }).subscribe((response: any) => {
-        console.log(`Setting applied successfully for ${cameraType} camera:`, response);
+        console.log(`Setting applied successfully for camera:`, response);
 
         const correctedValue = response.updated_value;
-        if (cameraType === 'main') {
-          this.mainCameraSettings[setting] = correctedValue;
-        } else {
-          this.sideCameraSettings[setting] = correctedValue;
-        }
+        this.mainCameraSettings[setting] = correctedValue;
       },
       error => {
-        console.error(`Error applying setting for ${cameraType} camera:`, error);
+        console.error(`Error applying setting for camera:`, error);
       }
     );
   }
@@ -538,43 +482,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     });
   }
 
-
-  handleKeyDown(event: KeyboardEvent, setting: string, cameraType: 'main' | 'side'): void {
-    if (event.key === 'Enter') {
-      console.log(`Enter pressed for ${setting} on ${cameraType} camera`);
-      this.applySetting(setting, cameraType);
-    }
-  }
-
-  validateInput(event: any, setting: string, cameraType: 'main' | 'side'): void {
-    const input = event.target.value.replace(/[^0-9.]/g, '');
-    if (cameraType === 'main') {
-      this.mainCameraSettings[setting] = input;
-    } else {
-      this.sideCameraSettings[setting] = input;
-    }
-  }
-
-  preventInvalidChars(event: KeyboardEvent, setting: string): void {
-    const char = String.fromCharCode(event.which);
-    const pattern = ['Width', 'Height', 'OffsetX', 'OffsetY', 'ExposureTime'].includes(setting) ? 
-                    /[0-9]/ : /[0-9.]/;
-    if (!pattern.test(char)) {
-      event.preventDefault();
-    }
-  }
-
   objectKeys(obj: any): string[] {
     return Object.keys(obj);
-  }
-
-  updateCameraSettingsOnInterface(updatedSettings: any, cameraType: 'main' | 'side'): void {
-    const targetSettings = cameraType === 'main' ? this.mainCameraSettings : this.sideCameraSettings;
-    
-    for (const key in updatedSettings) {
-      if (updatedSettings.hasOwnProperty(key)) {
-        targetSettings[key] = updatedSettings[key];
-      }
-    }
   }
 }

@@ -14,7 +14,6 @@ export interface MeasurementRecord {
   date: string;
   time: string;
   id: number | string;
-  barcode: string;
   operator: string;
   clogged: number;
   partiallyClogged: number;
@@ -47,23 +46,15 @@ export class SharedService {
 
   public measurementResults$ = this.measurementResultsSubject.asObservable();
 
-  private cameraConnectionStatus = new BehaviorSubject<{ main: boolean; side: boolean }>({
-    main: false,
-    side: false
-  });
+  private cameraConnectionStatus = new BehaviorSubject<boolean>(false);
+
   cameraConnectionStatus$ = this.cameraConnectionStatus.asObservable();
 
-  private cameraStreamStatus = new BehaviorSubject<{ main: boolean; side: boolean }>({
-    main: false,
-    side: false
-  });
+  private cameraStreamStatus = new BehaviorSubject<boolean>(false);
   cameraStreamStatus$ = this.cameraStreamStatus.asObservable();
 
-  isMainConnected$ = this.cameraConnectionStatus.asObservable().pipe(map(status => status.main));
-  isSideConnected$ = this.cameraConnectionStatus.asObservable().pipe(map(status => status.side));
-
-  isMainStreaming$ = this.cameraStreamStatus.asObservable().pipe(map(status => status.main));
-  isSideStreaming$ = this.cameraStreamStatus.asObservable().pipe(map(status => status.side));
+  isCameraConnected$ = this.cameraConnectionStatus.asObservable().pipe();
+  isCameraStreaming$ = this.cameraStreamStatus.asObservable().pipe();
 
   private saveDirectory: string = '';
 
@@ -85,111 +76,107 @@ export class SharedService {
     return this.saveDirectory;
   }
 
-  setCameraConnectionStatus(cameraType: 'main' | 'side', status: boolean): void {
-    const currentStatus = this.cameraConnectionStatus.getValue();
-    const updatedStatus = { ...currentStatus, [cameraType]: status };
-    this.cameraConnectionStatus.next(updatedStatus);
-
-    console.log(`Updated ${cameraType} camera connection status to: ${status}`);
+  setCameraConnectionStatus(status: boolean): void {
+    this.cameraConnectionStatus.next(!!status);
+    console.log(`Updated camera connection status to: ${status}`);
   }
 
-  setCameraStreamStatus(cameraType: 'main' | 'side', isStreaming: boolean): void {
-    const currentStatus = this.cameraStreamStatus.getValue();
-    this.cameraStreamStatus.next({ ...currentStatus, [cameraType]: isStreaming });
-    console.log(`Updated ${cameraType} camera stream status to: ${isStreaming}`);
+  setCameraStreamStatus(isStreaming: boolean): void {
+    this.cameraStreamStatus.next(!!isStreaming);
+    console.log(`Updated camera stream status to: ${isStreaming}`);
   }
 
-  getCameraConnectionStatus(cameraType: 'main' | 'side'): boolean {
-    return this.cameraConnectionStatus.value[cameraType];
+  getCameraConnectionStatus(): boolean {
+    return this.cameraConnectionStatus.value;
   }
 
-  getCameraStreamStatus(cameraType: 'main' | 'side'): boolean {
-    return this.cameraStreamStatus.value[cameraType];
+  getCameraStreamStatus(): boolean {
+    return this.cameraStreamStatus.value;
   }
 
-  toggleStream(cameraType: 'main' | 'side'): void {
-    const isStreaming = this.getCameraStreamStatus(cameraType);  // Make sure this is defined first
+  toggleStream(): void {
+    const isStreaming = this.getCameraStreamStatus();  // Make sure this is defined first
   
-    console.log(`Toggling ${cameraType} stream. Current status: ${isStreaming}`);  // Now it works
+    console.log(`Toggling camera stream. Current status: ${isStreaming}`);  // Now it works
   
-    this.setCameraStreamStatus(cameraType, !isStreaming);
+    this.setCameraStreamStatus(!isStreaming);
   
     if (isStreaming) {
-      this.stopStream(cameraType);
+      this.stopStream();
     } else {
-      this.startStream(cameraType);
+      this.startStream();
     }
   }
   
-  startStream(cameraType: 'main' | 'side'): void {
-    if (this.getCameraStreamStatus(cameraType)) {
-      console.warn(`${cameraType} stream is already running. Preventing duplicate start.`);
+  startStream(): void {
+    if (this.getCameraStreamStatus()) {
+      console.warn(`Camera stream is already running. Preventing duplicate start.`);
       return;  //Prevent multiple start requests
     }
   
-    console.log(`Starting ${cameraType} stream...`);
+    console.log(`Starting camera stream...`);
   
-    this.http.get(`${this.BASE_URL}/start-video-stream?type=${cameraType}`).subscribe(
+    this.http.get(`${this.BASE_URL}/start-video-stream`).subscribe(
       () => {
-        console.log(`${cameraType} camera stream started.`);
-        this.setCameraStreamStatus(cameraType, true);
+        console.log(`Camera stream started.`);
+        this.setCameraStreamStatus(true);
       },
       error => {
-        console.error(`Failed to start ${cameraType} camera stream:`, error);
-        this.setCameraStreamStatus(cameraType, false);
+        console.error(`Failed to start camera stream:`, error);
+        this.setCameraStreamStatus(false);
       }
     );
   }
   
   
-  stopStream(cameraType: 'main' | 'side'): void {
-    console.log(`Stopping ${cameraType} stream...`);
-    this.http.post(`${this.BASE_URL}/stop-video-stream?type=${cameraType}`, {}).subscribe(
+  stopStream(): void {
+    console.log(`Stopping camera stream...`);
+    this.http.post(`${this.BASE_URL}/stop-video-stream`, {}).subscribe(
       () => {
-        console.log(`${cameraType} camera stream stopped.`);
-        this.setCameraStreamStatus(cameraType, false);
+        console.log(`Camera camera stream stopped.`);
+        this.setCameraStreamStatus(false);
       },
       error => {
-        console.error(`Failed to stop ${cameraType} camera stream:`, error);
-        this.setCameraStreamStatus(cameraType, true);
+        console.error(`Failed to stop camera stream:`, error);
+        this.setCameraStreamStatus(true);
       }
     );
   }
 
-  toggleConnection(cameraType: 'main' | 'side'): void {
-    const isConnected = this.getCameraConnectionStatus(cameraType);
+  toggleConnection(): void {
+    const isConnected = this.getCameraConnectionStatus();
 
     if (isConnected) {
-      this.disconnectCamera(cameraType);
+      this.disconnectCamera();
     } else {
-      this.connectCamera(cameraType);
+      this.connectCamera();
     }
   }
 
-  connectCamera(cameraType: 'main' | 'side'): void {
-    this.http.post(`${this.BASE_URL}/connect-camera?type=${cameraType}`, {}).subscribe(
+  connectCamera(): void {
+    this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe(
       () => {
-        this.setCameraConnectionStatus(cameraType, true);
-        console.log(`Connected ${cameraType} camera.`);
+        this.setCameraConnectionStatus(true);
+        console.log(`Camera connected.`);
       },
       error => {
-        console.error(`Failed to connect ${cameraType} camera:`, error);
+        console.error(`Failed to connect camera:`, error);
       }
     );
   }
 
-  disconnectCamera(cameraType: 'main' | 'side'): void {
+  disconnectCamera(): void {
     // Stop stream before disconnecting
-    this.stopStream(cameraType);
+    this.stopStream();
   
-    this.http.post(`${this.BASE_URL}/disconnect-camera?type=${cameraType}`, {}).subscribe(
+    this.http.post(`${this.BASE_URL}/disconnect-camera`, {}).subscribe(
       () => {
-        this.setCameraConnectionStatus(cameraType, false);
-        this.setCameraStreamStatus(cameraType, false);  // Reset stream status
-        console.log(`Disconnected ${cameraType} camera.`);
+        this.setCameraConnectionStatus(false);
+        this.setCameraStreamStatus(false);  // Reset stream status
+        console.log(`Disconnected camera.`);
       },
       error => {
-        console.error(`Failed to disconnect ${cameraType} camera:`, error);
+        console.error(`Failed to disconnect camera:`, error);
       }
     );
   }
@@ -211,48 +198,5 @@ export class SharedService {
       }
       this.measurementResultsSubject.next(newResults);
     }
-  }
-
-  analyzeCenterCircle(): void {
-    console.log("Analyzing Center Circle via SharedService...");
-    this.http.post(`${this.BASE_URL}/analyze_center_circle`, {}).pipe(
-      tap(response => console.log("analyze_center_circle Response:", response)),
-      switchMap(() => {
-        console.log("Calling update_results for center circle...");
-        return this.http.post(`${this.BASE_URL}/update_results`, { mode: "center_circle" }, { headers: { 'Content-Type': 'application/json' } });
-      }),
-      tap((response: any) => {
-        console.log("Update results response for center circle:", response);
-        this.updateResults(response);
-      })
-    ).subscribe({
-      error: err => console.error("Error in analyzeCenterCircle:", err)
-    });
-  }
-
-  analyzeInnerSlice(): void {
-    console.log("Analyzing Inner Slice via SharedService...");
-    this.http.post(`${this.BASE_URL}/analyze_center_slice`, {}).pipe(
-      switchMap(() => this.http.post(`${this.BASE_URL}/update_results`, { mode: "center_slice" })),
-      tap((response: any) => {
-        console.log("Update results response for center slice:", response);
-        this.updateResults(response);
-      })
-    ).subscribe({
-      error: err => console.error("Error in analyzeInnerSlice:", err)
-    });
-  }
-
-  analyzeOuterSlice(): void {
-    console.log("Analyzing Outer Slice via SharedService...");
-    this.http.post(`${this.BASE_URL}/analyze_outer_slice`, {}).pipe(
-      switchMap(() => this.http.post(`${this.BASE_URL}/update_results`, { mode: "outer_slice" })),
-      tap((response: any) => {
-        console.log("Update results response for outer slice:", response);
-        this.updateResults(response);
-      })
-    ).subscribe({
-      error: err => console.error("Error in analyzeOuterSlice:", err)
-    });
   }
 }

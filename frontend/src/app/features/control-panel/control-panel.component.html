@@ -6,7 +6,7 @@
     <!-- Left Column: Relay & Save -->
     <div class="left-col">
       <!-- Relay Toggle Button -->
-      <button (click)="toggleRelay()"
+      <button
               [ngClass]="relayState ? 'relay-on' : 'relay-off'"
               class="relay-button"
               [disabled]="measurementActive">
@@ -45,21 +45,7 @@
          [(ngModel)]="nozzleId"
          [disabled]="measurementActive"
          tabindex="-1"
-         [ngClass]="{'error-outline': measurementValidationTriggered && (!nozzleId && !nozzleBarcode)}" />
-</div>
-
-<!-- Right column: Nozzle Barcode -->
-<div style="display: flex; flex-direction: column;">
-  <label for="nozzle-barcode">Dűzni Vonalkód:</label>
-  <input type="text"
-         id="nozzle-barcode"
-         class="input-box"
-         [(ngModel)]="nozzleBarcode"
-         readonly
-         [disabled]="measurementActive"
-         tabindex="-1"
-         style="pointer-events: none;"
-         [ngClass]="{'error-outline': measurementValidationTriggered && (!nozzleId && !nozzleBarcode)}" />
+         [ngClass]="{'error-outline': measurementValidationTriggered && (!nozzleId)}" />
 </div>
 
 <!-- Operator ID -->
@@ -116,7 +102,6 @@
   *ngIf="isResultsPopupVisible"
   [results]="resultsValues" 
   [nozzleId]="nozzleId"
-  [nozzleBarcode]="nozzleBarcode"
   [operatorId]="operatorId"
   [ngLimit]="ng_limit"
   (closePopup)="onPopupClosed()">

@@ -152,22 +152,6 @@ td button:hover {
   margin-bottom: 10px;
 }
 
-.measurement-button {
-  background-color: #007bff;
-  color: white;
-  border: none;
-  padding: 6px 12px;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 12px;
-  transition: background-color 0.3s ease;
-}
-
-.measurement-button:hover {
-  background-color: #0056b3;
-}
-
-
 .user-settings-table input.dir-display {
   width: 100%;   /* or 100% if you prefer */
   text-align: left;

@@ -15,11 +15,7 @@ import { ControlPanelComponent } from './features/control-panel/control-panel.co
 import { TurntableControlComponent } from './features/turntable-control/turntable-control.component';
 import { ComportControlComponent } from './features/comport-control/comport-control.component';
 import { CameraControlComponent } from './features/camera-control/camera-control.component';
-import { ResultsTableComponent } from './features/results-table/results-table.component';
 import { ErrorPopupListComponent } from './components/error-popup-list/error-popup-list.component';
-import { BarcodeScannerControlComponent } from './features/barcode-scanner-control/barcode-scanner-control.component';
-import { LoginPopupComponent } from './components/login-popup/login-popup.component';
-import { SQLDatabaseComponent } from './components/sql-database/sql-database.component';
 import { BackendReadyService } from './services/backend-ready.service'; // Adjust the path as needed
 
 @Component({
@@ -39,11 +35,7 @@ import { BackendReadyService } from './services/backend-ready.service'; // Adjus
     TurntableControlComponent,
     ComportControlComponent,
     CameraControlComponent,
-    ResultsTableComponent,
-    ErrorPopupListComponent,
-    BarcodeScannerControlComponent,
-    LoginPopupComponent,
-    SQLDatabaseComponent
+    ErrorPopupListComponent
   ],
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.css']
@@ -52,10 +44,6 @@ export class AppComponent implements OnInit, AfterViewInit {
   backendReady = false;
   title = 'Untitled';  
   @ViewChild('sidenav') sidenav!: MatSidenav;
-
-  isAuthenticated = false;
-  isLoginPopupVisible = false;
-  loginError = '';
 
   constructor(
     private http: HttpClient,
@@ -76,7 +64,6 @@ export class AppComponent implements OnInit, AfterViewInit {
       
       this.backendReady = true;
     }
-    this.isAuthenticated = sessionStorage.getItem('isAuthenticated') === 'true';
   }
 
   ngAfterViewInit(): void {
@@ -90,27 +77,6 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   toggleSettingsPanel(): void {
-    if (this.isAuthenticated) {
-      this.sidenav.toggle();
-    } else {
-      this.isLoginPopupVisible = true;
-    }
-  }
-
-  hideLoginPopup(): void {
-    this.isLoginPopupVisible = false;
-  }
-
-  onLoginSuccess(credentials: { username: string; password: string }): void {
-    // You might process credentials if necessary.
-    this.isAuthenticated = true;
-    sessionStorage.setItem('isAuthenticated', 'true');
-    this.sidenav.open();
-  }
-
-  logout(): void {
-    this.isAuthenticated = false;
-    sessionStorage.removeItem('isAuthenticated');
-    this.sidenav.close();
+    this.sidenav.toggle();
   }
 }

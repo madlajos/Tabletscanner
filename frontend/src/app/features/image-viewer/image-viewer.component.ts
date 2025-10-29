@@ -1,7 +1,8 @@
 import { CommonModule } from '@angular/common';
-import { Component, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
+import { Component, ViewChild, ElementRef, AfterViewInit, OnDestroy } from '@angular/core';
 import { SharedService } from '../../shared.service';
 import { HttpClient } from '@angular/common/http';
+import { Subscription } from 'rxjs';
 
 @Component({
   standalone: true,
@@ -10,60 +11,70 @@ import { HttpClient } from '@angular/common/http';
   styleUrls: ['./image-viewer.component.css'],
   imports: [CommonModule]
 })
-export class ImageViewerComponent implements AfterViewInit {
-  @ViewChild('mainVideoContainer', { static: false }) mainVideoContainer!: ElementRef<HTMLDivElement>;
-  @ViewChild('sideVideoContainer', { static: false }) sideVideoContainer!: ElementRef<HTMLDivElement>;
+export class ImageViewerComponent implements AfterViewInit, OnDestroy {
+  @ViewChild('videoContainer', { static: false }) videoContainer!: ElementRef<HTMLDivElement>;
 
-  isMainStreaming: boolean = false;
-  isSideStreaming: boolean = false;
+  isStreaming = false;
+  private streamSub?: Subscription;
+
+  private readonly BASE_URL = 'http://localhost:5000/api';
 
   constructor(public http: HttpClient, public sharedService: SharedService) {}
 
   ngAfterViewInit(): void {
-    this.sharedService.cameraStreamStatus$.subscribe(status => {
-      this.isMainStreaming = status.main;
-      this.isSideStreaming = status.side;
+    // 1) Initialize from the service getter so the UI reflects current state immediately
+    if (typeof (this.sharedService as any).getCameraStreamStatus === 'function') {
+      this.isStreaming = (this.sharedService as any).getCameraStreamStatus();
+      this.updateStreamDisplay();
+    }
 
-      // Add logs to confirm stream status changes
-      console.log(`Main Camera Streaming: ${this.isMainStreaming}`);
-      console.log(`Side Camera Streaming: ${this.isSideStreaming}`);
+    // 2) Subscribe to streaming changes (prefer isStreaming$, else fall back to cameraStreamStatus$)
+    const stream$ =
+      (this.sharedService as any).isStreaming$ ||
+      (this.sharedService as any).cameraStreamStatus$;
 
-      // Update the stream display based on streaming status
-      this.updateStreamDisplay('main');
-      this.updateStreamDisplay('side');
-    });
+    if (stream$?.subscribe) {
+      this.streamSub = stream$.subscribe((status: boolean) => {
+        this.isStreaming = !!status;
+        console.log(`Camera Streaming: ${this.isStreaming}`);
+        this.updateStreamDisplay();
+      });
+    } else {
+      console.warn('No streaming observable found on SharedService (isStreaming$ / cameraStreamStatus$).');
+    }
   }
 
-  updateStreamDisplay(cameraType: 'main' | 'side'): void {
-    const videoContainer = cameraType === 'main'
-      ? this.mainVideoContainer.nativeElement
-      : this.sideVideoContainer.nativeElement;
-  
-    // If you want to scale down the image, just add &scale=0.25 or similar
-    const streamUrl = `http://localhost:5000/api/start-video-stream?type=${cameraType}&scale=0.25&ts=${Date.now()}`;
-  
-    let img = videoContainer.querySelector('img');
-  
-    if ((cameraType === 'main' && this.isMainStreaming) || (cameraType === 'side' && this.isSideStreaming)) {
-      console.log(`Displaying ${cameraType} stream in UI.`);
-  
+  ngOnDestroy(): void {
+    this.streamSub?.unsubscribe();
+  }
+
+  updateStreamDisplay(): void {
+    const container: HTMLElement | undefined = this.videoContainer?.nativeElement;
+    if (!container) {
+      console.warn('videoContainer not available.');
+      return;
+    }
+
+    const streamUrl = `${this.BASE_URL}/start-video-stream?scale=0.25&ts=${Date.now()}`;
+    let img = container.querySelector('img');
+
+    if (this.isStreaming) {
       if (!img) {
         img = document.createElement('img');
-        img.alt = `${cameraType} camera stream`;
+        img.alt = 'camera stream';
         img.style.width = '100%';
         img.style.height = '100%';
         img.style.objectFit = 'contain';
-        videoContainer.appendChild(img);
+        container.appendChild(img);
       }
-  
-      img.src = streamUrl;  // This is the key: the <img> loads the MJPEG response
-      img.onload = () => console.log(`${cameraType} stream loaded.`);
-      img.onerror = (err) => console.error(`Failed to load ${cameraType} stream.`, err);
-  
+      img.src = streamUrl; // <img> loads the MJPEG
+      img.onload = () => console.log('Stream loaded.');
+      img.onerror = (err) => console.error('Failed to load stream.', err);
     } else {
-      // If the user or the system toggled streaming off, remove the <img>
-      console.warn(`${cameraType} stream stopped. Clearing view.`);
-      if (img) img.remove();
+      if (img) {
+        console.warn('Stream stopped. Clearing view.');
+        img.remove();
+      }
     }
   }
 }

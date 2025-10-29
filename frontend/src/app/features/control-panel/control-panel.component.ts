@@ -9,7 +9,6 @@ import { MatIconModule } from '@angular/material/icon';
 import { SharedService, MeasurementResult } from '../../shared.service';
 import { MeasurementResultsPopupComponent } from '../../components/measurement-results-popup/measurement-results-popup.component';
 import { SettingsUpdatesService } from '../../services/settings-updates.service';
-import { BarcodeService } from '../../services/barcode.service';
 
 
 declare global {
@@ -33,16 +32,14 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
 
   relayState: boolean = false;
   nozzleId: string = "";
-  nozzleBarcode: string = "";
   operatorId: string = "";
   ng_limit: number = 0;
   save_csv: boolean = false;
   save_images: boolean = false;
   csv_dir: string = "";
 
-  isMainConnected: boolean = false;
-  isSideConnected: boolean = false;
-
+  isConnected: boolean = false;
+  
   measurementValidationTriggered: boolean = false;
 
   measurementActive: boolean = false;
@@ -74,60 +71,11 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
     private cdr: ChangeDetectorRef,
     private sharedService: SharedService,
     private settingsUpdatesService: SettingsUpdatesService,
-    private barcodeService: BarcodeService
   ) { }
 
   ngOnInit(): void {
-  this.barcodeService.barcode$.subscribe(scannedBarcode => {
-    // Ignore any scans while a measurement is running OR while the results popup is on-screen
-    if (this.measurementActive || this.isResultsPopupVisible) {
-        if (scannedBarcode) {
-          this.barcodeService.clearBarcode();   // flush stray scan
-        }
-        return;
-    }
-
-    if (scannedBarcode) {
-      console.log('New barcode:', scannedBarcode);
-
-      // Remember which barcode this lookup belongs to
-      const requestToken = scannedBarcode;
-
-      this.nozzleBarcode = requestToken;
-      this.nozzleId = '';               // clear any previous ID
-      this.cdr.detectChanges();         // update UI immediately
-
-      this.http
-        .get<{ spinneret_id: string | null }>(`${this.BASE_URL}/lookup-nozzle`,
-              { params: { barcode: requestToken } })
-        .pipe(takeUntil(this.lookupCancel$))
-        .subscribe({
-          next: resp => {
-            // Discard late/stale responses that no longer match the current barcode
-            if (this.nozzleBarcode !== requestToken) {
-              return;
-            }
-
-            if (resp.spinneret_id) {
-              this.nozzleId = resp.spinneret_id;
-              console.log(`Filled nozzleId: ${resp.spinneret_id}`);
-            } else {
-              console.warn(`No ID mapping for ${requestToken}`);
-            }
-            this.cdr.detectChanges();
-          },
-          error: err => {
-            console.error('Lookup failed:', err);
-            this.cdr.detectChanges();
-          }
-        });
-    }
-  });
-
-
     this.sharedService.cameraConnectionStatus$.subscribe(status => {
-      this.isMainConnected = status.main;
-      this.isSideConnected = status.side;
+      this.isConnected = status;
     });
 
     // Load initial size limits from backend.
@@ -178,10 +126,6 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
       console.log("saveSettings updated via shared service:", this.save_csv, this.save_images);
       this.cdr.detectChanges();
     });
-
-    setTimeout(() => {
-      this.getRelayState();
-    }, 3000);
   }
 
   ngOnDestroy(): void {
@@ -204,21 +148,12 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
   }
 
   canStartMeasurement(): boolean {
-    if (!this.isMainConnected) {
+    if (!this.isConnected) {
       console.error("Cannot start measurement: Main camera is not connected.");
-      return false;
-    }
-    if (!this.isSideConnected) {
-      console.error("Cannot start measurement: Side camera is not connected.");
       return false;
     }
     if (!this.turntableControl) {
       console.error("Cannot start measurement: Turntable controller is not available.");
-      return false;
-    }
-    // Check that either nozzleId or nozzleBarcode is provided.
-    if (!this.nozzleId && !this.nozzleBarcode) {
-      console.error("Cannot start measurement: Nozzle identifier is missing.");
       return false;
     }
     if (!this.operatorId) {
@@ -226,24 +161,6 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
       return false;
     }
     return true;
-  }
-
-
-  getRelayState(): void {
-    this.http.get(`${this.BASE_URL}/get-relay`)
-      .pipe(
-        catchError((error: any) => {
-          console.error("Error getting relay state:", error);
-          // Optionally, you can return a default response so the error doesn't propagate.
-          // For example, consider the relay off.
-          return of({ state: 0 });
-        })
-      )
-      .subscribe((response: any) => {
-        // Expecting response.state to be 1 or 0.
-        this.relayState = response.state === 1;
-        console.log("Relay state obtained:", response.state);
-      });
   }
   
   // Function to save raw image using the selected folder.
@@ -306,7 +223,6 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
       this.sharedService.setMeasurementActive(false);
       console.log("Measurement cycle stopping...");
       this.stopMeasurement();
-      this.toggleRelay();
     }
   }
 
@@ -318,13 +234,9 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
 
     // Reset results while keeping original labels.
     this.results = this.results.map(res => ({ ...res, value: 0 }));
+  
     
-    this.nozzleId = "";
-    this.nozzleBarcode = "";
-    this.barcodeService.clearBarcode();
-    this.nozzleBarcode = "";
-    
-    console.log("Results cleared, progress bar reset, and barcode fields cleared.");
+    console.log("Results cleared, progress bar reset");
   
     // Emit a value to cancel the measurement chain.
     this.measurementStop$.next();
@@ -345,7 +257,7 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
   }
 
   private prepareAnnotatedFolder(): Observable<any> {
-    const spinneretId = this.nozzleBarcode || this.nozzleId;
+    const spinneretId = this.nozzleId;
     return this.http.post(`${this.BASE_URL}/start-annotated-save`, {
       spinneret_id: spinneretId
     });
@@ -372,7 +284,6 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
         // This is exactly your “kickoff” logic:
         // — toggle relay if needed, then fire executeCycle('full')
         if (!this.relayState) {
-          this.toggleRelay();
           // wait for relay to change
           return of(null).pipe(
             delay(500),
@@ -407,7 +318,7 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
     return init$.pipe(
       switchMap(() => this.waitForTurntableDone()),
       switchMap(() => of(null).pipe(delay(200))),
-      switchMap(() => this.runAnalysis(cycleMode)),
+      // switchMap(() => this.runAnalysis(cycleMode)),
       // Optionally, update overall statistics & UI after the analysis chain.
       switchMap(() => this.http.post(`${this.BASE_URL}/calculate-statistics?mode=${cycleMode}`, {})),
       switchMap(() => this.http.post(`${this.BASE_URL}/update_results`, { mode: cycleMode })),
@@ -416,7 +327,6 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
       catchError((err: any) => {
         console.error("Measurement cycle error:", err);
         this.stopMeasurement();
-        this.toggleRelay();
         this.measurementActive = false;
         this.sharedService.setMeasurementActive(false);
         
@@ -435,63 +345,30 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
     );
   }
 
-  private runAnalysis(cycleMode: 'full' | 'slices'): Observable<any> {
-    if (cycleMode === 'full') {
-      // For a full cycle, include center_circle analysis.
-      return this.http.post(`${this.BASE_URL}/analyze_center_circle`, {}).pipe(
-        switchMap(result => this.conditionalSave(result, 'center_circle')),
-        switchMap(() => this.http.post(`${this.BASE_URL}/analyze_center_slice`, {})),
-        switchMap(result => this.conditionalSave(result, 'center_slice')),
-        switchMap(() => this.http.post(`${this.BASE_URL}/analyze_outer_slice`, {})),
-        switchMap(result => this.conditionalSave(result, 'outer_slice'))
-      );
-    } else {
-      // For subsequent cycles, only run the slice analyses.
-      return this.http.post(`${this.BASE_URL}/analyze_center_slice`, {}).pipe(
-        switchMap(result => this.conditionalSave(result, 'center_slice')),
-        switchMap(() => this.http.post(`${this.BASE_URL}/analyze_outer_slice`, {})),
-        switchMap(result => this.conditionalSave(result, 'outer_slice'))
-      );
-    }
-  }
+  // TODO:
+  // Keep & refactor this function to run the automated measurement
+  //private runAnalysis(cycleMode: 'full' | 'slices'): Observable<any> {
 
-  private conditionalSave<T>(result: T, analysisMode: string): Observable<T> {
-    if (this.save_images) {
-      return this.http.post(`${this.BASE_URL}/calculate-statistics?mode=${analysisMode}`, {}).pipe(
-        switchMap(() => this.http.post(`${this.BASE_URL}/save-annotated-image`, {})),
-        map(() => result)
-      );
-    } else {
-      return of(result);
-    }
-  }
+    //return this.http.post(`${this.BASE_URL}/analyze_center_circle`, {}).pipe( 
+    //  switchMap(result => this.conditionalSave(result, 'center_circle')),
+    //  switchMap(() => this.http.post(`${this.BASE_URL}/analyze_center_slice`, {})),
+    //);
+  //}
   
+  // TODO:
+  // Keep & refactor this function for the end of an automated measurement
+  // Called when msmnt finishes
   private completeMeasurementCycle(): void {
     console.log("Measurement cycle completed.");
     this.measurementActive = false;
     this.sharedService.setMeasurementActive(false);
-    if (this.save_csv) {
-      this.saveResultsToCsv();
-    }
-    this.toggleRelay();
     this.showResultsPopup();
   }
 
-  toggleRelay(): void {
-    this.relayState = !this.relayState;
-    const payload = { state: this.relayState ? 1 : 0 };
-    this.http.post(`${this.BASE_URL}/toggle-relay`, payload).subscribe(
-      (response: any) => {
-        console.log(`Relay ${this.relayState ? 'ON' : 'OFF'}`, response);
-      },
-      (error: any) => {
-        console.error('Error toggling relay:', error);
-        this.relayState = !this.relayState;
-      }
-    );
-  }
-  
 
+  // TODO:
+  // Keep & refactor this function for the end of an automated measurement
+  // Reset msmnt data to null
   resetBackendResults(): void {
     this.http.post(`${this.BASE_URL}/reset_results`, {}).subscribe({
       next: (response: any) => {
@@ -506,6 +383,9 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
   }
   
   
+  // TODO:
+  // Refactor this function to support MotionPlatform instead
+  // Check if motion platform is responsive
   waitForTurntableDone(): Observable<any> {
     return new Observable(observer => {
       const checkStatus = () => {
@@ -528,6 +408,9 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
     });
   }
 
+  // TODO:
+  // Keep & refactor this function for the end of an automated measurement
+  // Update UI during measurement
   updateResultsUI(response: any): void {
     if (response?.result_counts) {
       if (!this.results || this.results.length !== response.result_counts.length) {
@@ -546,64 +429,13 @@ export class ControlPanelComponent implements OnInit, OnDestroy {
     }
   }
 
+  // TODO:
+  // Keep & refactor this function for the end of an automated measurement
+  // Aknowledge end of measurement 
   onPopupClosed(): void {
     // Reset the measurement cycle.
     this.stopMeasurement();
     // Hide the popup.
     this.isResultsPopupVisible = false;
-  }
-
-  saveResultsToCsv(): void {
-    const spinneretId = this.nozzleBarcode || this.nozzleId;
-    if (!spinneretId) {
-      console.error("Cannot save CSV: No spinneret ID provided.");
-      return;
-    }
-    const payload = {
-      spinneret_id: spinneretId
-    };
-  
-    this.http.post(`${this.BASE_URL}/save_results_to_csv`, payload).subscribe({
-      next: (resp: any) => {
-        console.log("CSV saved successfully:", resp);
-      },
-      error: (err: any) => {
-        console.error("CSV saving failed:", err);
-      }
-    });
-  }
-
-  // Tester Functions to analyse only parts of the images
-  analyzeCenterCircle(): void {
-    console.log("Analyzing Center Circle...");
-    this.http.post(`${this.BASE_URL}/analyze_center_circle`, {}).pipe(
-      tap(response => console.log("analyze_center_circle Response:", response)),
-      switchMap(() => {
-        console.log("➡️ Calling update_results...");
-        return this.http.post(`${this.BASE_URL}/update_results`, { mode: "center_circle" }, { headers: { 'Content-Type': 'application/json' } });
-      }),
-      tap((response: any) => {
-        console.log("update_results Response:", response);
-        this.updateResultsUI(response);
-      })
-    ).subscribe({
-      error: (err) => console.error("Error in analyzeCenterCircle:", err)
-    });
-  }
-
-  analyzeInnerSlice(): void {
-    console.log("Analyzing Center Slice...");
-    this.http.post(`${this.BASE_URL}/analyze_center_slice`, {}).pipe(
-      switchMap(() => this.http.post(`${this.BASE_URL}/update_results`, { mode: "center_slice" })),
-      tap((response: any) => this.updateResultsUI(response))
-    ).subscribe();
-  }
-
-  analyzeOuterSlice(): void {
-    console.log("Analyzing Outer Slice...");
-    this.http.post(`${this.BASE_URL}/analyze_outer_slice`, {}).pipe(
-      switchMap(() => this.http.post(`${this.BASE_URL}/update_results`, { mode: "outer_slice" })),
-      tap((response: any) => this.updateResultsUI(response))
-    ).subscribe();
   }
 }

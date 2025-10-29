@@ -17,7 +17,6 @@ export class MeasurementResultsPopupComponent {
   // Expect an array of three numbers for the results.
   @Input() results: number[] = [];
   @Input() nozzleId!: string;
-  @Input() nozzleBarcode!: string;
   @Input() operatorId!: string;
   @Input() ngLimit!: number;
   @Output() closePopup = new EventEmitter<void>();
@@ -41,7 +40,6 @@ export class MeasurementResultsPopupComponent {
       date,
       time,
       id: this.nozzleId || "-",
-      barcode: this.nozzleBarcode || "-",
       operator: this.operatorId || "-",
       clogged: this.results[0] ?? 0,
       partiallyClogged: this.results[1] ?? 0,
@@ -54,24 +52,10 @@ export class MeasurementResultsPopupComponent {
     // 1. Construct the measurement record.
     const record = this.measurementRecord;
   
-    // 2. Update the SharedService so the results table updates regardless of DB save success.
+    // 2. Update the SharedService so the results table updates
     this.sharedService.addMeasurementResult(record);
   
-    // 3. Save to the database without a prior connection check.
-    this.http.post(`${this.BASE_URL}/save-measurement-result`, record).subscribe({
-      next: (resp: any) => {
-        console.log("Saved to DB:", resp);
-      },
-      error: (err: any) => {
-        console.error("DB save failed:", err);
-        this.errorNotificationService.addError({
-          code: "E1401",
-          message: this.errorNotificationService.getMessage("E1401")
-        });
-      }
-    });
-  
-    // 4. Close the popup.
+    // 3. Close the popup.
     this.closePopup.emit();
   }
 }

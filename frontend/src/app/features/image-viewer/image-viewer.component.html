@@ -1,40 +1,22 @@
-<!-- Camera Wrapper -->
-<div class="camera-wrapper">
-  <!-- Side Camera -->
-  <div class="image-viewer-container side-camera">
-    <div class="top-bar">
-      <div class="camera-name">Oldalsó Kamera
-        <span class="status-indicator"
-            [ngClass]="{
-              'disconnected': !sharedService.getCameraConnectionStatus('side'),
-              'connected': sharedService.getCameraConnectionStatus('side') && !sharedService.getCameraStreamStatus('side'),
-              'streaming': sharedService.getCameraStreamStatus('side')
-            }">
+<div class="image-viewer-container">
+  <div class="top-bar">
+    <div class="camera-name">
+      Camera
+      <span
+        class="status-indicator"
+        [ngClass]="{
+          'disconnected': !sharedService.getCameraConnectionStatus(),
+          'connected': sharedService.getCameraConnectionStatus() && !sharedService.getCameraStreamStatus(),
+          'streaming': sharedService.getCameraStreamStatus()
+        }">
       </span>
-      </div>
-    </div>
-    <div class="live-view">
-      <div #sideVideoContainer></div>
     </div>
   </div>
 
-  <!-- Side Camera -->
-  <div class="image-viewer-container main-camera">
-    <div class="top-bar">
-      <div class="camera-name">Középső Kamera
-        <span class="status-indicator"
-            [ngClass]="{
-              'disconnected': !sharedService.getCameraConnectionStatus('main'),
-              'connected': sharedService.getCameraConnectionStatus('main') && !sharedService.getCameraStreamStatus('main'),
-              'streaming': sharedService.getCameraStreamStatus('main')
-            }">
-      </span>
+  <div class="live-view">
 
 
-      </div>
-    </div>
-    <div class="live-view">
-      <div #mainVideoContainer></div>
-    </div>
+    <!-- Always keep the video host in DOM to avoid TS timing issues -->
+    <div #videoContainer class="video-host" [class.hidden]="!sharedService.getCameraStreamStatus()"></div>
   </div>
 </div>

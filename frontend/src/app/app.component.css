@@ -1,119 +1,44 @@
 :host {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-  font-size: 14px;
-  color: #dd2525;
-  background-color: #2e2e2e;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-/*** Main Content (Main UI) ***/
-.main-content {
-  display: flex;
-  justify-content: left;  /* Center the content */
-  align-items: flex-start;
-  width: 100%;
-  margin: 0;
-  margin-top: 8px;
-  margin-left: 10px;
-  box-sizing: border-box;
-}
-/*** Main Content (Main UI) ***/
-
-/*** SideNav ***/
-/* Sidebar styling */
-.sidenav {
-  width: 360px; /* Adjust width as needed */
-  background-color: #000; /* Black background color */
-  color: #fff; /* White text color */
-  font-size: 16px; /* Adjust text size as needed */
-  margin-right: 10px;
-  margin-top: 10px;
-  height: 50vh;
-  border-radius: 5px 5px 5px 5px;
-}
-
-/* Style the Sidenav headers */
-
-
-/* Hover effect for both closed and open panel headers */
-.mat-expansion-panel:not(.mat-expanded) .mat-expansion-panel-header:hover,
-.mat-expansion-panel.mat-expanded .mat-expansion-panel-header:hover {
-  background-color: #444; /* Darker grey for hover effect */
-}
-
-/* Remove margin between panels */
-.mat-accordion .mat-expansion-panel {
-  margin: 0px; 
-}
-/*** SideNav ***/
-
-/*** Toggle Button ***/
-.toggle-button {
-  position: absolute;
-  top: 1%;
-  right: 14px; /* Align next to the sidebar */
-  transform: translateY(-50%);
-  transform: translateX(10%);
-  background-color: #313131;
-  border: none;
-  border-radius: 5px 5px 5px 5px;
-  cursor: pointer;
-  transition: right 0.3s ease;
-  z-index: 10;
-}
-
-.toggle-button mat-icon {
-  color: #fff;
-  padding: 3px;
-}
-/*** Toggle Button ***/
-
-
-.control-panel-results-container {
-  display: flex;          /* Enables Flexbox */
-  flex-direction: row;    /* Aligns elements side-by-side */
-  justify-content: flex-start; /* Aligns items to the left */
-  align-items: flex-start; /* Aligns to the top */
-  gap: 15px;              /* Adds spacing between elements */
-  margin-left: 10px;
-  margin-top: 10px;
+  display: block;
+  height: 100vh;            /* full viewport height */
   overflow: hidden;
 }
 
-.control-panel-container {
-  width: 600px;
+.app-grid {
+  height: 100%;
+  box-sizing: border-box;
+  padding: 12px;            /* small outer padding */
+  display: grid;
+  grid-template-columns: 1fr 3fr 1fr; /* 1/5, 3/5, 1/5 */
+  gap: 12px;                /* small gap between columns */
 }
 
-.results-table-container {
-  margin-left: 28px;
-  width: 814px; 
+.panel,
+.viewer {
+  background: #212529;
+  border: 1px solid #2e2e2e; /* light gray border */
+  border-radius: 8px;
+  padding: 12px;
+  min-height: 0;             /* allow grid child to shrink */
 }
 
-.logout-button {
+/* Left/Right placeholders */
+.panel .placeholder {
+  color: #6b7280;            /* gray-500 */
+  font-size: 0.95rem;
+}
+
+/* Middle (live view) column fills available space */
+.viewer {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow: hidden;          /* prevent scrollbars while viewer scales */
+}
+
+/* Make the image viewer fill its card */
+.viewer app-image-viewer {
+  display: block;
   width: 100%;
-  background: red;
-  color: white;
-  border: none;
-  cursor: pointer;
-  min-height: 40px;
-  flex-shrink: 0;
-  line-height: 40px;
-  margin-bottom: 10px;
+  height: 100%;
 }
-
-.error {
-  color: red;
-  font-size: 14px;
-}
-
-input:focus, textarea:focus, select:focus {
-  outline: 1px solid white !important;
-  box-shadow: none !important;
-}
-
-button:focus {
-  outline: none !important;
-  box-shadow: none !important;
-}
-

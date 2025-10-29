@@ -7,7 +7,6 @@ import globals
 
 # Global serial device variables
 turntable = None
-barcode_scanner = None
 turntable_waiting_for_done = False
 
 def connect_to_serial_device(device_name, identification_command, expected_response, vid, pid):
@@ -88,75 +87,11 @@ def connect_to_turntable():
         return None
     return turntable
 
-
-def connect_to_barcode_scanner():
-    """
-    Connects to the barcode scanner (QD2100) using its VID/PID.
-    If successful, assigns the scanner to `barcode_scanner` and starts the listener thread.
-    """
-    global barcode_scanner
-
-    # Check if already connected
-    if barcode_scanner and barcode_scanner.is_open:
-        logging.info("Barcode scanner is already connected.")
-        return barcode_scanner
-
-    logging.info("Attempting to connect to barcode scanner...")
-    barcode_scanner = connect_to_serial_device(
-        device_name="BarcodeScanner",
-        identification_command="",
-        expected_response="",
-        vid=0x05F9,
-        pid=0x4204
-    )
-
-    if barcode_scanner and barcode_scanner.is_open:
-        logging.info("Barcode scanner connected successfully.")
-        # Start barcode listener only if not already running
-        if not any(t.name == "BarcodeListener" for t in threading.enumerate()):
-            threading.Thread(target=barcode_scanner_listener, name="BarcodeListener", daemon=True).start()
-        return barcode_scanner
-
-    logging.error("Failed to connect to barcode scanner.")
-    return None
-
-def barcode_scanner_listener():
-    """Continuously read barcode scanner data and update globals.latest_barcode."""
-    global barcode_scanner  # Ensure we're modifying the global barcode_scanner variable
-
-    while True:
-        if barcode_scanner and barcode_scanner.is_open:
-            try:
-                # Read barcode data
-                line = barcode_scanner.readline().decode(errors='ignore').strip()
-                if line:
-                    globals.latest_barcode = line
-                    logging.info(f"Barcode scanned: {line}")
-
-            except serial.SerialException as e:
-                logging.error(f"SerialException reading barcode scanner: {e}")
-                barcode_scanner.close()
-                barcode_scanner = None
-                logging.warning("Barcode scanner disconnected! Attempting reconnection...")
-
-                # Attempt reconnection loop
-                while barcode_scanner is None:
-                    try:
-                        barcode_scanner = connect_to_barcode_scanner()
-                        if barcode_scanner and barcode_scanner.is_open:
-                            logging.info("Barcode scanner reconnected successfully.")
-                            break  # Exit the loop on success
-                    except Exception as e:
-                        logging.error(f"Reconnection attempt failed: {e}")
-                        time.sleep(2)  # Wait before retrying
-
-        time.sleep(0.5)  # Poll every 500ms
-
 def disconnect_serial_device(device_name):
     """
-    Forcefully disconnects the specified serial device ('turntable' or 'barcode').
+    Forcefully disconnects the specified serial device ('turntable').
     """
-    global turntable, barcode_scanner
+    global turntable
     logging.info(f"Attempting to disconnect {device_name}")
 
     try:
@@ -165,11 +100,6 @@ def disconnect_serial_device(device_name):
                 turntable.close()  # Close port safely
             turntable = None  # Remove reference
             logging.info("Turntable disconnected successfully.")
-        elif device_name.lower() in ['barcode', 'barcodescanner'] and barcode_scanner is not None:
-            if barcode_scanner.is_open:
-                barcode_scanner.close()  # Close port safely
-            barcode_scanner = None  # Remove reference
-            logging.info("Barcode scanner disconnected successfully.")
         else:
             logging.warning(f"{device_name} was not connected.")
     except Exception as e:
@@ -243,25 +173,3 @@ def query_turntable(command, timeout=5):
 
     logging.warning("Timeout waiting for turntable query response.")
     return None
-
-def write_barcode_scanner(data):
-    """
-    Sends data to the barcode scanner if needed.
-    Typically, barcode scanners stream data automatically when a barcode is scanned.
-    This function is provided if you later need to send configuration commands.
-    """
-    global barcode_scanner
-    if barcode_scanner is None or not barcode_scanner.is_open:
-        raise Exception("Barcode scanner is not connected or available.")
-
-    try:
-        if isinstance(data, str):
-            formatted_data = f"{data}\n"
-        else:
-            formatted_data = str(data) + "\n"
-        barcode_scanner.write(formatted_data.encode())
-        barcode_scanner.flush()
-        logging.info(f"Data sent to barcode scanner: {formatted_data.strip()}")
-    except Exception as e:
-        logging.error(f"Error writing to barcode scanner: {str(e)}")
-        raise
