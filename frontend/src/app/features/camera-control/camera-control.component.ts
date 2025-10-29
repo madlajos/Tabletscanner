@@ -158,7 +158,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
             this.errorNotificationService.removeError(errCode);
             // Stop any reconnection polling and resume normal polling.
             this.stopReconnectionPolling();
-            this.startConnectionPolling();
             // If streaming is reported false or local flag is false, start streaming.
             if (!this.isStreaming) {
               console.log("Camera connected but not streaming. Starting stream...");
@@ -216,15 +215,21 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   startConnectionPolling(): void {
-      this.connectionPolling = interval(5000).subscribe(() => {
-        this.checkCameraStatus();
-      });
+    if (this.connectionPolling) {
+      return;
+    }
+    this.connectionPolling = interval(1000).subscribe(() => {
+      this.checkCameraStatus();
+    });
   }
-  
+
   stopConnectionPolling(): void {
-    this.connectionPolling?.unsubscribe();
-    this.connectionPolling = undefined;
+    if (this.connectionPolling) {
+      this.connectionPolling.unsubscribe();
+      this.connectionPolling = undefined;
+    }
   }
+
   
   startReconnectionPolling(): void {
     if (!this.reconnectionPolling) {
