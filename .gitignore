@@ -1,0 +1,13 @@
+﻿backend/__pycache__
+backend/zoltek_backend.log
+
+# Firmware files
+Firmware/**
+!Firmware/
+!Firmware/Marlin/
+Firmware/Marlin/**
+!Firmware/Marlin/_Bootscreen.h
+!Firmware/Marlin/_Statusscreen.h
+!Firmware/Marlin/Configuration.h
+!Firmware/Marlin/Configuration_adv.h
+Firmware.rar
