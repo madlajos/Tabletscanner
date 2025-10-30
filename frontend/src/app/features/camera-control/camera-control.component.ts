@@ -294,7 +294,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   fetchCameraSettings(): void {
     this.http.get(`${this.BASE_URL}/get-camera-settings`).subscribe(
       (settings: any) => {
-        this.mainCameraSettings = settings.camera_params;        
+        this.cameraSettings = settings.camera_params;        
         console.log(`Camera settings loaded:`, settings);
       },
       error => console.error(`Error loading camera settings:`, error)
@@ -339,8 +339,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     this.http.get<CameraSettings>(`${this.BASE_URL}/get-camera-settings`)
       .subscribe({
         next: (settings: CameraSettings) => {
-          this.mainCameraSettings = settings;
-          this.settingsUpdatesService.updateMainCameraSettings(settings);
+          this.cameraSettings = settings;
+          this.settingsUpdatesService.updateCameraSettings(settings);
           console.log(`Loaded main camera settings:`, settings);
           
         },
@@ -348,24 +348,31 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       });
   }
   
-  applySetting(setting: string): void {
-    const value = this.cameraSettings[setting];
-    console.log(`Applying setting ${setting}: ${value}`);
+applySetting(setting: string): void {
+  const value = this.cameraSettings[setting];
+  console.log(`Applying setting ${setting}: ${value}`);
 
-    this.http.post(`${this.BASE_URL}/update-camera-settings`, {
-      setting_name: setting,
-      setting_value: value
-    }).subscribe((response: any) => {
-        console.log(`Setting applied successfully for camera:`, response);
+  this.http.post(`${this.BASE_URL}/update-camera-settings`, {
+    setting_name: setting,
+    setting_value: value
+  }).subscribe(
+    (response: any) => {
+      console.log(`Setting applied successfully for camera:`, response);
 
-        const correctedValue = response.updated_value;
-        this.mainCameraSettings[setting] = correctedValue;
-      },
-      error => {
-        console.error(`Error applying setting for camera:`, error);
+      const correctedValue = response?.updated_value;
+
+      // Only update the input if the backend corrected it
+      if (correctedValue !== undefined && correctedValue !== value) {
+        this.cameraSettings[setting] = correctedValue;
+        console.log(`Corrected ${setting}: ${value} → ${correctedValue}`);
       }
-    );
-  }
+    },
+    error => {
+      console.error(`Error applying setting for camera:`, error);
+    }
+  );
+}
+
 
   applySizeLimit(limitName: 'class1' | 'class2' | 'ng_limit'): void {
     let value = Number(this.sizeLimits[limitName]); // convert to number explicitly

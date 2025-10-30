@@ -147,28 +147,49 @@ def get_serial_device_status(device_name):
         'popup': True
     }), 400
     
-### Camera-related functions ###
 def stop_camera_stream():
     camera = globals.camera
 
-    with globals.grab_lock:
-        if not globals.stream_running.get(False):
-            return "Stream already stopped."
+    # Ensure the grab lock exists
+    lock = getattr(globals, "grab_lock", None)
+    if lock is None:
+        globals.grab_lock = Lock()
+        lock = globals.grab_lock
 
-        try:
-            globals.stream_running = False
+    # stream_running is a bool, not a dict
+    running = bool(getattr(globals, "stream_running", False))
+    if not running:
+        return "Stream already stopped."
+
+    try:
+        # Signal all streaming loops/threads to stop
+        globals.stream_running = False
+
+        # Stop grabbing under the lock
+        with lock:
             if camera and camera.IsGrabbing():
                 camera.StopGrabbing()
-                app.logger.info(f"Camera stream stopped.")
+                app.logger.info("Camera stream stopped.")
 
-            if globals.stream_threads.get() and globals.stream_threads.is_alive():
-                globals.stream_threads.join(timeout=2)
-                app.logger.info(f"Camera stream thread stopped.")
+        # Support both names: stream_thread (preferred) and stream_threads (legacy)
+        t = getattr(globals, "stream_thread", None)
+        if t is None:
+            t = getattr(globals, "stream_threads", None)
 
+        if t and hasattr(t, "is_alive") and t.is_alive():
+            t.join(timeout=2)
+            app.logger.info("Camera stream thread stopped.")
+
+        # Null out both for consistency
+        if hasattr(globals, "stream_thread"):
+            globals.stream_thread = None
+        if hasattr(globals, "stream_threads"):
             globals.stream_threads = None
-            return f"Camera stream stopped."
-        except Exception as e:
-            raise RuntimeError(f"Failed to stop camera stream: {str(e)}")
+
+        return "Camera stream stopped."
+    except Exception as e:
+        raise RuntimeError(f"Failed to stop camera stream: {str(e)}")
+
 
 @app.route('/api/connect-camera', methods=['POST'])
 def connect_camera():
@@ -283,14 +304,25 @@ def update_camera_settings():
 
         app.logger.info(f"Updating camera setting: {setting_name} = {setting_value}")
 
+        # Fetch camera and current camera_properties
+        camera = globals.camera
+        camera_properties = globals.camera_properties
+
+        # Fallback: Refresh properties if missing
+        if not camera_properties or setting_name not in camera_properties:
+            app.logger.warning("camera_properties missing or incomplete; fetching fresh values...")
+            camera_properties = get_camera_properties(camera)
+            globals.camera_properties = camera_properties
+
         # Apply the setting to the camera
         updated_value = validate_and_set_camera_param(
-            globals.camera,
+            camera,
             setting_name,
             setting_value,
             camera_properties
         )
 
+        # Persist the validated value in settings.json
         settings_data = get_settings()
         settings_data['camera_params'][setting_name] = updated_value
         save_settings()
@@ -305,6 +337,7 @@ def update_camera_settings():
     except Exception as e:
         app.logger.exception("Failed to update camera settings")
         return jsonify({"error": str(e)}), 500
+
 
 
 ### Video streaming Function ###
@@ -648,6 +681,7 @@ def connect_camera_internal():
     # Retrieve camera properties and apply settings.
     try:
         camera_properties = get_camera_properties(globals.camera)
+        globals.camera_properties = camera_properties 
         settings_data = get_settings()
         apply_camera_settings(globals.camera, camera_properties, settings_data)
         

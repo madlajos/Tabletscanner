@@ -244,75 +244,104 @@ class Handler:
 
 def get_camera_properties(camera: pylon.InstantCamera) -> dict:
     properties = {}
-    try:
-        properties['Width'] = {
-            'min': camera.Width.GetMin(), 
-            'max': camera.Width.GetMax(), 
-            'inc': camera.Width.GetInc()
-        }
-        properties['Height'] = {
-            'min': camera.Height.GetMin(), 
-            'max': camera.Height.GetMax(), 
-            'inc': camera.Height.GetInc()
-        }
-        properties['OffsetX'] = {
-            'min': camera.OffsetX.GetMin(), 
-            'max': camera.OffsetX.GetMax(), 
-            'inc': camera.OffsetX.GetInc()
-        }
-        properties['OffsetY'] = {
-            'min': camera.OffsetY.GetMin(), 
-            'max': camera.OffsetY.GetMax(), 
-            'inc': camera.OffsetY.GetInc()
-        }
-        properties['ExposureTime'] = {
-            'min': camera.ExposureTime.GetMin(), 
-            'max': camera.ExposureTime.GetMax(), 
-            'inc': camera.ExposureTime.GetInc()
-        }
-        properties['Gain'] = {
-            'min': camera.Gain.GetMin(), 
-            'max': camera.Gain.GetMax(), 
-            'inc': None
-        }
-        if hasattr(camera, 'Gamma'):
-            properties['Gamma'] = {
-                'min': camera.Gamma.GetMin(), 
-                'max': camera.Gamma.GetMax(), 
-                'inc': None
-            }
-        properties['FrameRate'] = {
-            'min': camera.AcquisitionFrameRate.GetMin(), 
-            'max': camera.AcquisitionFrameRate.GetMax(), 
-            'inc': 0.01
-        }
-    except Exception as e:
-        app.logger.error(f"Error getting camera properties: {e}")
-        # Optionally, re-raise as CameraError if these properties are critical.
-    return properties
 
+    if hasattr(camera, 'GainSelector'):
+        try:
+            camera.GainSelector.SetValue("All")
+            app.logger.info("GainSelector set to 'All'")
+        except Exception as e:
+            app.logger.warning(f"Could not set GainSelector to 'All': {e}")
+
+    def safe_get(prop_name, accessor):
+        try:
+            properties[prop_name] = accessor()
+            app.logger.info(f"Loaded property '{prop_name}': {properties[prop_name]}")
+        except Exception as e:
+            app.logger.warning(f"Could not load property '{prop_name}': {e}")
+
+    safe_get('Width', lambda: {
+        'min': camera.Width.GetMin(),
+        'max': camera.Width.GetMax(),
+        'inc': camera.Width.GetInc()
+    })
+
+    safe_get('Height', lambda: {
+        'min': camera.Height.GetMin(),
+        'max': camera.Height.GetMax(),
+        'inc': camera.Height.GetInc()
+    })
+
+    safe_get('OffsetX', lambda: {
+        'min': camera.OffsetX.GetMin(),
+        'max': camera.OffsetX.GetMax(),
+        'inc': camera.OffsetX.GetInc()
+    })
+
+    safe_get('OffsetY', lambda: {
+        'min': camera.OffsetY.GetMin(),
+        'max': camera.OffsetY.GetMax(),
+        'inc': camera.OffsetY.GetInc()
+    })
+
+    safe_get('ExposureTime', lambda: {
+        'min': camera.ExposureTime.GetMin(),
+        'max': camera.ExposureTime.GetMax(),
+        'inc': camera.ExposureTime.GetInc()
+    })
+
+    safe_get('Gain', lambda: {
+        'min': camera.Gain.GetMin(),
+        'max': camera.Gain.GetMax(),
+        'inc': 0.01
+    })
+
+    if hasattr(camera, 'Gamma'):
+        safe_get('Gamma', lambda: {
+            'min': camera.Gamma.GetMin(),
+            'max': camera.Gamma.GetMax(),
+            'inc': 0.01
+        })
+
+    safe_get('FrameRate', lambda: {
+        'min': camera.AcquisitionFrameRate.GetMin(),
+        'max': camera.AcquisitionFrameRate.GetMax(),
+        'inc': 0.01
+    })
+
+    return properties
 def validate_param(param_name: str, param_value: float, properties: dict) -> float:
     try:
-        param_value = float(param_value)  # Ensure param_value is a float
+        param_value = float(param_value)
     except Exception as e:
         raise ValueError(f"Invalid parameter value for {param_name}: {e}")
     
     prop = properties.get(param_name)
-    if prop:
-        min_value = prop['min']
-        max_value = prop['max']
-        increment = prop['inc']
-        if increment is None:
-            increment = 1
-        if param_value < min_value:
-            return round(min_value, 3)
-        elif param_value > max_value:
-            return round(max_value, 3)
-        else:
-            diff = param_value - min_value
-            return round(min_value + round(diff / increment) * increment, 3)
-    else:
+    if not prop:
         raise KeyError(f"Property '{param_name}' not found in camera properties.")
+
+    min_value = prop['min']
+    max_value = prop['max']
+    increment = prop['inc'] or 1  # Default to 1 if None
+
+    if param_value < min_value:
+        adjusted_value = min_value
+    elif param_value > max_value:
+        # Safely clamp to the largest valid value below max
+        steps = int((max_value - min_value) // increment)
+        adjusted_value = min_value + steps * increment
+    else:
+        steps = round((param_value - min_value) / increment)
+        adjusted_value = min_value + steps * increment
+
+    adjusted_value = round(adjusted_value, 6)  # high precision to avoid overflow
+
+    if adjusted_value != param_value:
+        app.logger.info(
+            f"Adjusted {param_name}: {param_value} → {adjusted_value} "
+            f"(min={min_value}, max={max_value}, inc={increment})"
+        )
+    return adjusted_value
+
  
 def apply_camera_settings(camera, camera_properties, settings):
     app.logger.info(f"Loaded settings in apply_camera_settings: {settings}")
@@ -345,9 +374,13 @@ def apply_camera_settings(camera, camera_properties, settings):
         raise CameraError("Error applying camera settings.") from e
 
 def validate_and_set_camera_param(camera, param_name: str, param_value: float, properties: dict):
+    global stream_running, stream_thread
     valid_value = validate_param(param_name, param_value, properties)
+
     try:
         was_streaming = stream_running
+
+        # Stop streaming if changing critical dimensions
         if param_name in ['Width', 'Height'] and was_streaming:
             stream_running = False
             if camera.IsGrabbing():
@@ -357,12 +390,13 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
                 stream_thread.join(timeout=2)
                 app.logger.info("Camera stream thread joined.")
             stream_thread = None
-            time.sleep(0.5)  # Short pause to ensure the camera is ready
+            time.sleep(0.5)
 
         if not camera.IsOpen():
             camera.Open()
             app.logger.info(f"Camera reopened to apply {param_name}.")
 
+        # Apply the validated parameter
         if param_name == 'Width':
             camera.Width.SetValue(valid_value)
         elif param_name == 'Height':
@@ -380,12 +414,14 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
             camera.Gain.SetValue(valid_value)
         elif param_name == 'Gamma':
             camera.Gamma.SetValue(valid_value)
-        
+
+        # Optional reversals
         camera.ReverseX.SetValue(True)
         camera.ReverseY.SetValue(True)
 
-        app.logger.info(f"Camera {param_name} set to {valid_value}")
+        app.logger.info(f"Camera {param_name} successfully set to {valid_value}")
 
+        # Restart streaming if we had to stop it
         if param_name in ['Width', 'Height'] and was_streaming:
             stream_running = True
             stream_thread = threading.Thread(target=stream_video, args=(1.0, 80))
