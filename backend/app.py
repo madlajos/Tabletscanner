@@ -252,17 +252,65 @@ def get_camera_name():
 
 @app.route('/api/status/camera', methods=['GET'])
 def get_camera_status():
+    """
+    Return {"connected": bool, "streaming": bool} and
+    detect if a previously-open camera was physically removed while idle.
+    """
+    camera = getattr(globals, 'camera', None)
+    is_streaming = bool(getattr(globals, 'stream_running', False))
 
-    camera = globals.camera
-    is_connected = camera is not None and camera.IsOpen()
-    is_streaming = globals.stream_running
+    # Baseline "connected" = we have an open handle
+    is_connected = bool(camera is not None)
+    if is_connected:
+        try:
+            is_connected = camera.IsOpen()
+        except Exception:
+            # If calling IsOpen raises, treat as disconnected
+            is_connected = False
 
-    factory = pylon.TlFactory.GetInstance()
-    devices = factory.EnumerateDevices()
+    try:
+        # Enumerate actual devices present now
+        devices = pylon.TlFactory.GetInstance().EnumerateDevices()
+    except Exception:
+        devices = []
+
+    # If we think we're connected, confirm the same device is still present
+    if is_connected:
+        try:
+            open_serial = camera.GetDeviceInfo().GetSerialNumber()
+        except Exception:
+            open_serial = None
+
+        present_serials = []
+        try:
+            for dev in devices:
+                try:
+                    present_serials.append(dev.GetSerialNumber())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        if not present_serials or (open_serial and open_serial not in present_serials):
+            # Device is gone -> clean up and flip to disconnected
+            try:
+                if is_streaming:
+                    try:
+                        camera.StopGrabbing()
+                    except Exception:
+                        pass
+                camera.Close()
+            except Exception:
+                pass
+
+            globals.camera = None
+            globals.stream_running = False
+            is_connected = False
+            is_streaming = False
 
     return jsonify({
-        "connected": is_connected,
-        "streaming": is_streaming
+        "connected": bool(is_connected),
+        "streaming": bool(is_streaming),
     }), 200
 
 
@@ -428,10 +476,10 @@ def generate_frames(scale_factor=0.1):
                     camera.Close()
                 except Exception as close_err:
                     app.logger.error(f"Failed to close camera after unplug: {close_err}")
-            globals.cameras = None
+            # FIX: clear the correct reference (was `globals.cameras = None`)
+            globals.camera = None
     finally:
         app.logger.info(f"Camera streaming thread stopped.")
-
 
 def grab_camera_image():
     try:

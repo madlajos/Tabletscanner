@@ -4,7 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { SharedService } from '../../shared.service';
 import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
-import { interval, Subscription, switchMap, catchError, of, timeout  } from 'rxjs';
+import { interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from '../../services/settings-updates.service';
 
@@ -21,11 +21,17 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   // Camera state
   isConnected: boolean = false;
   isStreaming: boolean = false;
-  
+
   // Polling handles
   connectionPolling: Subscription | undefined;
   reconnectionPolling: Subscription | undefined;
   unifiedPollingSub!: Subscription;
+
+  autoReconnectEnabled = true; // controls auto-reconnect loop
+  autoStreamEnabled = true;    // controls auto auto-start of stream when connected
+
+  private statusPollSub?: Subscription;
+  private reconnectPollSub?: Subscription;
 
   // Settings
   cameraSettings: any = {};
@@ -46,7 +52,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   sizeLimits: SizeLimits = { class1: 0, class2: 0, ng_limit: 0 };
 
   private readonly CAMERA_ERR_CODE = "E1111";
-  
+
   private readonly BASE_URL = 'http://localhost:5000/api';
 
   private settingsLoaded: boolean = false;
@@ -62,7 +68,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     'FrameRate'
   ];
 
- 
+
   measurementActive: boolean = false;
   private measurementActiveSub!: Subscription;
 
@@ -75,32 +81,32 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     if (!this.settingsLoaded) {
-        this.loadCameraSettings();
-        this.settingsLoaded = true;
+      this.loadCameraSettings();
+      this.settingsLoaded = true;
     }
-  
+
     // Initial checks
     this.checkCameraStatus();
-    
+
     // Periodically check both connection and stream status
     this.startConnectionPolling();
 
     // Set the shared save directory.
     this.sharedService.setSaveDirectory(this.saveDirectory);
-  
+
     // Subscribe to shared observables.
     this.measurementActiveSub = this.sharedService.measurementActive$.subscribe(active => {
       this.measurementActive = active;
     });
-  
+
     this.sharedService.cameraConnectionStatus$.subscribe(status => {
       this.isConnected = status;
     });
-  
+
     this.sharedService.cameraStreamStatus$.subscribe(status => {
       this.isStreaming = status;
     });
-  
+
     // TODO: Refactor to set current 'other' settings
     this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
       .subscribe({
@@ -117,7 +123,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         }
       });
 
-      this.http.get<{ save_settings: SaveSettings }>(`${this.BASE_URL}/get-other-settings?category=save_settings`)
+    this.http.get<{ save_settings: SaveSettings }>(`${this.BASE_URL}/get-other-settings?category=save_settings`)
       .subscribe({
         next: response => {
           if (response && response.save_settings) {
@@ -148,38 +154,54 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   // Backend calls
   checkCameraStatus(): void {
-    this.http.get(`${this.BASE_URL}/status/camera`)
+    this.http
+      .get<{ connected: boolean; streaming: boolean }>(`${this.BASE_URL}/status/camera`)
       .subscribe({
-        next: (response: any) => {
+        next: (response) => {
+          // Always sync connection state
+          this.sharedService.setCameraConnectionStatus(response.connected);
+
           if (response.connected) {
-            this.sharedService.setCameraConnectionStatus(true);
-            // Remove any existing error for this camera.
-            const errCode = this.CAMERA_ERR_CODE;
-            this.errorNotificationService.removeError(errCode);
-            // Stop any reconnection polling and resume normal polling.
+            // We are connected → stop reconnection loop
             this.stopReconnectionPolling();
-            // If streaming is reported false or local flag is false, start streaming.
-            if (!this.isStreaming) {
-              console.log("Camera connected but not streaming. Starting stream...");
-              this.startVideoStream();
+
+            // Only push "true" -> UI when backend actually reports it AND UI isn't already true.
+            if (response.streaming && !this.isStreaming) {
+              this.sharedService.setCameraStreamStatus(true);
             }
+
+            // Only auto-start once: do NOT keep calling startVideoStream every poll.
+            if (!response.streaming && !this.isStreaming && this.autoStreamEnabled) {
+              this.startVideoStream(); // viewer attaches <img> once
+            }
+
+            // IMPORTANT: do NOT force this.sharedService.setCameraStreamStatus(false) here
+            // when backend says false – that causes flapping and <img> re-creation.
           } else {
-            // Camera not connected: update both connection and streaming status.
-            this.sharedService.setCameraConnectionStatus(false);
-            this.sharedService.setCameraStreamStatus(false);
+            // Disconnected → stop status polling, reflect stream=false, maybe auto-reconnect
             this.stopConnectionPolling();
+            if (this.isStreaming) {
+              this.sharedService.setCameraStreamStatus(false);
+            }
+
+            if (this.autoReconnectEnabled) {
+              this.startReconnectionPolling();
+            } else {
+              this.stopReconnectionPolling();
+            }
+          }
+        },
+        error: () => {
+          // Treat errors as disconnected
+          this.sharedService.setCameraConnectionStatus(false);
+          if (this.isStreaming) {
+            this.sharedService.setCameraStreamStatus(false);
+          }
+          this.stopConnectionPolling();
+          if (this.autoReconnectEnabled) {
             this.startReconnectionPolling();
           }
-          console.log(`Camera status - Connected: ${response.connected}, Streaming: ${response.streaming}`);
         },
-        error: (err) => {
-          console.error(`Error checking camera status:`, err);
-          // On error, assume both connection and streaming are lost.
-          this.sharedService.setCameraConnectionStatus(false);
-          this.sharedService.setCameraStreamStatus(false);
-          this.stopConnectionPolling();
-          this.startReconnectionPolling();
-        }
       });
   }
 
@@ -214,34 +236,43 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       });
   }
 
-  startConnectionPolling(): void {
-    if (this.connectionPolling) {
-      return;
-    }
-    this.connectionPolling = interval(1000).subscribe(() => {
-      this.checkCameraStatus();
-    });
+  startConnectionPolling(intervalMs: number = 1000): void {
+    if (this.statusPollSub && !this.statusPollSub.closed) return;
+    this.statusPollSub = interval(intervalMs).subscribe(() => this.checkCameraStatus());
+    // kick one immediate check so UI reacts fast
+    this.checkCameraStatus();
   }
 
   stopConnectionPolling(): void {
-    if (this.connectionPolling) {
-      this.connectionPolling.unsubscribe();
-      this.connectionPolling = undefined;
+    if (this.statusPollSub) {
+      this.statusPollSub.unsubscribe();
+      this.statusPollSub = undefined;
     }
   }
 
-  
-  startReconnectionPolling(): void {
-    if (!this.reconnectionPolling) {
-      this.reconnectionPolling = interval(3000).subscribe(() => {
-        this.tryReconnectCamera();
+  startReconnectionPolling(intervalMs: number = 3000): void {
+    if (!this.autoReconnectEnabled) return; // safety
+    if (this.reconnectPollSub && !this.reconnectPollSub.closed) return;
+
+    this.reconnectPollSub = interval(intervalMs).subscribe(() => {
+      this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe({
+        next: () => {
+          // On success, stop reconnection and resume status polling
+          this.stopReconnectionPolling();
+          this.startConnectionPolling();
+        },
+        error: () => {
+          // keep trying silently
+        },
       });
-    }
+    });
   }
-  
+
   stopReconnectionPolling(): void {
-      this.reconnectionPolling?.unsubscribe();
-      this.reconnectionPolling = undefined;
+    if (this.reconnectPollSub) {
+      this.reconnectPollSub.unsubscribe();
+      this.reconnectPollSub = undefined;
+    }
   }
 
   tryReconnectCamera(): void {
@@ -279,22 +310,29 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   connectCamera(): void {
-    this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe(
-      (response: any) => {
-        this.sharedService.setCameraConnectionStatus(true);
-        this.errorNotificationService.removeError(`Camera disconnected`);
-        console.log(`Camera connected.`);
-        // Optionally trigger a status refresh:
-        this.checkCameraStatus();
+    // user wants to connect -> allow auto-reconnect going forward
+    this.autoReconnectEnabled = true;
+
+    this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe({
+      next: () => {
+        // resume status polling; it'll flip the UI once /status is true
+        this.startConnectionPolling();
+        // Note: we do NOT auto-start stream here; user decides when to start.
       },
-      error => console.error(`Failed to connect camera:`, error)
-    );
+      error: () => {
+        // failed connect – show disconnected and let auto-reconnect try (since user asked to connect)
+        this.sharedService.setCameraConnectionStatus(false);
+        this.sharedService.setCameraStreamStatus(false);
+        this.stopConnectionPolling();
+        if (this.autoReconnectEnabled) this.startReconnectionPolling();
+      },
+    });
   }
-  
+
   fetchCameraSettings(): void {
     this.http.get(`${this.BASE_URL}/get-camera-settings`).subscribe(
       (settings: any) => {
-        this.cameraSettings = settings.camera_params;        
+        this.cameraSettings = settings.camera_params;
         console.log(`Camera settings loaded:`, settings);
       },
       error => console.error(`Error loading camera settings:`, error)
@@ -302,25 +340,45 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   disconnectCamera(): void {
-    this.http.post(`${this.BASE_URL}/disconnect-camera`, {}).subscribe(
-      (response: any) => {
+    // user wants full stop -> pause automation
+    this.autoReconnectEnabled = false;
+    this.autoStreamEnabled = false;
+
+    // do not let background loops fight user intent
+    this.stopConnectionPolling();
+    this.stopReconnectionPolling();
+
+    this.http.post(`${this.BASE_URL}/disconnect-camera`, {}).subscribe({
+      next: () => {
+        // reflect immediately; don't call checkCameraStatus() here
         this.sharedService.setCameraConnectionStatus(false);
-        console.log(`Camera disconnected.`);
-        this.checkCameraStatus();
+        this.sharedService.setCameraStreamStatus(false);
       },
-      error => console.error(`Failed to disconnect camera:`, error)
-    );
+      error: () => {
+        // even on error, keep UI consistent with user's explicit intent
+        this.sharedService.setCameraConnectionStatus(false);
+        this.sharedService.setCameraStreamStatus(false);
+      },
+    });
   }
 
   toggleStream(): void {
-    if (this.isStreaming){
+    if (this.isStreaming) {
+      // explicit user intent: pause auto-restart and stop
+      this.autoStreamEnabled = false;
       this.stopVideoStream();
     } else {
+      // explicit user intent: allow auto-restart and start
+      this.autoStreamEnabled = true;
       this.startVideoStream();
     }
   }
 
   startVideoStream(): void {
+    // Already streaming from the UI’s perspective? Don’t re-trigger.
+    if (this.isStreaming) return;
+
+    // Let the viewer attach <img src="..."> once.
     this.sharedService.setCameraStreamStatus(true);
     console.log(`Camera stream set to true in SharedService (UI only).`);
   }
@@ -342,36 +400,36 @@ export class CameraControlComponent implements OnInit, OnDestroy {
           this.cameraSettings = settings;
           this.settingsUpdatesService.updateCameraSettings(settings);
           console.log(`Loaded main camera settings:`, settings);
-          
+
         },
         error: error => console.error(`Error loading camera settings:`, error)
       });
   }
-  
-applySetting(setting: string): void {
-  const value = this.cameraSettings[setting];
-  console.log(`Applying setting ${setting}: ${value}`);
 
-  this.http.post(`${this.BASE_URL}/update-camera-settings`, {
-    setting_name: setting,
-    setting_value: value
-  }).subscribe(
-    (response: any) => {
-      console.log(`Setting applied successfully for camera:`, response);
+  applySetting(setting: string): void {
+    const value = this.cameraSettings[setting];
+    console.log(`Applying setting ${setting}: ${value}`);
 
-      const correctedValue = response?.updated_value;
+    this.http.post(`${this.BASE_URL}/update-camera-settings`, {
+      setting_name: setting,
+      setting_value: value
+    }).subscribe(
+      (response: any) => {
+        console.log(`Setting applied successfully for camera:`, response);
 
-      // Only update the input if the backend corrected it
-      if (correctedValue !== undefined && correctedValue !== value) {
-        this.cameraSettings[setting] = correctedValue;
-        console.log(`Corrected ${setting}: ${value} → ${correctedValue}`);
+        const correctedValue = response?.updated_value;
+
+        // Only update the input if the backend corrected it
+        if (correctedValue !== undefined && correctedValue !== value) {
+          this.cameraSettings[setting] = correctedValue;
+          console.log(`Corrected ${setting}: ${value} → ${correctedValue}`);
+        }
+      },
+      error => {
+        console.error(`Error applying setting for camera:`, error);
       }
-    },
-    error => {
-      console.error(`Error applying setting for camera:`, error);
-    }
-  );
-}
+    );
+  }
 
 
   applySizeLimit(limitName: 'class1' | 'class2' | 'ng_limit'): void {
@@ -387,7 +445,7 @@ applySetting(setting: string): void {
         console.log(`Size limit applied successfully:`, response);
         // Update the local value with the response.
         this.sizeLimits[limitName] = Number(response.updated_value);
-        
+
         // Optionally, reload all size limits from backend.
         this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
           .subscribe({
@@ -409,41 +467,41 @@ applySetting(setting: string): void {
   }
 
   applySaveSetting<K extends keyof SaveSettings>(settingName: K): void {
-  // 1. Determine the outgoing value type
-  let outgoingValue: SaveSettings[K];
+    // 1. Determine the outgoing value type
+    let outgoingValue: SaveSettings[K];
 
-  // If it's a boolean field, cast to Boolean so we never send "undefined"/"null"
-  if (typeof this.saveSettings[settingName] === 'boolean') {
-    outgoingValue = Boolean(this.saveSettings[settingName]) as SaveSettings[K];
-  } else {
-    // string (csv_dir) → send as-is
-    outgoingValue = this.saveSettings[settingName];
+    // If it's a boolean field, cast to Boolean so we never send "undefined"/"null"
+    if (typeof this.saveSettings[settingName] === 'boolean') {
+      outgoingValue = Boolean(this.saveSettings[settingName]) as SaveSettings[K];
+    } else {
+      // string (csv_dir) → send as-is
+      outgoingValue = this.saveSettings[settingName];
+    }
+
+    console.log(`Applying save setting: ${settingName} →`, outgoingValue);
+
+    // 2. Persist to backend
+    this.http.post<{ updated_value: SaveSettings[K] }>(
+      `${this.BASE_URL}/update-other-settings`,
+      {
+        category: 'save_settings',
+        setting_name: settingName,
+        setting_value: outgoingValue
+      }
+    ).subscribe({
+      next: resp => {
+        // 3. Mirror backend-confirmed value locally
+        this.saveSettings[settingName] = resp.updated_value;
+
+        // Broadcast the fresh copy so other components stay up-to-date
+        this.settingsUpdatesService.updateSaveSettings(this.saveSettings);
+        console.log('Save setting applied:', settingName, '→', resp.updated_value);
+      },
+      error: err => console.error(`Error applying ${settingName}:`, err)
+    });
   }
 
-  console.log(`Applying save setting: ${settingName} →`, outgoingValue);
-
-  // 2. Persist to backend
-  this.http.post<{ updated_value: SaveSettings[K] }>(
-    `${this.BASE_URL}/update-other-settings`,
-    {
-      category: 'save_settings',
-      setting_name: settingName,
-      setting_value: outgoingValue
-    }
-  ).subscribe({
-    next: resp => {
-      // 3. Mirror backend-confirmed value locally
-      this.saveSettings[settingName] = resp.updated_value;
-
-      // Broadcast the fresh copy so other components stay up-to-date
-      this.settingsUpdatesService.updateSaveSettings(this.saveSettings);
-      console.log('Save setting applied:', settingName, '→', resp.updated_value);
-    },
-    error: err => console.error(`Error applying ${settingName}:`, err)
-  });
-}
-
-    async openFolderBrowser(): Promise<void> {
+  async openFolderBrowser(): Promise<void> {
     // If running in Electron (the preload script exposes an API)
     if (window.electronAPI?.selectFolder) {
       try {
