@@ -1,6 +1,8 @@
 import porthandler
 import time
 import re
+import app
+from flask import jsonify
 from typing import Dict
 
 _POS_RE = re.compile(r'X:\s*(-?\d+(?:\.\d+)?)\s+Y:\s*(-?\d+(?:\.\d+)?)\s+Z:\s*(-?\d+(?:\.\d+)?)', re.I)
@@ -47,8 +49,19 @@ def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
     Sends M114 and returns {"x":..., "y":..., "z":...} with a hard overall timeout.
     """
     # If you have a shared serial lock, use it here:
-    # with porthandler.motion_lock:
-    ser.write(b"M114\n")
+    if not globals.motion_busy:
+        try:
+            buf = bytearray()
+            deadline = time.monotonic() + 0.15
+            with porthandler.motion_lock:
+                ser.write(b'M105\n')
+                # read incoming bytes until "ok" or timeout...
+                ...
+            if buf:
+                app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
+        except Exception as e:
+            app.logger.debug(f"status probe error (ignored): {e}")
+        return jsonify({'connected': True, 'port': ser.port}), 200
     end = time.monotonic() + timeout
     buf = bytearray()
 

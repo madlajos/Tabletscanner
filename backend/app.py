@@ -147,12 +147,10 @@ def get_serial_device_status(device_name):
 def get_motion_platform_position():
     ser = porthandler.motion_platform or globals.motion_platform
     if not ser or not getattr(ser, 'is_open', False):
-        return jsonify({'connected': False, 'busy': False,
-                        'position': globals.last_toolhead_pos}), 200
+        return jsonify(globals.last_toolhead_pos), 200
 
     if getattr(globals, 'motion_busy', False):
-        return jsonify({'connected': True, 'busy': True,
-                        'position': globals.last_toolhead_pos}), 200
+        return jsonify(globals.last_toolhead_pos), 200
 
     try:
         with porthandler.motion_lock:
@@ -160,12 +158,10 @@ def get_motion_platform_position():
         # only accept numeric values
         if all(k in pos and isinstance(pos[k], (int, float)) for k in ('x','y','z')):
             globals.last_toolhead_pos = pos
-        return jsonify({'connected': True, 'busy': False,
-                        'position': globals.last_toolhead_pos}), 200
+        return jsonify(globals.last_toolhead_pos), 200
     except Exception as e:
         app.logger.warning(f"get position failed (returning cache): {e}")
-        return jsonify({'connected': True, 'busy': getattr(globals,'motion_busy',False),
-                        'position': globals.last_toolhead_pos}), 200
+        return jsonify(globals.last_toolhead_pos), 200
 
 
     
