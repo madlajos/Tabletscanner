@@ -40,9 +40,9 @@ export class MotionControl implements OnInit, OnDestroy {
   isEditingY: boolean = false;
   isEditingZ: boolean = false;
 
-  xHomed: boolean = false;
-  yHomed: boolean = false;
-  zHomed: boolean = false;
+  xHomed: boolean = true;
+  yHomed: boolean = true;
+  zHomed: boolean = true;
 
   constructor(
     private http: HttpClient,
@@ -64,7 +64,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
   startPollingPosition(): void {
     if (this.positionPolling) return;
-    this.positionPolling = interval(1000).subscribe(() => {
+    this.positionPolling = interval(3000).subscribe(() => {
       this.updateMotionPlatformPosition();
     });
   }

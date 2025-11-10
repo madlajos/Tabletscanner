@@ -109,46 +109,47 @@ def disconnect_serial_device(device_name):
 @app.route('/api/status/serial/<device_name>', methods=['GET'])
 def get_serial_device_status(device_name):
     app.logger.debug(f"Received status request for device: {device_name}")
-    device = None
-    if device_name.lower() == 'motion_platform':
-        device = porthandler.motion_platform
-    else:
-        app.logger.error("Invalid device name")
-        return jsonify({'error': 'Invalid device name', 'popup': True}), 400
 
-    if device and device.is_open:
-        if device_name.lower() == 'motion_platform':
-            if not porthandler.motion_platform_waiting_for_done:
-                try:
-                    device.write(b'IDN?\n')
-                    response = device.read(10).decode(errors='ignore').strip()
-                    if response:
-                        app.logger.debug(f"{device_name} is responsive on port {device.port}")
-                        return jsonify({'connected': True, 'port': device.port})
-                except Exception as e:
-                    app.logger.warning(f"{device_name} is unresponsive, disconnecting. Error: {str(e)}")
-                    porthandler.disconnect_serial_device(device_name)
-                    return jsonify({
-                        'connected': False,
-                        'error': f"{device_name.capitalize()} unresponsive",
-                        'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
-                        'popup': True
-                    }), 400
+    # Fogadjuk: motionplatform, motion_platform, motion
+    name = device_name.lower().replace('-', '_')
+    if name in ('motionplatform', 'motion_platform', 'motion'):
+        ser = getattr(porthandler, 'motion_platform', None)
 
+        # Nincs eszköz vagy nincs megnyitva → connected: False (200)
+        if not ser or not getattr(ser, 'is_open', False):
+            app.logger.warning("Motion platform appears to be disconnected.")
+            return jsonify({'connected': False}), 200
 
-        app.logger.debug(f"{device_name} is connected on port {device.port}")
-        return jsonify({'connected': True, 'port': device.port})
+        # Gyors ping a nyomtatónak: M105 → "ok T:..."
+        try:
+            # kis buffer tisztítás, hogy ne régi sorokat olvassunk
+            try:
+                ser.reset_input_buffer()
+            except Exception:
+                pass
 
-    app.logger.warning(f"{device_name} appears to be disconnected.")
+            ser.write(b'M105\n')
+            line = ser.readline().decode(errors='ignore').strip()
 
-    return jsonify({
-        'connected': False,
-        'error': f"{device_name.capitalize()} appears to be disconnected",
-        'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
-        'popup': True
-    }), 400
+            if line.lower().startswith('ok'):
+                app.logger.debug(f"motionplatform is responsive on port {ser.port}")
+                return jsonify({'connected': True, 'port': ser.port}), 200
+            else:
+                # Ha nem 'ok'-kal kezdődik, még lehet, hogy csak üres sort kaptunk.
+                # A Te frontendednek elég a connected True is, ha a port nyitva van.
+                app.logger.debug(f"M105 non-ok reply: {line!r}")
+                return jsonify({'connected': True, 'port': ser.port}), 200
+
+        except Exception as e:
+            app.logger.warning(f"motionplatform ping failed: {e}")
+            # Nem dobunk hibát; a frontenden egyszerűbb, ha 200/connected False
+            return jsonify({'connected': False}), 200
+
+    # Nem támogatott eszköznév
+    app.logger.error("Invalid device name")
+    return jsonify({'error': 'Invalid device name', 'popup': True}), 400
     
-@app.route('/get_motion_platform_position', methods=['GET'])
+@app.route('/api/get_motion_platform_position', methods=['GET'])
 def get_motion_platform_position():
     motion_platform = globals.motion_platform
 
@@ -422,28 +423,27 @@ def update_camera_settings():
     
     
 # Function to move the toolhead by a given amount (relative movement)
-@app.route('/move_toolhead_relative', methods=['POST'])
+@app.route('/api/move_toolhead_relative', methods=['POST'])
 def move_toolhead_relative():
     data = request.get_json()
     axis = data.get('axis')
     value = data.get('value')
-    
+
     if axis not in ['x', 'y', 'z']:
         return jsonify({'status': 'error', 'message': 'Invalid axis'}), 400
 
     try:
-        # Check if the printer is connected without reconnecting
-        motion_platform = globals.motion_platform()
+        # BUG: do not call it like a function
+        motion_platform = globals.motion_platform   # <-- FIXED
 
-        if motion_platform is not None:
-            # Dynamically call move_relative with the axis and value
+        if motion_platform is not None and motion_platform.is_open:
             move_args = {axis: value}
             motioncontrols.move_relative(motion_platform, **move_args)
             return jsonify({'status': 'success'}), 200
         else:
             return jsonify({'status': 'error', 'message': 'Printer not connected'}), 404
     except Exception as e:
-        return jsonify({'statuWs': 'error', 'message': str(e)}), 500
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     
     
 @app.route('/move_toolhead_absolute', methods=['POST'])

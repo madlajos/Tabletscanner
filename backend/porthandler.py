@@ -44,7 +44,7 @@ def connect_to_serial_device(device_name, identification_command, expected_respo
                 response = serial_port.readline().decode(errors='ignore').strip()
                 logging.info(f"Received response from {port_info.device}: '{response}'")
 
-                if response != expected_response:
+                if not response.lower().startswith(expected_response.lower()):
                     logging.warning(f"Unexpected response '{response}' on {port_info.device}")
                     serial_port.close()
                     continue  # Try next candidate
@@ -175,3 +175,15 @@ def query_turntable(command, timeout=5):
 
     logging.warning("Timeout waiting for turntable query response.")
     return None
+
+
+def write(device, data):
+    if isinstance(data, tuple):
+        command = "{},{}".format(*data)
+    else:
+        command = data + "\n"
+
+    if isinstance(device, serial.Serial):
+        device.write(command.encode())
+    else:
+        print("Invalid device type")

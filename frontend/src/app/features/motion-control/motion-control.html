@@ -47,35 +47,35 @@
   <div class="controls-container">
     <div class="movement-buttons">
       <!-- -X -->
-      <button class="direction-button" (click)="moveToolHeadRelative('x', -movementAmount)" [disabled]="motorOffState || !isConnected">
+      <button class="direction-button" (click)="moveToolHeadRelative('x', -movementAmount)">
         &#x3C;
       </button>
 
       <div class="movement-column">
         <!-- +Y -->
-        <button class="direction-button rotate-down" (click)="moveToolHeadRelative('y', movementAmount)" [disabled]="motorOffState || !isConnected">
+        <button class="direction-button rotate-down" (click)="moveToolHeadRelative('y', movementAmount)">
           &#x3C;
         </button>
         <div class="gap"></div>
         <!-- -Y -->
-        <button class="direction-button rotate-up" (click)="moveToolHeadRelative('y', -movementAmount)" [disabled]="motorOffState || !isConnected">
+        <button class="direction-button rotate-up" (click)="moveToolHeadRelative('y', -movementAmount)">
           &#x3C;
         </button>
       </div>
 
       <!-- +X -->
-      <button class="direction-button" (click)="moveToolHeadRelative('x', movementAmount)" [disabled]="motorOffState || !isConnected">
+      <button class="direction-button" (click)="moveToolHeadRelative('x', movementAmount)">
         &#x3E;
       </button>
 
       <div class="movement-column">
         <!-- +Z -->
-        <button class="direction-button rotate-down" (click)="moveToolHeadRelative('z', movementAmount)" [disabled]="motorOffState || !isConnected">
+        <button class="direction-button rotate-down" (click)="moveToolHeadRelative('z', movementAmount)">
           &#x3C;
         </button>
         <div class="gap"></div>
         <!-- -Z -->
-        <button class="direction-button rotate-up" (click)="moveToolHeadRelative('z', -movementAmount)" [disabled]="motorOffState || !isConnected">
+        <button class="direction-button rotate-up" (click)="moveToolHeadRelative('z', -movementAmount)">
           &#x3C;
         </button>
       </div>
