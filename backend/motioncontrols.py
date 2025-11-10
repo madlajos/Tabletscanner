@@ -1,5 +1,10 @@
 import porthandler
 import time
+import re
+from typing import Dict
+
+_POS_RE = re.compile(r'X:\s*(-?\d+(?:\.\d+)?)\s+Y:\s*(-?\d+(?:\.\d+)?)\s+Z:\s*(-?\d+(?:\.\d+)?)', re.I)
+
 
 class Printer:
     def __init__(self, port):
@@ -37,39 +42,35 @@ def disable_steppers(motion_platform, *axes):
     except Exception as e:
         print(f"An error occured while sending the Disable Steppers command to the Motion platform: {e}")
 
-def get_toolhead_position(motion_platform, retries=3, delay=1):
-    if motion_platform is not None:
-        for attempt in range(retries):
-            try:
-                # Clear the input buffer
-                motion_platform.reset_input_buffer()
-                
-                # Send the M114 command to get the current position
-                porthandler.write(motion_platform, "M114")
-                response = ""
-                while True:
-                    line = motion_platform.readline().decode().strip()
-                    if line == "ok":
-                        break
-                    response += line + "\n"
-                
-                if response:
-                    # Parse the response to extract X, Y, and Z positions
-                    position = parse_position(response)
-                    return position
-                else:
-                    print("No response from motion platform.")
-                    if attempt < retries - 1:
-                        time.sleep(delay)
-            except Exception as e:
-                print(f"An error occurred while getting toolhead position from motion platform (attempt {attempt + 1}): {e}")
-                if attempt < retries - 1:
-                    time.sleep(delay)
-        print("Failed to get toolhead position position after retries.")
-        return None
-    else:
-        print("Invalid device type or motion platform is not connected")
-    return None
+def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
+    """
+    Sends M114 and returns {"x":..., "y":..., "z":...} with a hard overall timeout.
+    """
+    # If you have a shared serial lock, use it here:
+    # with porthandler.motion_lock:
+    ser.write(b"M114\n")
+    end = time.monotonic() + timeout
+    buf = bytearray()
+
+    while time.monotonic() < end:
+        iw = getattr(ser, "in_waiting", 0) or 0
+        if iw:
+            chunk = ser.read(min(iw, 128))
+            if chunk:
+                buf += chunk
+                if b"ok" in buf.lower():
+                    break
+        else:
+            time.sleep(0.01)
+
+    s = buf.decode("ascii", "ignore")
+    m = _POS_RE.search(s)
+    if not m:
+        # Fallback: some firmwares print without labels: "X:1.23 Y:4.56 Z:7.89" still matches
+        raise RuntimeError("No M114 position in reply")
+
+    x, y, z = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    return {"x": x, "y": y, "z": z}
 
 def parse_position(response):
     # Example response: "X:10.00 Y:20.00 Z:30.00 E:0.00 Count X:8100 Y:0 Z:4320"

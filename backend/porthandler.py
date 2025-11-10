@@ -8,56 +8,91 @@ import globals
 # Global serial device variables
 motion_platform = None
 motion_platform_waiting_for_done = False
+motion_lock = threading.RLock()
 
 def connect_to_serial_device(device_name, identification_command, expected_response, vid, pid):
-    """
-    Attempt to connect to a serial device by scanning for a matching VID/PID.
-    Optionally, send an identification command and compare the response.
-    Returns:
-        serial.Serial instance if successful, or None.
-    """
     ports = list(serial.tools.list_ports.comports())
     if not ports:
         logging.error(f"No COM ports found while looking for {device_name}.")
         return None
 
-    # Filter ports by matching VID/PID.
-    matching_ports = [
-        port for port in ports
-        if (port.vid == vid and port.pid == pid)
-    ]
+    matching_ports = [p for p in ports if (p.vid == vid and p.pid == pid)]
     if not matching_ports:
         logging.warning(f"No ports found with VID=0x{vid:04x} PID=0x{pid:04x} for {device_name}.")
         return None
 
     logging.info(f"Found {len(matching_ports)} candidate port(s) for {device_name} by VID/PID.")
-    
+
     for port_info in matching_ports:
-        serial_port = None
+        ser = None
         try:
             logging.info(f"Trying {port_info.device} for {device_name}.")
-            serial_port = serial.Serial(port_info.device, baudrate=115200, timeout=1)
+            # Short timeouts so we never block the Flask thread
+            ser = serial.Serial(port_info.device, baudrate=115200, timeout=0.2, write_timeout=0.5)
+            time.sleep(0.2)  # tiny settle (STM32 CDC can spew right after open)
 
             if identification_command:
-                # Send the identification command.
-                serial_port.write((identification_command + '\n').encode())
-                response = serial_port.readline().decode(errors='ignore').strip()
-                logging.info(f"Received response from {port_info.device}: '{response}'")
+                try:
+                    ser.reset_input_buffer()
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
 
-                if not response.lower().startswith(expected_response.lower()):
-                    logging.warning(f"Unexpected response '{response}' on {port_info.device}")
-                    serial_port.close()
-                    continue  # Try next candidate
-            # If no identification command is required, we assume the connection is valid.
+                # Send M115 and read with a tiny deadline; don't hang on readline()
+                ser.write((identification_command + '\n').encode('ascii', 'ignore'))
+                ser.flush()
+
+                ok = False
+                deadline = time.monotonic() + 1.0  # ~1s total
+                buf_lines = []
+                while time.monotonic() < deadline:
+                    iw = 0
+                    try:
+                        iw = ser.in_waiting
+                    except Exception:
+                        iw = 0
+                    if iw:
+                        line = ser.readline().decode(errors='ignore').strip()
+                        if line:
+                            buf_lines.append(line)
+                            if expected_response.lower() in line.lower():
+                                ok = True
+                                break
+                    else:
+                        time.sleep(0.02)
+
+                logging.info(f"Received response from {port_info.device}: {buf_lines!r}")
+                if not ok:
+                    logging.warning(f"Unexpected M115 reply on {port_info.device}, expected '{expected_response}'.")
+                    ser.close()
+                    continue  # try next candidate
+
+            # Success: set final runtime options and disable auto temp reports once
+            try:
+                ser.timeout = 0.2
+                ser.write_timeout = 0.5
+                # Optional: ser.inter_byte_timeout = 0.1
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                ser.write(b"M155 S0\n")  # stop auto temperature spam that corrupts reads
+                ser.flush()
+                time.sleep(0.1)
+                # drain immediate reply without blocking
+                while True:
+                    iw = getattr(ser, "in_waiting", 0) or 0
+                    if not iw:
+                        break
+                    _ = ser.read(iw)
+            except Exception as e:
+                logging.warning(f"Post-connect init failed (continuing): {e}")
+
             logging.info(f"Connected to {device_name} on port {port_info.device}")
-            return serial_port
+            return ser
 
         except Exception as e:
-            logging.exception(
-                f"Exception while trying to connect to {device_name} on {port_info.device}: {e}"
-            )
-            if serial_port and serial_port.is_open:
-                serial_port.close()
+            logging.exception(f"Exception while trying to connect to {device_name} on {port_info.device}: {e}")
+            if ser and ser.is_open:
+                ser.close()
 
     logging.error(f"Failed to connect to {device_name}. No matching ports responded correctly.")
     return None
@@ -72,21 +107,19 @@ def connect_to_motion_platform():
         logging.info("Motion platform is already connected.")
         return motion_platform
 
-    identification_command = "M115"
-    expected_response = "FIRMWARE_NAME:Marlin"
-    # For the motion platform, VID/PID are hard-coded.
-    globals.motion_platform = connect_to_serial_device(
+    ser = connect_to_serial_device(
         device_name="Motion Platform",
-        identification_command=identification_command,
-        expected_response=expected_response,
-        vid=0x0483,
-        pid=0x5740
+        identification_command="M115",
+        expected_response="FIRMWARE_NAME:Marlin",
+        vid=0x0483, pid=0x5740
     )
-    if globals.motion_platform is None:
+    if ser is None:
         logging.error("Motion platform device not found or did not respond correctly.")
         return None
-    
-    return globals.motion_platform
+
+    # Assign global (already initialized above)
+    globals.motion_platform = ser
+    return ser
 
 def disconnect_serial_device(device_name):
     """

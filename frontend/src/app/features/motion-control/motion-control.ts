@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { interval, Subscription, of } from 'rxjs';
-import { switchMap, catchError, timeout } from 'rxjs/operators';
+import { switchMap, catchError, timeout, finalize } from 'rxjs/operators';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ErrorNotificationService } from '../../services/error-notification.service';
@@ -40,6 +40,9 @@ export class MotionControl implements OnInit, OnDestroy {
   isEditingY: boolean = false;
   isEditingZ: boolean = false;
 
+
+  isHoming = false;
+  private readonly HOMING_TIMEOUT_MS = 10000;
   xHomed: boolean = true;
   yHomed: boolean = true;
   zHomed: boolean = true;
@@ -48,7 +51,7 @@ export class MotionControl implements OnInit, OnDestroy {
     private http: HttpClient,
     private errorNotificationService: ErrorNotificationService,
     private sharedService: SharedService
-  ) {}
+  ) { }
 
   ngOnInit(): void {
     this.startConnectionPolling();
@@ -271,7 +274,7 @@ export class MotionControl implements OnInit, OnDestroy {
     const zNum = this.toNumberOrUndefined(z);
 
     if ((xNum !== undefined && (xNum < this.xMin || xNum > this.xMax)) ||
-        (yNum !== undefined && (yNum < this.yMin || yNum > this.yMax))) {
+      (yNum !== undefined && (yNum < this.yMin || yNum > this.yMax))) {
       console.error('New position out of bounds!');
       return;
     }
@@ -290,23 +293,42 @@ export class MotionControl implements OnInit, OnDestroy {
   homeAxis(axis?: string): void {
     this.resetMotorOffState();
 
-    const payload = { axes: axis ? [axis] : [] };
-    this.http.post(`${this.BASE_URL}/home_toolhead`, payload).subscribe({
-      next: (response) => {
-        console.log(`Motion platform ${axis ? axis.toUpperCase() : 'all'} axis homed successfully!`, response);
-        if (axis) {
-          if (axis === 'x') { this.xPosition = 0; this.xHomed = true; }
-          else if (axis === 'y') { this.yPosition = 0; this.yHomed = true; }
-          else if (axis === 'z') { this.zPosition = 0; this.zHomed = true; }
-        } else {
-          this.xPosition = 0; this.yPosition = 0; this.zPosition = 0;
-          this.xHomed = this.yHomed = this.zHomed = true;
-        }
-      },
-      error: (error) => {
-        console.error(`Failed to home Motion platform ${axis ? axis.toUpperCase() : 'all'} axis!`, error);
-      },
-    });
+    const ax = axis ? axis.toLowerCase() as 'x' | 'y' | 'z' : undefined;
+    const payload = { axes: ax ? [ax] : [] };
+
+    // Prevent position polling during homing to avoid serial contention
+    this.isHoming = true;
+    this.stopPositionPolling();
+
+    this.http.post(`${this.BASE_URL}/home_toolhead`, payload)
+      .pipe(
+        timeout(this.HOMING_TIMEOUT_MS), // G28 can take seconds
+        finalize(() => {
+          this.isHoming = false;
+          // small settle before resuming position polling
+          setTimeout(() => this.startPollingPosition(), 500);
+        })
+      )
+      .subscribe({
+        next: (response: any) => {
+          console.log(`Motion platform ${ax ? ax.toUpperCase() : 'ALL'} homed successfully.`, response);
+
+          // Preserve your original side effects
+          if (ax) {
+            if (ax === 'x') { this.xPosition = 0; this.xHomed = true; }
+            else if (ax === 'y') { this.yPosition = 0; this.yHomed = true; }
+            else if (ax === 'z') { this.zPosition = 0; this.zHomed = true; }
+          } else {
+            this.xPosition = 0; this.yPosition = 0; this.zPosition = 0;
+            this.xHomed = this.yHomed = this.zHomed = true;
+          }
+        },
+        error: (error) => {
+          console.error(`Failed to home Motion platform ${ax ? ax.toUpperCase() : 'ALL'}!`, error);
+          // optional: surface a UI error message here
+          // this.errorNotificationService.addError({ code: 'E13xx', message: 'Homing failed' });
+        },
+      });
   }
 
   setMovementAmount(amount: number): void {

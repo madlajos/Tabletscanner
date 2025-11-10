@@ -74,10 +74,11 @@ def connect_motionplatform():
         if porthandler.motion_platform and porthandler.motion_platform.is_open:
             app.logger.info("Motion platform already connected.")
             return jsonify({'message': 'Motion platform already connected'}), 200
-
+    
         device = porthandler.connect_to_motion_platform()
         if device:
             porthandler.motion_platform = device
+            globals.motion_platform = device
             app.logger.info("Successfully connected to Motion platform")
             return jsonify({'message': 'Motion platform connected', 'port': device.port}), 200
         else:
@@ -108,81 +109,93 @@ def disconnect_serial_device(device_name):
 
 @app.route('/api/status/serial/<device_name>', methods=['GET'])
 def get_serial_device_status(device_name):
-    app.logger.debug(f"Received status request for device: {device_name}")
-
-    # Fogadjuk: motionplatform, motion_platform, motion
     name = device_name.lower().replace('-', '_')
-    if name in ('motionplatform', 'motion_platform', 'motion'):
+    if name in ('motionplatform','motion_platform','motion'):
         ser = getattr(porthandler, 'motion_platform', None)
-
-        # Nincs eszköz vagy nincs megnyitva → connected: False (200)
         if not ser or not getattr(ser, 'is_open', False):
-            app.logger.warning("Motion platform appears to be disconnected.")
             return jsonify({'connected': False}), 200
 
-        # Gyors ping a nyomtatónak: M105 → "ok T:..."
+        # If homing or other long op is in progress, don't touch the port.
+        if getattr(globals, 'motion_busy', False):
+            return jsonify({'connected': True, 'busy': True, 'port': ser.port}), 200
+
+        # Non-blocking quick probe (optional). Never reset buffers here.
         try:
-            # kis buffer tisztítás, hogy ne régi sorokat olvassunk
-            try:
-                ser.reset_input_buffer()
-            except Exception:
-                pass
-
+            buf = bytearray()
+            deadline = time.monotonic() + 0.15
             ser.write(b'M105\n')
-            line = ser.readline().decode(errors='ignore').strip()
-
-            if line.lower().startswith('ok'):
-                app.logger.debug(f"motionplatform is responsive on port {ser.port}")
-                return jsonify({'connected': True, 'port': ser.port}), 200
-            else:
-                # Ha nem 'ok'-kal kezdődik, még lehet, hogy csak üres sort kaptunk.
-                # A Te frontendednek elég a connected True is, ha a port nyitva van.
-                app.logger.debug(f"M105 non-ok reply: {line!r}")
-                return jsonify({'connected': True, 'port': ser.port}), 200
-
+            while time.monotonic() < deadline:
+                iw = getattr(ser, 'in_waiting', 0) or 0
+                if not iw:
+                    break
+                chunk = ser.read(min(iw, 64))
+                if chunk:
+                    buf += chunk
+                    if b"ok" in buf.lower():
+                        break
+            if buf:
+                app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
         except Exception as e:
-            app.logger.warning(f"motionplatform ping failed: {e}")
-            # Nem dobunk hibát; a frontenden egyszerűbb, ha 200/connected False
-            return jsonify({'connected': False}), 200
+            app.logger.debug(f"status probe error (ignored): {e}")
+        return jsonify({'connected': True, 'port': ser.port}), 200
 
-    # Nem támogatott eszköznév
-    app.logger.error("Invalid device name")
-    return jsonify({'error': 'Invalid device name', 'popup': True}), 400
+    return jsonify({'error':'Invalid device name','popup':True}), 400
+
+
     
 @app.route('/api/get_motion_platform_position', methods=['GET'])
 def get_motion_platform_position():
-    motion_platform = globals.motion_platform
+    ser = porthandler.motion_platform or globals.motion_platform
+    if not ser or not getattr(ser, 'is_open', False):
+        return jsonify({'connected': False, 'busy': False,
+                        'position': globals.last_toolhead_pos}), 200
 
-    if motion_platform is not None:
-        try:
-            position = motioncontrols.get_toolhead_position(motion_platform)
-            if position:
-                return jsonify(position), 200
-            else:
-                return jsonify({'status': 'error', 'message': 'Failed to get toolhead position'}), 500
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            return jsonify({'status': 'error', 'message': str(e)}), 500
-    else:
-        print("Motion platform not connected")
-        return jsonify({'status': 'error', 'message': 'Motion platform not connected'}), 404
+    if getattr(globals, 'motion_busy', False):
+        return jsonify({'connected': True, 'busy': True,
+                        'position': globals.last_toolhead_pos}), 200
+
+    try:
+        with porthandler.motion_lock:
+            pos = motioncontrols.get_toolhead_position(ser, timeout=0.3)
+        # only accept numeric values
+        if all(k in pos and isinstance(pos[k], (int, float)) for k in ('x','y','z')):
+            globals.last_toolhead_pos = pos
+        return jsonify({'connected': True, 'busy': False,
+                        'position': globals.last_toolhead_pos}), 200
+    except Exception as e:
+        app.logger.warning(f"get position failed (returning cache): {e}")
+        return jsonify({'connected': True, 'busy': getattr(globals,'motion_busy',False),
+                        'position': globals.last_toolhead_pos}), 200
+
+
     
-@app.route('/home_toolhead', methods=['POST'])
-def home_toolhead():
-    data = request.get_json()
-    axes = data.get('axes', []) 
+@app.route('/api/home_toolhead', methods=['POST', 'OPTIONS'])
+def api_home_toolhead():
+    if request.method == 'OPTIONS':
+        return ('', 204)
 
-    motion_platform = globals.motion_platform
-    if motion_platform is not None:
-        try:
-            motioncontrols.home_axes(motion_platform, *axes)
-            globals.toolhead_homed = True
-            
-            return jsonify(f'Axes {axes if axes else ["X", "Y", "Z"]} homed successfully!')
-        except Exception as e:
-            return jsonify(f'An error occurred: {str(e)}'), 500
-    else:
-        return jsonify('Error: Motion platform not connected'), 500
+    data = request.get_json(silent=True) or {}
+    axes = [a.lower()[0] for a in (data.get('axes') or []) if a]
+
+    ser = globals.motion_platform
+    if not ser or not getattr(ser, 'is_open', False):
+        return jsonify({'ok': False, 'error': 'Motion platform not connected'}), 503
+
+    globals.motion_busy = True
+    try:
+        # home all if no axes provided
+        if axes:
+            motioncontrols.home_axes(ser, *axes)
+        else:
+            motioncontrols.home_axes(ser)
+        globals.toolhead_homed = True
+        return jsonify({'ok': True, 'homed_axes': axes or ['x','y','z']})
+    except Exception as e:
+        app.logger.exception("Homing failed")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+    finally:
+        globals.motion_busy = False
+
     
 ### Camera Functions ###
 def stop_camera_stream():
@@ -446,7 +459,7 @@ def move_toolhead_relative():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     
     
-@app.route('/move_toolhead_absolute', methods=['POST'])
+@app.route('/api/move_toolhead_absolute', methods=['POST'])
 def move_toolhead_absolute():
     try:
         data = request.get_json()
@@ -893,6 +906,7 @@ def initialize_serial_devices():
         device = porthandler.connect_to_motion_platform()
         if device:
             porthandler.motion_platform = device
+            globals.motion_platform = device
             app.logger.info("Motion Platform connected automatically on startup.")
         else:
             app.logger.error("Failed to auto-connect Motion Platform on startup.")
