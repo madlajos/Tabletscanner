@@ -6,8 +6,8 @@ import threading
 import globals
 
 # Global serial device variables
-turntable = None
-turntable_waiting_for_done = False
+motion_platform = None
+motion_platform_waiting_for_done = False
 
 def connect_to_serial_device(device_name, identification_command, expected_response, vid, pid):
     """
@@ -63,48 +63,50 @@ def connect_to_serial_device(device_name, identification_command, expected_respo
     return None
 
 
-def connect_to_turntable():
+def connect_to_motion_platform():
     """
-    Connects to the turntable using its known identification command and VID/PID.
+    Connects to the motion platform using its known identification command and VID/PID.
     """
-    global turntable
-    if turntable and turntable.is_open:
-        logging.info("Turntable is already connected.")
-        return turntable
+    motion_platform = globals.motion_platform
+    if motion_platform and motion_platform.is_open:
+        logging.info("Motion platform is already connected.")
+        return motion_platform
 
-    identification_command = "IDN?"
-    expected_response = "TTBL"
-    # For the turntable, VID/PID are hard-coded.
-    turntable = connect_to_serial_device(
-        device_name="Turntable",
+    identification_command = "M115"
+    expected_response = "FIRMWARE_NAME:Marlin"
+    # For the motion platform, VID/PID are hard-coded.
+    globals.motion_platform = connect_to_serial_device(
+        device_name="Motion Platform",
         identification_command=identification_command,
         expected_response=expected_response,
-        vid=0x2E8A,  # Example VID for turntable
-        pid=0x0003   # Example PID for turntable
+        vid=0x0483,
+        pid=0x5740
     )
-    if turntable is None:
-        logging.error("Turntable device not found or did not respond correctly.")
+    if globals.motion_platform is None:
+        logging.error("Motion platform device not found or did not respond correctly.")
         return None
-    return turntable
+    
+    return globals.motion_platform
 
 def disconnect_serial_device(device_name):
     """
-    Forcefully disconnects the specified serial device ('turntable').
+    Forcefully disconnects the specified serial device ('motion_platform').
     """
-    global turntable
     logging.info(f"Attempting to disconnect {device_name}")
 
     try:
-        if device_name.lower() == 'turntable' and turntable is not None:
-            if turntable.is_open:
-                turntable.close()  # Close port safely
-            turntable = None  # Remove reference
-            logging.info("Turntable disconnected successfully.")
+        if device_name.lower() == 'motion_platform' and globals.motion_platform is not None:
+            if globals.motion_platform.is_open:
+                globals.motion_platform.close()  # Close port safely
+            globals.motion_platform = None  # Remove reference
+            logging.info("Motion platform disconnected successfully.")
         else:
             logging.warning(f"{device_name} was not connected.")
     except Exception as e:
         logging.error(f"Error while disconnecting {device_name}: {e}")
-
+        
+        
+        
 
 def write_turntable(command, timeout=10, expect_response=True):
     global turntable, turntable_waiting_for_done

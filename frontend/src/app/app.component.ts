@@ -17,6 +17,7 @@ import { ComportControlComponent } from './features/comport-control/comport-cont
 import { CameraControlComponent } from './features/camera-control/camera-control.component';
 import { ErrorPopupListComponent } from './components/error-popup-list/error-popup-list.component';
 import { BackendReadyService } from './services/backend-ready.service'; // Adjust the path as needed
+import { MotionControl } from './features/motion-control/motion-control';
 
 @Component({
   selector: 'app-root',
@@ -32,7 +33,7 @@ import { BackendReadyService } from './services/backend-ready.service'; // Adjus
     // Standalone components
     ImageViewerComponent,
     ControlPanelComponent,
-    TurntableControlComponent,
+    MotionControl,
     ComportControlComponent,
     CameraControlComponent,
     ErrorPopupListComponent

@@ -7,6 +7,7 @@ from pypylon import pylon
 from cameracontrol import (apply_camera_settings, 
                            validate_and_set_camera_param, get_camera_properties)
 import porthandler
+import motioncontrols
 import os
 import sys
 import pyodbc
@@ -66,31 +67,31 @@ def retry_operation(operation, max_retries=3, wait=1, exceptions=(Exception,)):
 
 ### Serial Device Functions ###
 # Connect/Disconnect Serial devices
-@app.route('/api/connect-to-turntable', methods=['POST'])
-def connect_turntable():
+@app.route('/api/connect-to-motionplatform', methods=['POST'])
+def connect_motionplatform():
     try:
-        app.logger.info("Attempting to connect to Turntable")
-        if porthandler.turntable and porthandler.turntable.is_open:
-            app.logger.info("Turntable already connected.")
-            return jsonify({'message': 'Turntable already connected'}), 200
+        app.logger.info("Attempting to connect to Motion platform")
+        if porthandler.motion_platform and porthandler.motion_platform.is_open:
+            app.logger.info("Motion platform already connected.")
+            return jsonify({'message': 'Motion platform already connected'}), 200
 
-        device = porthandler.connect_to_turntable()
+        device = porthandler.connect_to_motion_platform()
         if device:
-            porthandler.turntable = device
-            app.logger.info("Successfully connected to Turntable")
-            return jsonify({'message': 'Turntable connected', 'port': device.port}), 200
+            porthandler.motion_platform = device
+            app.logger.info("Successfully connected to Motion platform")
+            return jsonify({'message': 'Motion platform connected', 'port': device.port}), 200
         else:
-            app.logger.error("Failed to connect to Turntable: No response or incorrect ID")
+            app.logger.error("Failed to connect to Motion platform: No response or incorrect ID")
             return jsonify({
-                'error': ERROR_MESSAGES[ErrorCode.TURNTABLE_DISCONNECTED],
-                'code': ErrorCode.TURNTABLE_DISCONNECTED,
+                'error': ERROR_MESSAGES[ErrorCode.MOTIONPLATFORM_DISCONNECTED],
+                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
                 'popup': True
             }), 404
     except Exception as e:
-        app.logger.exception("Exception occurred while connecting to Turntable")
+        app.logger.exception("Exception occurred while connecting to Motion platform")
         return jsonify({
-            'error': ERROR_MESSAGES[ErrorCode.TURNTABLE_DISCONNECTED],
-            'code': ErrorCode.TURNTABLE_DISCONNECTED,
+            'error': ERROR_MESSAGES[ErrorCode.MOTIONPLATFORM_DISCONNECTED],
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
             'popup': True
         }), 500
 
@@ -109,15 +110,15 @@ def disconnect_serial_device(device_name):
 def get_serial_device_status(device_name):
     app.logger.debug(f"Received status request for device: {device_name}")
     device = None
-    if device_name.lower() == 'turntable':
-        device = porthandler.turntable
+    if device_name.lower() == 'motion_platform':
+        device = porthandler.motion_platform
     else:
         app.logger.error("Invalid device name")
         return jsonify({'error': 'Invalid device name', 'popup': True}), 400
 
     if device and device.is_open:
-        if device_name.lower() == 'turntable':
-            if not porthandler.turntable_waiting_for_done:
+        if device_name.lower() == 'motion_platform':
+            if not porthandler.motion_platform_waiting_for_done:
                 try:
                     device.write(b'IDN?\n')
                     response = device.read(10).decode(errors='ignore').strip()
@@ -130,7 +131,7 @@ def get_serial_device_status(device_name):
                     return jsonify({
                         'connected': False,
                         'error': f"{device_name.capitalize()} unresponsive",
-                        'code': ErrorCode.TURNTABLE_DISCONNECTED,
+                        'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
                         'popup': True
                     }), 400
 
@@ -143,10 +144,46 @@ def get_serial_device_status(device_name):
     return jsonify({
         'connected': False,
         'error': f"{device_name.capitalize()} appears to be disconnected",
-        'code': ErrorCode.TURNTABLE_DISCONNECTED,
+        'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
         'popup': True
     }), 400
     
+@app.route('/get_motion_platform_position', methods=['GET'])
+def get_motion_platform_position():
+    motion_platform = globals.motion_platform
+
+    if motion_platform is not None:
+        try:
+            position = motioncontrols.get_toolhead_position(motion_platform)
+            if position:
+                return jsonify(position), 200
+            else:
+                return jsonify({'status': 'error', 'message': 'Failed to get toolhead position'}), 500
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+    else:
+        print("Motion platform not connected")
+        return jsonify({'status': 'error', 'message': 'Motion platform not connected'}), 404
+    
+@app.route('/home_toolhead', methods=['POST'])
+def home_toolhead():
+    data = request.get_json()
+    axes = data.get('axes', []) 
+
+    motion_platform = globals.motion_platform
+    if motion_platform is not None:
+        try:
+            motioncontrols.home_axes(motion_platform, *axes)
+            globals.toolhead_homed = True
+            
+            return jsonify(f'Axes {axes if axes else ["X", "Y", "Z"]} homed successfully!')
+        except Exception as e:
+            return jsonify(f'An error occurred: {str(e)}'), 500
+    else:
+        return jsonify('Error: Motion platform not connected'), 500
+    
+### Camera Functions ###
 def stop_camera_stream():
     camera = globals.camera
 
@@ -190,7 +227,6 @@ def stop_camera_stream():
     except Exception as e:
         raise RuntimeError(f"Failed to stop camera stream: {str(e)}")
 
-
 @app.route('/api/connect-camera', methods=['POST'])
 def connect_camera():
 
@@ -201,8 +237,6 @@ def connect_camera():
         result["error"] = ERROR_MESSAGES.get(error_code, result["error"])
         return jsonify(result), 404
     return jsonify(result), 200
-
-
 
 @app.route('/api/disconnect-camera', methods=['POST'])
 def disconnect_camera():
@@ -312,8 +346,6 @@ def get_camera_status():
         "connected": bool(is_connected),
         "streaming": bool(is_streaming),
     }), 200
-
-
     
 @app.route('/api/get-camera-settings', methods=['GET'])
 def get_camera_settings():
@@ -385,8 +417,61 @@ def update_camera_settings():
     except Exception as e:
         app.logger.exception("Failed to update camera settings")
         return jsonify({"error": str(e)}), 500
+    
+    
+    
+    
+# Function to move the toolhead by a given amount (relative movement)
+@app.route('/move_toolhead_relative', methods=['POST'])
+def move_toolhead_relative():
+    data = request.get_json()
+    axis = data.get('axis')
+    value = data.get('value')
+    
+    if axis not in ['x', 'y', 'z']:
+        return jsonify({'status': 'error', 'message': 'Invalid axis'}), 400
 
+    try:
+        # Check if the printer is connected without reconnecting
+        motion_platform = globals.motion_platform()
 
+        if motion_platform is not None:
+            # Dynamically call move_relative with the axis and value
+            move_args = {axis: value}
+            motioncontrols.move_relative(motion_platform, **move_args)
+            return jsonify({'status': 'success'}), 200
+        else:
+            return jsonify({'status': 'error', 'message': 'Printer not connected'}), 404
+    except Exception as e:
+        return jsonify({'statuWs': 'error', 'message': str(e)}), 500
+    
+    
+@app.route('/move_toolhead_absolute', methods=['POST'])
+def move_toolhead_absolute():
+    try:
+        data = request.get_json()
+        x_pos = data.get('x')
+        y_pos = data.get('y')
+        z_pos = data.get('z')
+        
+        # Load default coordinates from the JSON file if not provided in the request
+        # TODO: Support first tablet coordinates
+        #if x_pos is None or y_pos or z_pos is None:
+        #    with open(SETTINGS_PATH, 'r') as f:
+        #        settings = json.load(f)
+        #    x_pos = x_pos if x_pos is not None else settings['firstTabletPosition']['x']
+        #    y_pos = y_pos if y_pos is not None else settings['firstTabletPosition']['y']
+                
+        # Check if the printer is connected without reconnecting
+        motion_platform = globals.motion_platform
+        if motion_platform is not None:
+            # Move the printer to the specified position
+            motioncontrols.move_to_position(motion_platform, x_pos, y_pos, z_pos)
+            return jsonify({'status': 'success', 'message': 'Printer moved to the specified position successfully!'}), 200
+        else:
+            return jsonify({'status': 'error', 'message': 'Printer not connected'}), 404
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 ### Video streaming Function ###
 @app.route('/api/start-video-stream', methods=['GET'])
@@ -662,8 +747,7 @@ def get_base_path():
     else:
         # In dev mode, simulate the same directory structure
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Results'))
-
-
+    
 def select_folder_external() -> str:
     try:
         result = subprocess.run(
@@ -686,7 +770,6 @@ def attempt_frame_grab(camera):
         grab_result.Release()
         raise Exception(f"Grab result unsuccessful for camera")
     return grab_result
-
 
 def connect_camera_internal():
     factory = pylon.TlFactory.GetInstance()
@@ -806,15 +889,15 @@ def initialize_serial_devices():
     app.logger.info("Initializing serial devices...")
 
     try:
-        # Connect turntable as before.
-        device = porthandler.connect_to_turntable()
+        # Connect Motion Platform
+        device = porthandler.connect_to_motion_platform()
         if device:
-            porthandler.turntable = device
-            app.logger.info("Turntable connected automatically on startup.")
+            porthandler.motion_platform = device
+            app.logger.info("Motion Platform connected automatically on startup.")
         else:
-            app.logger.error("Failed to auto-connect turntable on startup.")
+            app.logger.error("Failed to auto-connect Motion Platform on startup.")
     except Exception as e:
-        app.logger.error(f"Error initializing turntable: {e}")
+        app.logger.error(f"Error initializing Motion Platform: {e}")
         
 if __name__ == '__main__':
     multiprocessing.freeze_support()

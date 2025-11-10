@@ -10,5 +10,8 @@ grab_lock = threading.Lock()
 latest_image = None
 
 #TODO: Modify these to motionplatform
-turntable_position = "?"
-turntable_homed = False 
+motion_platform = None
+toolhead_x_pos = "?"
+toolhead_y_pos = "?"
+toolhead_z_pos = "?"
+toolhead_homed = False 
