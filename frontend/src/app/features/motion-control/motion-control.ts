@@ -43,9 +43,9 @@ export class MotionControl implements OnInit, OnDestroy {
 
   isHoming = false;
   private readonly HOMING_TIMEOUT_MS = 10000;
-  xHomed: boolean = true;
-  yHomed: boolean = true;
-  zHomed: boolean = true;
+  xHomed: boolean = false;
+  yHomed: boolean = false;
+  zHomed: boolean = false;
 
   constructor(
     private http: HttpClient,

@@ -5,6 +5,8 @@ import time
 import threading
 import globals
 
+log = logging.getLogger(__name__)
+
 # Global serial device variables
 motion_platform = None
 motion_platform_waiting_for_done = False

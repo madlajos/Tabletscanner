@@ -1,9 +1,11 @@
 import porthandler
 import time
 import re
-import app
+import globals
 from flask import jsonify
 from typing import Dict
+import logging
+log = logging.getLogger(__name__)
 
 _POS_RE = re.compile(r'X:\s*(-?\d+(?:\.\d+)?)\s+Y:\s*(-?\d+(?:\.\d+)?)\s+Z:\s*(-?\d+(?:\.\d+)?)', re.I)
 
@@ -48,42 +50,91 @@ def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
     """
     Sends M114 and returns {"x":..., "y":..., "z":...} with a hard overall timeout.
     """
-    # If you have a shared serial lock, use it here:
+    # Quick status probe to drain/flush noisy buffers when NOT busy.
     if not globals.motion_busy:
         try:
+            # Drain anything pending to avoid parsing stale data.
+            try:
+                iw = getattr(ser, "in_waiting", 0) or 0
+                if iw:
+                    ser.read(iw)
+            except Exception:
+                pass
+
             buf = bytearray()
             deadline = time.monotonic() + 0.15
             with porthandler.motion_lock:
                 ser.write(b'M105\n')
-                # read incoming bytes until "ok" or timeout...
-                ...
+
+            while time.monotonic() < deadline:
+                iw = getattr(ser, "in_waiting", 0) or 0
+                if iw:
+                    chunk = ser.read(min(iw, 128))
+                    if chunk:
+                        buf += chunk
+                        if b"ok" in buf.lower():
+                            break
+                else:
+                    time.sleep(0.01)
+
             if buf:
-                app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
+                log.debug(f"M105 non-ok reply: {buf[:64]!r}")
         except Exception as e:
-            app.logger.debug(f"status probe error (ignored): {e}")
-        return jsonify({'connected': True, 'port': ser.port}), 200
+            log.debug(f"status probe error (ignored): {e}")
+    else:
+        # During long ops (e.g. homing), avoid issuing M114; let caller return cache.
+        raise RuntimeError("Motion platform busy")
+
+    # Flush residual bytes before querying position.
+    try:
+        iw = getattr(ser, "in_waiting", 0) or 0
+        if iw:
+            ser.read(iw)
+    except Exception:
+        pass
+
+    # Query current position.
+    with porthandler.motion_lock:
+        ser.write(b'M114\n')
+
     end = time.monotonic() + timeout
     buf = bytearray()
 
     while time.monotonic() < end:
         iw = getattr(ser, "in_waiting", 0) or 0
         if iw:
-            chunk = ser.read(min(iw, 128))
+            chunk = ser.read(min(iw, 256))
             if chunk:
                 buf += chunk
-                if b"ok" in buf.lower():
+                # Heuristic: break once a typical M114 line is complete.
+                if (b"X:" in buf and b"Y:" in buf and b"Z:" in buf) and (b"\n" in buf or b"ok" in buf.lower()):
                     break
         else:
             time.sleep(0.01)
 
     s = buf.decode("ascii", "ignore")
-    m = _POS_RE.search(s)
-    if not m:
-        # Fallback: some firmwares print without labels: "X:1.23 Y:4.56 Z:7.89" still matches
-        raise RuntimeError("No M114 position in reply")
 
-    x, y, z = float(m.group(1)), float(m.group(2)), float(m.group(3))
-    return {"x": x, "y": y, "z": z}
+    # Try regex first if available.
+    try:
+        m = _POS_RE.search(s)  # e.g. r"X:([-0-9.]+).*?Y:([-0-9.]+).*?Z:([-0-9.]+)"
+    except NameError:
+        m = None
+
+    if m:
+        x, y, z = float(m.group(1)), float(m.group(2)), float(m.group(3))
+        return {"x": x, "y": y, "z": z}
+
+    # Fallback parser (handles lines like: "X:10.00 Y:20.00 Z:30.00 E:...").
+    try:
+        pos = parse_position(s)
+        if all(k in pos for k in ("x", "y", "z")):
+            return {"x": float(pos["x"]), "y": float(pos["y"]), "z": float(pos["z"])}
+    except Exception:
+        pass
+
+    # No parseable coordinates found.
+    raise RuntimeError("No M114 position in reply")
+
 
 def parse_position(response):
     # Example response: "X:10.00 Y:20.00 Z:30.00 E:0.00 Count X:8100 Y:0 Z:4320"
@@ -100,6 +151,7 @@ def parse_position(response):
                     position[axis.lower()] = float(value)
     
     return position
+
 
 # Moves the Motion platform toolhead to a specified location. If the Z coordinate is not given,
 # it remains unchanged.

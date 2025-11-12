@@ -19,7 +19,6 @@ from settings_manager import load_settings, save_settings, get_settings
 import numpy as np
 
 from logger_config import setup_logger
-setup_logger()
 from error_codes import ErrorCode, ERROR_MESSAGES
 import tkinter as tk
 from tkinter import filedialog
@@ -30,6 +29,8 @@ app = Flask(__name__)
 app.secret_key = 'Egis'
 CORS(app)
 app.debug = True
+
+setup_logger()
 
 
 # Might need to be removed

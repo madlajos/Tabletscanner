@@ -5,42 +5,53 @@ import sys
 import os
 
 def get_base_path():
-    # In frozen mode, sys.executable gives the path of the exe;
-    # os.path.dirname(sys.executable) returns its folder.
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(__file__)
 
 DEFAULT_SETTINGS_PATH = os.path.join(get_base_path(), 'settings.json')
 
-
 def setup_logger():
-    logger = logging.getLogger()  # root logger
-    logger.setLevel(logging.DEBUG)
+    root = logging.getLogger()  # root logger
 
-    # Formatter for all handlers
+    # Make this idempotent
+    if getattr(root, "_configured_by_app", False):
+        return root
+
+    root.setLevel(logging.DEBUG)
+
+    # Start fresh: remove any pre-existing handlers to avoid duplicates
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-    # Console handler (DEBUG and above)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+    # Console handler (DEBUG+)
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(formatter)
+    root.addHandler(ch)
 
-    # File handler (WARNING and above)
+    # File handler (WARNING+)
     log_path = os.path.join(get_base_path(), 'zoltek_backend.log')
-    file_handler = RotatingFileHandler(log_path, maxBytes=10485760, backupCount=1)
-    file_handler.setLevel(logging.WARNING)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    fh = RotatingFileHandler(log_path, maxBytes=10_485_760, backupCount=1, encoding="utf-8")
+    fh.setLevel(logging.WARNING)
+    fh.setFormatter(formatter)
+    root.addHandler(fh)
 
-    return logger
+    # Ensure Flask and Werkzeug DO NOT have their own handlers; let them propagate to root
+    for name in ("flask.app", "werkzeug"):
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.DEBUG)  # keep detail, rely on root handlers for output
+        lg.propagate = True
+        for h in list(lg.handlers):
+            lg.removeHandler(h)
 
+    root._configured_by_app = True
+    return root
 
 class CameraError(Exception):
-    """Exception raised for camera-related errors."""
     pass
 
 class SerialError(Exception):
-    """Exception raised for serial device errors."""
     pass
