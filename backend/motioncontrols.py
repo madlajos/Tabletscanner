@@ -53,11 +53,14 @@ def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
     # Quick status probe to drain/flush noisy buffers when NOT busy.
     if not globals.motion_busy:
         try:
-            # Drain anything pending to avoid parsing stale data.
+            # Clear any stale bytes first to avoid mixing with the M105 we send now.
             try:
-                iw = getattr(ser, "in_waiting", 0) or 0
-                if iw:
-                    ser.read(iw)
+                if hasattr(ser, "reset_input_buffer"):
+                    ser.reset_input_buffer()
+                else:
+                    iw = getattr(ser, "in_waiting", 0) or 0
+                    if iw:
+                        ser.read(iw)
             except Exception:
                 pass
 
@@ -66,32 +69,38 @@ def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
             with porthandler.motion_lock:
                 ser.write(b'M105\n')
 
+            # Read briefly; typical reply: b"ok T:25.00 /0.00 @:0\n"
             while time.monotonic() < deadline:
                 iw = getattr(ser, "in_waiting", 0) or 0
                 if iw:
-                    chunk = ser.read(min(iw, 128))
+                    chunk = ser.read(min(iw, 256))
                     if chunk:
                         buf += chunk
-                        if b"ok" in buf.lower():
-                            break
+                    # Stop once we see 'ok' or a newline; we don't need the temp value
+                    if b"ok" in buf.lower() or b"\n" in buf:
+                        break
                 else:
                     time.sleep(0.01)
 
-            if buf:
-                log.debug(f"M105 non-ok reply: {buf[:64]!r}")
+            # Only log if the reply looks truly unexpected (no 'ok' seen)
+            if buf and b"ok" not in buf.lower():
+                log.debug(f"M105 unexpected reply: {buf[:64]!r}")
         except Exception as e:
-            log.debug(f"status probe error (ignored): {e}")
-    else:
-        # During long ops (e.g. homing), avoid issuing M114; let caller return cache.
-        raise RuntimeError("Motion platform busy")
+            log.debug(f"M105 probe error (ignored): {e}")
 
-    # Flush residual bytes before querying position.
-    try:
-        iw = getattr(ser, "in_waiting", 0) or 0
-        if iw:
-            ser.read(iw)
-    except Exception:
-        pass
+        # Hard flush again so the upcoming M114 parse isn't polluted by M105
+        try:
+            if hasattr(ser, "reset_input_buffer"):
+                ser.reset_input_buffer()
+            else:
+                iw = getattr(ser, "in_waiting", 0) or 0
+                if iw:
+                    ser.read(iw)
+        except Exception:
+            pass
+    else:
+        # During long ops (e.g. homing), avoid issuing M114; let caller use cache.
+        raise RuntimeError("Motion platform busy")
 
     # Query current position.
     with porthandler.motion_lock:
@@ -155,22 +164,30 @@ def parse_position(response):
 
 # Moves the Motion platform toolhead to a specified location. If the Z coordinate is not given,
 # it remains unchanged.
-def move_to_position(motion_platform, x_pos, y_pos, z_pos = None):
-    # Set the printer to use absolute coordinates
+# motioncontrols.py
+
+def move_to_position(motion_platform, x_pos=None, y_pos=None, z_pos=None):
+    # Absolute mode
     porthandler.write(motion_platform, "G90")
 
-    # Construct the move command with the specified coordinates
-    move_command = f"G1 X{x_pos} Y{y_pos}"
-    
-    # If a z-coordinate is provided, include it in the move command
+    parts = []
+    if x_pos is not None:
+        parts.append(f"X{x_pos}")
+    if y_pos is not None:
+        parts.append(f"Y{y_pos}")
     if z_pos is not None:
-        move_command += f" Z{z_pos}"
+        parts.append(f"Z{z_pos}")
+
+    if not parts:
+        return  # nothing to do
+
+    move_command = "G1 " + " ".join(parts)
 
     try:
-        # Send the move command to the printer
         porthandler.write(motion_platform, move_command)
     except Exception as e:
         print(f"Error occurred while sending move to position command: {e}")
+
 
 # Moves the Motion platform by the specified values.
 # Can be called with 1-3 arguements, like move_relative(printer, x=1, y=1)

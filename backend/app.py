@@ -10,7 +10,7 @@ import porthandler
 import motioncontrols
 import os
 import sys
-import pyodbc
+import math
 from datetime import datetime
 import subprocess
 import json
@@ -31,7 +31,7 @@ CORS(app)
 app.debug = True
 
 setup_logger()
-
+_EPS = 1e-6
 
 # Might need to be removed
 camera_properties = None
@@ -430,8 +430,13 @@ def update_camera_settings():
         return jsonify({"error": str(e)}), 500
     
     
+def _clamp_axis(axis: str, target: float):
+    lo, hi = globals.motion_limits[axis]
+    clamped = max(lo, min(hi, target))
+    return clamped, (clamped != target), lo, hi    
     
     
+# Function to move the toolhead by a given amount (relative movement)
 # Function to move the toolhead by a given amount (relative movement)
 @app.route('/api/move_toolhead_relative', methods=['POST'])
 def move_toolhead_relative():
@@ -443,17 +448,46 @@ def move_toolhead_relative():
         return jsonify({'status': 'error', 'message': 'Invalid axis'}), 400
 
     try:
-        # BUG: do not call it like a function
-        motion_platform = globals.motion_platform   # <-- FIXED
-
-        if motion_platform is not None and motion_platform.is_open:
-            move_args = {axis: value}
-            motioncontrols.move_relative(motion_platform, **move_args)
-            return jsonify({'status': 'success'}), 200
-        else:
+        motion_platform = globals.motion_platform
+        if motion_platform is None or not motion_platform.is_open:
             return jsonify({'status': 'error', 'message': 'Printer not connected'}), 404
+
+        # Need a known current position (homed) to clamp relative moves
+        curr = globals.last_toolhead_pos.get(axis) if hasattr(globals, "last_toolhead_pos") else None
+        if curr is None:
+            return jsonify({
+                'status': 'error',
+                'message': f'Axis {axis.upper()} not homed; position unknown.'
+            }), 409
+
+        target = float(curr) + float(value)
+        clamped, clipped, lo, hi = _clamp_axis(axis, target)
+        adj = clamped - float(curr)
+
+        if math.isclose(adj, 0.0, abs_tol=_EPS):
+            return jsonify({
+                'status': 'success',
+                'requested': {'axis': axis, 'delta': value},
+                'sent': {'axis': axis, 'delta': 0.0},
+                'clamped': {axis: bool(clipped)},
+                'limits': {axis: {'min': lo, 'max': hi}},
+                'message': f'Already at {axis.upper()} limit.'
+            }), 200
+
+        move_args = {axis: adj}
+        motioncontrols.move_relative(motion_platform, **move_args)
+
+        return jsonify({
+            'status': 'success',
+            'requested': {'axis': axis, 'delta': value},
+            'sent': {'axis': axis, 'delta': adj},
+            'clamped': {axis: bool(clipped)},
+            'limits': {axis: {'min': lo, 'max': hi}}
+        }), 200
+
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
     
     
 @app.route('/api/move_toolhead_absolute', methods=['POST'])
@@ -463,25 +497,75 @@ def move_toolhead_absolute():
         x_pos = data.get('x')
         y_pos = data.get('y')
         z_pos = data.get('z')
-        
-        # Load default coordinates from the JSON file if not provided in the request
-        # TODO: Support first tablet coordinates
-        #if x_pos is None or y_pos or z_pos is None:
-        #    with open(SETTINGS_PATH, 'r') as f:
-        #        settings = json.load(f)
-        #    x_pos = x_pos if x_pos is not None else settings['firstTabletPosition']['x']
-        #    y_pos = y_pos if y_pos is not None else settings['firstTabletPosition']['y']
-                
-        # Check if the printer is connected without reconnecting
+
         motion_platform = globals.motion_platform
-        if motion_platform is not None:
-            # Move the printer to the specified position
-            motioncontrols.move_to_position(motion_platform, x_pos, y_pos, z_pos)
-            return jsonify({'status': 'success', 'message': 'Printer moved to the specified position successfully!'}), 200
-        else:
+        if motion_platform is None or not motion_platform.is_open:
             return jsonify({'status': 'error', 'message': 'Printer not connected'}), 404
+
+        requested = {}
+        planned = {}
+        clamped_flags = {}
+        limits_out = {}
+
+        # Helper to process one axis if provided
+        def process_axis(ax, val):
+            if val is None:
+                return
+            tgt = float(val)
+            clamped, clipped, lo, hi = _clamp_axis(ax, tgt)
+            requested[ax] = tgt
+            planned[ax] = clamped
+            clamped_flags[ax] = bool(clipped)
+            limits_out[ax] = {'min': lo, 'max': hi}
+
+        process_axis('x', x_pos)
+        process_axis('y', y_pos)
+        process_axis('z', z_pos)
+
+        if not planned:
+            return jsonify({'status': 'error', 'message': 'No axes specified'}), 400
+
+        # If all provided axes clamp to their current values, skip sending a move
+        all_noop = True
+        curr_pos = getattr(globals, "last_toolhead_pos", {})
+        for ax, clamped_val in planned.items():
+            curr = curr_pos.get(ax)
+            if curr is None:
+                # Not homed axis; we cannot trust absolute; require homing first
+                return jsonify({'status': 'error',
+                                'message': f'Axis {ax.upper()} not homed; position unknown.'}), 409
+            if not math.isclose(float(curr), float(clamped_val), abs_tol=_EPS):
+                all_noop = False
+
+        if all_noop:
+            return jsonify({
+                'status': 'success',
+                'requested': requested,
+                'sent': {},
+                'clamped': clamped_flags,
+                'limits': limits_out,
+                'message': 'Requested positions equal to current (after clamping); no move sent.'
+            }), 200
+
+        # Send only the axes we plan to change
+        motioncontrols.move_to_position(
+            motion_platform,
+            planned.get('x'),
+            planned.get('y'),
+            planned.get('z')
+        )
+
+        return jsonify({
+            'status': 'success',
+            'requested': requested,
+            'sent': planned,
+            'clamped': clamped_flags,
+            'limits': limits_out
+        }), 200
+
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 ### Video streaming Function ###
 @app.route('/api/start-video-stream', methods=['GET'])

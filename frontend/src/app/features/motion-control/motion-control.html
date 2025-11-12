@@ -5,12 +5,15 @@
         <span class="position-label">X</span>
         <input
           id="x-position"
+          class="coord-input"
           type="text"
+          inputmode="decimal"
           [(ngModel)]="xPosition"
-          [disabled]="motorOffState || !isConnected"
+          [disabled]="motorOffState || !isConnected || !xHomed"
+          [attr.placeholder]="xHomed ? '' : '?'"
           (focus)="onFocus('x')"
           (blur)="onBlur('x')"
-          (keyup.enter)="moveToolHeadAbsolute(xPosition, yPosition, zPosition)"
+          (keyup.enter)="submitOnEnter('x')"
         />
       </div>
     </div>
@@ -19,12 +22,15 @@
         <span class="position-label">Y</span>
         <input
           id="y-position"
+          class="coord-input"
           type="text"
+          inputmode="decimal"
           [(ngModel)]="yPosition"
-          [disabled]="motorOffState || !isConnected"
+          [disabled]="motorOffState || !isConnected || !yHomed"
+          [attr.placeholder]="yHomed ? '' : '?'"
           (focus)="onFocus('y')"
           (blur)="onBlur('y')"
-          (keyup.enter)="moveToolHeadAbsolute(xPosition, yPosition, zPosition)"
+          (keyup.enter)="submitOnEnter('y')"
         />
       </div>
     </div>
@@ -33,12 +39,15 @@
         <span class="position-label">Z</span>
         <input
           id="z-position"
+          class="coord-input"
           type="text"
+          inputmode="decimal"
           [(ngModel)]="zPosition"
-          [disabled]="motorOffState || !isConnected"
+          [disabled]="motorOffState || !isConnected || !zHomed"
+          [attr.placeholder]="zHomed ? '' : '?'"
           (focus)="onFocus('z')"
           (blur)="onBlur('z')"
-          (keyup.enter)="moveToolHeadAbsolute(xPosition, yPosition, zPosition)"
+          (keyup.enter)="submitOnEnter('z')"
         />
       </div>
     </div>

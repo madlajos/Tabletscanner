@@ -31,6 +31,11 @@ export class MotionControl implements OnInit, OnDestroy {
   yMin: number = 0;
   yMax: number = 200;
 
+  private originalOnFocus = { x: undefined as any, y: undefined as any, z: undefined as any };
+  private skipNextBlurRevert = false;
+  isEditing = { x: false, y: false, z: false };
+
+
   connectionPolling: Subscription | undefined;
   positionPolling: Subscription | undefined;
   reconnectionPolling: Subscription | undefined;
@@ -80,21 +85,52 @@ export class MotionControl implements OnInit, OnDestroy {
   }
 
   updateMotionPlatformPosition(): void {
-    if (this.isConnected && !this.motorOffState) {
-      this.http
-        .get<{ x: number; y: number; z: number }>(`${this.BASE_URL}/get_motion_platform_position`)
-        .subscribe({
-          next: (position) => {
-            if (!this.isEditingX && this.xHomed) this.xPosition = position.x;
-            if (!this.isEditingY && this.yHomed) this.yPosition = position.y;
-            if (!this.isEditingZ && this.zHomed) this.zPosition = position.z;
-          },
-          error: (error) => {
-            console.error('Failed to get Motion platform position!', error);
-          },
-        });
-    }
+    if (!(this.isConnected && !this.motorOffState)) return;
+
+    this.http
+      .get<{ x?: number | null; y?: number | null; z?: number | null }>(`${this.BASE_URL}/get_motion_platform_position`)
+      .subscribe({
+        next: (position) => {
+          const hasNum = (v: any) => typeof v === 'number' && Number.isFinite(v);
+          const round3 = (v: number) => Math.round(v * 1000) / 1000;
+
+          // DOM-focused fallback (prevents overwrite if focus flags ever desync)
+          const activeId = (document.activeElement && (document.activeElement as HTMLElement).id) || '';
+
+          // X
+          if (!this.isEditingX && activeId !== 'x-position') {
+            if (!this.xHomed) {
+              this.xPosition = '?';
+            } else if (hasNum(position?.x)) {
+              this.xPosition = round3(position!.x as number);
+            }
+          }
+
+          // Y
+          if (!this.isEditingY && activeId !== 'y-position') {
+            if (!this.yHomed) {
+              this.yPosition = '?';
+            } else if (hasNum(position?.y)) {
+              this.yPosition = round3(position!.y as number);
+            }
+          }
+
+          // Z
+          if (!this.isEditingZ && activeId !== 'z-position') {
+            if (!this.zHomed) {
+              this.zPosition = '?';
+            } else if (hasNum(position?.z)) {
+              this.zPosition = round3(position!.z as number);
+            }
+          }
+        },
+        error: (error) => {
+          console.error('Failed to get Motion platform position!', error);
+        },
+      });
   }
+
+
 
   startConnectionPolling(): void {
     if (this.connectionPolling) return;
@@ -201,19 +237,32 @@ export class MotionControl implements OnInit, OnDestroy {
     this.updateMotionPlatformPosition();
   }
 
+  private clamp(v: number, lo: number, hi: number): number {
+    return Math.max(lo, Math.min(hi, v));
+  }
+
   private toNumberOrUndefined(v?: number | string): number | undefined {
     if (v === undefined || v === '?') return undefined;
     const n = typeof v === 'number' ? v : Number(v);
     return Number.isFinite(n) ? n : undefined;
   }
 
+  submitOnEnter(axis: 'x' | 'y' | 'z') {
+    this.skipNextBlurRevert = true;
+    if (axis === 'x') this.moveToolHeadAbsolute(this.xPosition, undefined, undefined);
+    else if (axis === 'y') this.moveToolHeadAbsolute(undefined, this.yPosition, undefined);
+    else this.moveToolHeadAbsolute(undefined, undefined, this.zPosition);
+
+    if (axis === 'x') this.isEditingX = false;
+    else if (axis === 'y') this.isEditingY = false;
+    else this.isEditingZ = false;
+  }
+
+
   // ---------- Movements (existing API: *toolhead*) ----------
 
   moveToolHeadRelative(axis: string, value: number): void {
-    if (this.motorOffState) {
-      console.error('Cannot move toolhead while motors are off.');
-      return;
-    }
+    if (this.motorOffState) { console.error('Cannot move toolhead while motors are off.'); return; }
     this.resetMotorOffState();
 
     if ((axis === 'x' && !this.xHomed) || (axis === 'y' && !this.yHomed) || (axis === 'z' && !this.zHomed)) {
@@ -221,33 +270,36 @@ export class MotionControl implements OnInit, OnDestroy {
       return;
     }
 
-    // simple UI bounds checking for X/Y (optional for Z)
+    // Clamp instead of rejecting
     if (axis === 'x') {
       const cur = typeof this.xPosition === 'number' ? this.xPosition : 0;
-      const next = cur + value;
-      if (next < this.xMin || next > this.xMax) {
-        console.error(`X position ${next} out of bounds!`);
+      const target = cur + value;
+      const clamped = this.clamp(target, this.xMin, this.xMax);
+      const adj = clamped - cur;
+      if (Math.abs(adj) < 1e-6) {
+        console.warn(`X already at limit (${clamped}).`);
         return;
       }
+      value = adj; // send adjusted delta
     } else if (axis === 'y') {
       const cur = typeof this.yPosition === 'number' ? this.yPosition : 0;
-      const next = cur + value;
-      if (next < this.yMin || next > this.yMax) {
-        console.error(`Y position ${next} out of bounds!`);
+      const target = cur + value;
+      const clamped = this.clamp(target, this.yMin, this.yMax);
+      const adj = clamped - cur;
+      if (Math.abs(adj) < 1e-6) {
+        console.warn(`Y already at limit (${clamped}).`);
         return;
       }
+      value = adj;
     }
+    // Z: only clamp if you also maintain zMin/zMax in the UI; otherwise leave as-is.
 
     const payload = { axis, value };
     this.http.post(`${this.BASE_URL}/move_toolhead_relative`, payload).subscribe({
-      next: (response: any) => {
-        console.log('Toolhead moved successfully!', response);
-      },
-      error: (error: any) => {
-        console.error('Failed to move Toolhead!', error);
-      },
+      next: (response: any) => { /* optionally toast if value was clamped */ },
     });
   }
+
 
   moveToolHeadAbsolute(x?: number | string, y?: number | string, z?: number | string): void {
     if (this.motorOffState) {
@@ -256,32 +308,79 @@ export class MotionControl implements OnInit, OnDestroy {
     }
     this.resetMotorOffState();
 
-    if ((x === undefined || x === '?') && !this.xHomed) {
-      console.error('Cannot move on X axis because it is not homed.');
-      return;
-    }
-    if ((y === undefined || y === '?') && !this.yHomed) {
-      console.error('Cannot move on Y axis because it is not homed.');
-      return;
-    }
-    if ((z === undefined || z === '?') && !this.zHomed) {
-      console.error('Cannot move on Z axis because it is not homed.');
-      return;
-    }
-
     const xNum = this.toNumberOrUndefined(x);
     const yNum = this.toNumberOrUndefined(y);
     const zNum = this.toNumberOrUndefined(z);
 
-    if ((xNum !== undefined && (xNum < this.xMin || xNum > this.xMax)) ||
-      (yNum !== undefined && (yNum < this.yMin || yNum > this.yMax))) {
-      console.error('New position out of bounds!');
+    // Require homing only for axes we are actually commanding
+    if (xNum !== undefined && !this.xHomed) {
+      console.error('Cannot move on X axis because it is not homed.');
+      return;
+    }
+    if (yNum !== undefined && !this.yHomed) {
+      console.error('Cannot move on Y axis because it is not homed.');
+      return;
+    }
+    if (zNum !== undefined && !this.zHomed) {
+      console.error('Cannot move on Z axis because it is not homed.');
       return;
     }
 
-    const payload = { x: xNum, y: yNum, z: zNum };
+    // Clamp X/Y to limits instead of rejecting. Z clamped only if limits exist.
+    let xSend = xNum;
+    let ySend = yNum;
+    let zSend = zNum;
+
+    let clampedX = false;
+    let clampedY = false;
+    let clampedZ = false;
+
+    if (xSend !== undefined) {
+      const lo = this.xMin;
+      const hi = this.xMax;
+      const c = Math.max(lo, Math.min(hi, xSend));
+      clampedX = (c !== xSend);
+      xSend = c;
+    }
+
+    if (ySend !== undefined) {
+      const lo = this.yMin;
+      const hi = this.yMax;
+      const c = Math.max(lo, Math.min(hi, ySend));
+      clampedY = (c !== ySend);
+      ySend = c;
+    }
+
+    // Optional Z clamp if you maintain zMin/zMax in the component
+    if (zSend !== undefined && typeof (this as any).zMin === 'number' && typeof (this as any).zMax === 'number') {
+      const lo = (this as any).zMin as number;
+      const hi = (this as any).zMax as number;
+      const c = Math.max(lo, Math.min(hi, zSend));
+      clampedZ = (c !== zSend);
+      zSend = c;
+    }
+
+    // Build payload only with provided axes
+    const payload: any = {};
+    if (xSend !== undefined) payload.x = xSend;
+    if (ySend !== undefined) payload.y = ySend;
+    if (zSend !== undefined) payload.z = zSend;
+
+    if (!('x' in payload) && !('y' in payload) && !('z' in payload)) {
+      console.error('No axes specified.');
+      return;
+    }
+
     this.http.post(`${this.BASE_URL}/move_toolhead_absolute`, payload).subscribe({
       next: (response) => {
+        if (clampedX || clampedY || clampedZ) {
+          console.warn(
+            `Position clamped` +
+            `${clampedX ? ` X→${xSend}` : ''}` +
+            `${clampedY ? ` Y→${ySend}` : ''}` +
+            `${clampedZ ? ` Z→${zSend}` : ''}.`
+          );
+        }
         console.log('Toolhead moved to the specified position successfully!', response);
       },
       error: (error) => {
@@ -364,22 +463,24 @@ export class MotionControl implements OnInit, OnDestroy {
     return n.toFixed(1) + '°';
   }
 
-  onFocus(input: string): void {
-    if (input === 'x') this.isEditingX = true;
-    else if (input === 'y') this.isEditingY = true;
-    else if (input === 'z') this.isEditingZ = true;
+
+  onFocus(axis: 'x' | 'y' | 'z') {
+    if (axis === 'x') { this.originalOnFocus.x = this.xPosition; this.isEditingX = true; }
+    else if (axis === 'y') { this.originalOnFocus.y = this.yPosition; this.isEditingY = true; }
+    else { this.originalOnFocus.z = this.zPosition; this.isEditingZ = true; }
   }
 
-  onBlur(input: string): void {
-    if (input === 'x') this.isEditingX = false;
-    else if (input === 'y') this.isEditingY = false;
-    else if (input === 'z') this.isEditingZ = false;
-  }
 
-  // ---------- Optional: wrappers to keep old template calls working ----------
-  // If other templates still reference movePrinter* you can keep these.
-  movePrinterRelative(axis: string, value: number) { this.moveToolHeadRelative(axis, value); }
-  movePrinterAbsolute(x?: number | string, y?: number | string, z?: number | string) {
-    this.moveToolHeadAbsolute(x, y, z);
+
+  onBlur(axis: 'x' | 'y' | 'z') {
+    if (this.skipNextBlurRevert) { this.skipNextBlurRevert = false; }
+    else {
+      if (axis === 'x') this.xPosition = this.originalOnFocus.x;
+      else if (axis === 'y') this.yPosition = this.originalOnFocus.y;
+      else this.zPosition = this.originalOnFocus.z;
+    }
+    if (axis === 'x') this.isEditingX = false;
+    else if (axis === 'y') this.isEditingY = false;
+    else this.isEditingZ = false;
   }
 }
