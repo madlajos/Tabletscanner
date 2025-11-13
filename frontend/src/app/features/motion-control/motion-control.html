@@ -94,7 +94,7 @@
       <button class="home-axis-button" (click)="homeAxis('x')" [disabled]="!isConnected">HomeX</button>
       <button class="home-axis-button" (click)="homeAxis('y')" [disabled]="!isConnected">HomeY</button>
       <button class="home-axis-button" (click)="homeAxis('z')" [disabled]="!isConnected">HomeZ</button>
-      <button class="home-button" (click)="homeAxis()" [disabled]="!isConnected">Home</button>
+      <button class="home-button" (click)="homeAllAxesInOrder()" [disabled]="!isConnected">Home</button>
       <button class="home-button" [class.active]="motorOffState" (click)="motorOff()">MotorOff</button>
       <button class="home-button" (click)="moveToolHeadAbsolute()" [disabled]="!isConnected">FirstTablet</button>
     </div>
