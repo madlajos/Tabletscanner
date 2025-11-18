@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg id="Réteg_2" data-name="Réteg 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36.99 38.82">
+<svg id="Réteg_2" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 36.99 38.82">
+  <!-- Generator: Adobe Illustrator 29.6.1, SVG Export Plug-In . SVG Version: 2.1.1 Build 9)  -->
   <defs>
     <style>
-      .cls-1 {
+      .st0 {
         fill: #fff;
         stroke: #1d1d1b;
         stroke-miterlimit: 10;
       }
     </style>
   </defs>
-  <g id="Réteg_1" data-name="Réteg 1">
-    <path class="cls-1" d="M36.28,17.5L18.5.69.71,17.5c-.44.41-.14,1.15.46,1.15h2.12c.37,0,.67.3.67.67v18.34c0,.37.3.67.67.67h9.3c.37,0,.67-.3.67-.67v-10.33c0-.37.3-.67.67-.67h6.5c.37,0,.67.3.67.67v10.33c0,.37.3.67.67.67h9.3c.37,0,.67-.3.67-.67v-18.34c0-.37.3-.67.67-.67h2.12c.6,0,.89-.74.46-1.15Z"/>
+  <g id="Réteg_1">
+    <path class="st0" d="M33.78,17.78L18.5,3.34,3.22,17.78c-.38.35-.12.99.4.99h1.82c.32,0,.58.26.58.58v15.76c0,.32.26.58.58.58h7.99c.32,0,.58-.26.58-.58v-8.88c0-.32.26-.58.58-.58h5.59c.32,0,.58.26.58.58v8.88c0,.32.26.58.58.58h7.99c.32,0,.58-.26.58-.58v-15.76c0-.32.26-.58.58-.58h1.82c.52,0,.76-.64.4-.99h-.04Z"/>
   </g>
 </svg>

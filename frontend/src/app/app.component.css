@@ -67,21 +67,22 @@
 
 /* Individual section in the controls panel */
 .side-section {
-  background-color: #101010;
   border-radius: 6px;
   padding: 8px 8px 10px;
 }
 
 /* Header bar for each section */
 .side-section-header {
-  border-bottom: 1px solid #ffffff;
-  padding-bottom: 4px;
-  margin-bottom: 6px;
+  padding-bottom: 10px;
+  padding-top: 10px;
+  background-color: #3a3a3a;
+  padding-left:  20px;
+  text-align: center;
 }
 
 .side-section-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 1000;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #ffffff;

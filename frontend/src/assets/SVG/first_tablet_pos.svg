@@ -1,39 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg id="Réteg_2" data-name="Réteg 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40.33 43.92">
+<svg id="Réteg_2" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 40.33 43.92">
+  <!-- Generator: Adobe Illustrator 29.6.1, SVG Export Plug-In . SVG Version: 2.1.1 Build 9)  -->
   <defs>
     <style>
-      .cls-1, .cls-2, .cls-3 {
+      .st0, .st1, .st2 {
         fill: #fff;
       }
 
-      .cls-2 {
+      .st0, .st3 {
         font-family: Humanist777BT-BlackItalicB, 'Humanist 777 Black BT';
-        font-size: 36px;
+        font-size: 49.37px;
         font-style: italic;
         font-weight: 800;
       }
 
-      .cls-2, .cls-3, .cls-4 {
+      .st0, .st3, .st4 {
+        isolation: isolate;
+      }
+
+      .st5, .st3 {
+        fill: none;
+      }
+
+      .st5, .st3, .st2 {
         stroke: #1d1d1b;
         stroke-miterlimit: 10;
       }
-
-      .cls-4 {
-        fill: none;
-      }
     </style>
   </defs>
-  <g id="Réteg_1" data-name="Réteg 1">
+  <g id="Réteg_1">
     <g>
       <g>
-        <ellipse class="cls-3" cx="21.74" cy="35.31" rx="18.09" ry="8.11"/>
-        <rect class="cls-1" x="3.65" y="28.93" width="36.19" height="6.73"/>
-        <ellipse class="cls-3" cx="21.74" cy="28.93" rx="18.09" ry="7.95"/>
-        <line class="cls-4" x1="3.67" y1="35.72" x2="3.65" y2="29.07"/>
-        <line class="cls-4" x1="39.83" y1="35.66" x2="39.83" y2="28.93"/>
-        <line class="cls-4" x1="15.53" y1="36.4" x2="27.89" y2="21.45"/>
+        <ellipse class="st2" cx="21.74" cy="35.31" rx="18.09" ry="8.11"/>
+        <rect class="st1" x="3.65" y="28.93" width="36.19" height="6.73"/>
+        <ellipse class="st2" cx="21.74" cy="28.93" rx="18.09" ry="7.95"/>
+        <line class="st5" x1="3.67" y1="35.72" x2="3.65" y2="29.07"/>
+        <line class="st5" x1="39.83" y1="35.66" x2="39.83" y2="28.93"/>
+        <line class="st5" x1="15.53" y1="36.4" x2="27.89" y2="21.45"/>
       </g>
-      <text class="cls-2" transform="translate(.5 30.99)"><tspan x="0" y="0">1</tspan></text>
+      <g class="st4">
+        <text class="st0" transform="translate(-2.97 36.88)"><tspan x="0" y="0">1</tspan></text>
+        <text class="st3" transform="translate(-2.97 36.88)"><tspan x="0" y="0">1</tspan></text>
+      </g>
     </g>
   </g>
 </svg>
