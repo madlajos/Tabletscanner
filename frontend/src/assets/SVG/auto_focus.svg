@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Réteg_2" data-name="Réteg 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45.2 45.2">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #fff;
+        stroke: #1d1d1b;
+        stroke-miterlimit: 10;
+      }
+    </style>
+  </defs>
+  <g id="Réteg_1" data-name="Réteg 1">
+    <g>
+      <circle class="cls-1" cx="22.6" cy="22.6" r="19.01"/>
+      <circle class="cls-1" cx="22.6" cy="22.6" r="10.67"/>
+      <g>
+        <g id="_Körkörös_ismétlés_" data-name="&amp;lt;Körkörös ismétlés&amp;gt;">
+          <line class="cls-1" x1="22.55" y1="38.01" x2="22.55" y2="45.2"/>
+        </g>
+        <g id="_Körkörös_ismétlés_-2" data-name="&amp;lt;Körkörös ismétlés&amp;gt;">
+          <line class="cls-1" x1="7.19" y1="22.55" x2="0" y2="22.55"/>
+        </g>
+        <g id="_Körkörös_ismétlés_-3" data-name="&amp;lt;Körkörös ismétlés&amp;gt;">
+          <line class="cls-1" x1="22.65" y1="7.19" x2="22.65" y2="0"/>
+        </g>
+        <g id="_Körkörös_ismétlés_-4" data-name="&amp;lt;Körkörös ismétlés&amp;gt;">
+          <line class="cls-1" x1="38.01" y1="22.65" x2="45.2" y2="22.65"/>
+        </g>
+      </g>
+      <circle class="cls-1" cx="22.6" cy="22.6" r="3.4"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Réteg_2" data-name="Réteg 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 35.89 32.78">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #fff;
+        stroke: #1d1d1b;
+        stroke-miterlimit: 10;
+      }
+    </style>
+  </defs>
+  <g id="Réteg_1" data-name="Réteg 1">
+    <path class="cls-1" d="M17.78.25l17.52,30.93c.4.71-.59,1.39-1.39.96l-15.6-8.57c-.32-.18-.74-.18-1.06,0L1.98,32.03c-.79.44-1.79-.25-1.39-.95L17.78.25"/>
+  </g>
+</svg>

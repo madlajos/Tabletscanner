@@ -2,101 +2,192 @@
   <div class="position-display">
     <div class="position">
       <div class="position-container">
-        <span class="position-label">X</span>
-        <input
-          id="x-position"
-          class="coord-input"
-          type="text"
-          inputmode="decimal"
-          [(ngModel)]="xPosition"
-          [disabled]="motorOffState || !isConnected || !xHomed"
-          [attr.placeholder]="xHomed ? '' : '?'"
-          (focus)="onFocus('x')"
-          (blur)="onBlur('x')"
-          (keyup.enter)="submitOnEnter('x')"
-        />
+        <div class="coord-input-wrapper">
+          <span class="coord-prefix">X</span>
+          <input
+            id="x-position"
+            class="coord-input"
+            type="text"
+            inputmode="decimal"
+            [(ngModel)]="xPosition"
+            [disabled]="motorOffState || !isConnected || !xHomed"
+            [attr.placeholder]="xHomed ? '' : '?'"
+            (focus)="onFocus('x')"
+            (blur)="onBlur('x')"
+            (keyup.enter)="submitOnEnter('x')"
+          />
+        </div>
       </div>
     </div>
+
     <div class="position">
       <div class="position-container">
-        <span class="position-label">Y</span>
-        <input
-          id="y-position"
-          class="coord-input"
-          type="text"
-          inputmode="decimal"
-          [(ngModel)]="yPosition"
-          [disabled]="motorOffState || !isConnected || !yHomed"
-          [attr.placeholder]="yHomed ? '' : '?'"
-          (focus)="onFocus('y')"
-          (blur)="onBlur('y')"
-          (keyup.enter)="submitOnEnter('y')"
-        />
+        <div class="coord-input-wrapper">
+          <span class="coord-prefix">Y</span>
+          <input
+            id="y-position"
+            class="coord-input"
+            type="text"
+            inputmode="decimal"
+            [(ngModel)]="yPosition"
+            [disabled]="motorOffState || !isConnected || !yHomed"
+            [attr.placeholder]="yHomed ? '' : '?'"
+            (focus)="onFocus('y')"
+            (blur)="onBlur('y')"
+            (keyup.enter)="submitOnEnter('y')"
+          />
+        </div>
       </div>
     </div>
+
     <div class="position">
       <div class="position-container">
-        <span class="position-label">Z</span>
-        <input
-          id="z-position"
-          class="coord-input"
-          type="text"
-          inputmode="decimal"
-          [(ngModel)]="zPosition"
-          [disabled]="motorOffState || !isConnected || !zHomed"
-          [attr.placeholder]="zHomed ? '' : '?'"
-          (focus)="onFocus('z')"
-          (blur)="onBlur('z')"
-          (keyup.enter)="submitOnEnter('z')"
-        />
+        <div class="coord-input-wrapper">
+          <span class="coord-prefix">Z</span>
+          <input
+            id="z-position"
+            class="coord-input"
+            type="text"
+            inputmode="decimal"
+            [(ngModel)]="zPosition"
+            [disabled]="motorOffState || !isConnected || !zHomed"
+            [attr.placeholder]="zHomed ? '' : '?'"
+            (focus)="onFocus('z')"
+            (blur)="onBlur('z')"
+            (keyup.enter)="submitOnEnter('z')"
+          />
+        </div>
       </div>
     </div>
   </div>
 
+
   <div class="controls-container">
     <div class="movement-buttons">
       <!-- -X -->
-      <button class="direction-button" (click)="moveToolHeadRelative('x', -movementAmount)">
-        &#x3C;
+      <button
+        class="direction-button rotate-up"
+        (click)="moveToolHeadRelative('x', -movementAmount)"
+      >
+        <img
+          src="assets/SVG/arrow.svg"
+          alt="Move X-"
+          class="direction-icon"
+        />
       </button>
 
       <div class="movement-column">
         <!-- +Y -->
-        <button class="direction-button rotate-down" (click)="moveToolHeadRelative('y', movementAmount)">
-          &#x3C;
+        <button
+          class="direction-button rotate-right"
+          (click)="moveToolHeadRelative('y', movementAmount)"
+        >
+          <img
+            src="assets/SVG/arrow.svg"
+            alt="Move Y+"
+            class="direction-icon"
+          />
         </button>
         <div class="gap"></div>
         <!-- -Y -->
-        <button class="direction-button rotate-up" (click)="moveToolHeadRelative('y', -movementAmount)">
-          &#x3C;
+        <button
+          class="direction-button rotate-left"
+          (click)="moveToolHeadRelative('y', -movementAmount)"
+        >
+          <img
+            src="assets/SVG/arrow.svg"
+            alt="Move Y-"
+            class="direction-icon"
+          />
         </button>
       </div>
 
       <!-- +X -->
-      <button class="direction-button" (click)="moveToolHeadRelative('x', movementAmount)">
-        &#x3E;
+      <button
+        class="direction-button rotate-down"
+        (click)="moveToolHeadRelative('x', movementAmount)"
+      >
+        <img
+          src="assets/SVG/arrow.svg"
+          alt="Move X+"
+          class="direction-icon"
+        />
       </button>
 
       <div class="movement-column">
         <!-- +Z -->
-        <button class="direction-button rotate-down" (click)="moveToolHeadRelative('z', movementAmount)">
-          &#x3C;
+        <button
+          class="direction-button rotate-right"
+          (click)="moveToolHeadRelative('z', movementAmount)"
+        >
+          <img
+            src="assets/SVG/arrow.svg"
+            alt="Move Z+"
+            class="direction-icon"
+          />
         </button>
         <div class="gap"></div>
         <!-- -Z -->
-        <button class="direction-button rotate-up" (click)="moveToolHeadRelative('z', -movementAmount)">
-          &#x3C;
+        <button
+          class="direction-button rotate-left"
+          (click)="moveToolHeadRelative('z', -movementAmount)"
+        >
+          <img
+            src="assets/SVG/arrow.svg"
+            alt="Move Z-"
+            class="direction-icon"
+          />
         </button>
       </div>
     </div>
 
     <div class="home-buttons-grid">
-      <button class="home-axis-button" (click)="homeAxis('x')" [disabled]="!isConnected">HomeX</button>
-      <button class="home-axis-button" (click)="homeAxis('y')" [disabled]="!isConnected">HomeY</button>
-      <button class="home-axis-button" (click)="homeAxis('z')" [disabled]="!isConnected">HomeZ</button>
-      <button class="home-button" (click)="homeAllAxesInOrder()" [disabled]="!isConnected">Home</button>
-      <button class="home-button" [class.active]="motorOffState" (click)="motorOff()">MotorOff</button>
-      <button class="home-button" (click)="moveToolHeadAbsolute()" [disabled]="!isConnected">FirstTablet</button>
+      <!-- Home (Z → Y → X) -->
+      <button
+        class="home-button"
+        (click)="homeAllAxesInOrder()"
+        [class.long-pressed]="isHoming"
+      >
+        <img
+          src="assets/SVG/home.svg"
+          alt="Home"
+          class="home-icon"
+        />
+      </button>
+
+      <!-- First tablet position -->
+      <button
+        class="home-button"
+        (click)="moveToolHeadAbsolute()"
+      >
+        <img
+          src="assets/SVG/first_tablet_pos.svg"
+          alt="First tablet position"
+          class="home-icon"
+        />
+      </button>
+
+      <!-- Service position -->
+      <button
+        class="home-button"
+      >
+        <img
+          src="assets/SVG/service_pos.svg"
+          alt="Service position"
+          class="home-icon"
+        />
+      </button>
+
+      <!-- Autofocus -->
+      <button
+        class="home-button"
+      >
+        <img
+          src="assets/SVG/auto_focus.svg"
+          alt="Autofocus"
+          class="home-icon"
+        />
+      </button>
     </div>
   </div>
 
@@ -104,6 +195,18 @@
     <button [class.active]="movementAmount === 0.1" (click)="setMovementAmount(0.1)">0.1</button>
     <button [class.active]="movementAmount === 1" (click)="setMovementAmount(1)">1</button>
     <button [class.active]="movementAmount === 10" (click)="setMovementAmount(10)">10</button>
+    <!-- Tablet step: selects 12.5 mm as movementAmount -->
+    <button
+      class="tablet-step-button"
+      [class.active]="movementAmount === 12.5"
+      (click)="setMovementAmount(12.5)"
+    >
+      <img
+        src="assets/SVG/tablet.svg"
+        alt="Tablet step 12.5 mm"
+        class="tablet-icon"
+      />
+    </button>
     <button [class.active]="movementAmount === 25" (click)="setMovementAmount(25)">25</button>
     <button [class.active]="movementAmount === 50" (click)="setMovementAmount(50)">50</button>
     <button [class.active]="movementAmount === 100" (click)="setMovementAmount(100)">100</button>

@@ -73,21 +73,21 @@ export class MotionControl implements OnInit, OnDestroy {
   // ---------- Polling ----------
 
   startPollingPosition(): void {
-  if (this.positionPolling && !this.positionPolling.closed) {
-    return;
+    if (this.positionPolling && !this.positionPolling.closed) {
+      return;
+    }
+    this.positionPolling = interval(3000).subscribe(() => {
+      this.updateMotionPlatformPosition();
+    });
   }
-  this.positionPolling = interval(3000).subscribe(() => {
-    this.updateMotionPlatformPosition();
-  });
-}
 
 
   stopPositionPolling(): void {
-  if (this.positionPolling && !this.positionPolling.closed) {
-    this.positionPolling.unsubscribe();
+    if (this.positionPolling && !this.positionPolling.closed) {
+      this.positionPolling.unsubscribe();
+    }
+    this.positionPolling = undefined;
   }
-  this.positionPolling = undefined;
-}
 
   updateMotionPlatformPosition(): void {
     if (!(this.isConnected && !this.motorOffState)) return;
@@ -437,43 +437,43 @@ export class MotionControl implements OnInit, OnDestroy {
 
   async homeAllAxesInOrder(): Promise<void> {
 
-  if (this.isHoming) return;
+    if (this.isHoming) return;
 
-  this.isHoming = true;
-  this.stopPositionPolling();
+    this.isHoming = true;
+    this.stopPositionPolling();
 
-  const homeAxis = (axis: 'x' | 'y' | 'z') =>
-    firstValueFrom(this.http.post(`${this.BASE_URL}/home_toolhead`, { axes: [axis] }));
+    const homeAxis = (axis: 'x' | 'y' | 'z') =>
+      firstValueFrom(this.http.post(`${this.BASE_URL}/home_toolhead`, { axes: [axis] }));
 
-  try {
-    // ---------------- Z ----------------
-    await homeAxis('z');
-    this.zHomed = true;
-    this.zPosition = 0;
+    try {
+      // ---------------- Z ----------------
+      await homeAxis('z');
+      this.zHomed = true;
+      this.zPosition = 0;
 
-    // ---------------- Y ----------------
-    await homeAxis('y');
-    this.yHomed = true;
-    this.yPosition = 0;
+      // ---------------- Y ----------------
+      await homeAxis('y');
+      this.yHomed = true;
+      this.yPosition = 0;
 
-    // ---------------- X ----------------
-    await homeAxis('x');
-    this.xHomed = true;
-    this.xPosition = 0;
+      // ---------------- X ----------------
+      await homeAxis('x');
+      this.xHomed = true;
+      this.xPosition = 0;
 
-  } catch (err) {
-    console.error("Homing error:", err);
+    } catch (err) {
+      console.error("Homing error:", err);
 
-  } finally {
-    // ALWAYS executed — even when errors happened
-    this.isHoming = false;
+    } finally {
+      // ALWAYS executed — even when errors happened
+      this.isHoming = false;
 
-    // Restart polling safely
-    setTimeout(() => {
-      this.startPollingPosition();
-    }, 500);
+      // Restart polling safely
+      setTimeout(() => {
+        this.startPollingPosition();
+      }, 500);
+    }
   }
-}
 
 
   setMovementAmount(amount: number): void {

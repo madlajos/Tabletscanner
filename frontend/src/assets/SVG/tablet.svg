@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Réteg_2" data-name="Réteg 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 37.19 23.44">
+  <defs>
+    <style>
+      .cls-1, .cls-2 {
+        fill: #fff;
+      }
+
+      .cls-2, .cls-3 {
+        stroke: #1d1d1b;
+        stroke-miterlimit: 10;
+      }
+
+      .cls-3 {
+        fill: none;
+      }
+    </style>
+  </defs>
+  <g id="Réteg_1" data-name="Réteg 1">
+    <g>
+      <ellipse class="cls-2" cx="18.59" cy="14.83" rx="18.09" ry="8.11"/>
+      <rect class="cls-1" x=".5" y="8.45" width="36.19" height="6.73"/>
+      <ellipse class="cls-2" cx="18.59" cy="8.45" rx="18.09" ry="7.95"/>
+      <line class="cls-3" x1=".52" y1="15.24" x2=".51" y2="8.58"/>
+      <line class="cls-3" x1="36.69" y1="15.17" x2="36.69" y2="8.45"/>
+      <line class="cls-3" x1="12.38" y1="15.91" x2="24.74" y2=".97"/>
+    </g>
+  </g>
+</svg>

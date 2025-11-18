@@ -1,5 +1,5 @@
 <main class="app-grid">
-  <!-- Left column (1/5): Camera Settings placeholder -->
+  <!-- Left column (1/5): Camera Settings -->
   <section class="panel">
     <h3>Camera Settings</h3>
     <div class="placeholder">
@@ -12,11 +12,24 @@
     <app-image-viewer></app-image-viewer>
   </section>
 
-  <!-- Right column (1/5): Controls placeholder -->
-  <section class="panel">
-    <h3>Controls</h3>
-    <div class="placeholder">
-      <app-motion-control></app-motion-control>
+  <!-- Right column (1/5): Controls -->
+  <section class="controls-panel">
+    <div class="side-panel">
+      <div class="side-section">
+        <div class="side-section-header">
+          <span class="side-section-title">Asztalvezérlés</span>
+        </div>
+        <app-motion-control></app-motion-control>
+      </div>
+
+      <!-- you can add more sections here later if needed
+      <div class="side-section">
+        <div class="side-section-header">
+          <span class="side-section-title">Turntable Control</span>
+        </div>
+        <app-turntable-control></app-turntable-control>
+      </div>
+      -->
     </div>
   </section>
 </main>
