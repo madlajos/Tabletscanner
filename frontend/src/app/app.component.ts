@@ -11,8 +11,6 @@ import { FormsModule } from '@angular/forms';
 
 // Import standalone components
 import { ImageViewerComponent } from './features/image-viewer/image-viewer.component';
-import { ControlPanelComponent } from './features/control-panel/control-panel.component';
-import { TurntableControlComponent } from './features/turntable-control/turntable-control.component';
 import { ComportControlComponent } from './features/comport-control/comport-control.component';
 import { CameraControlComponent } from './features/camera-control/camera-control.component';
 import { ErrorPopupListComponent } from './components/error-popup-list/error-popup-list.component';
@@ -32,7 +30,6 @@ import { MotionControl } from './features/motion-control/motion-control';
 
     // Standalone components
     ImageViewerComponent,
-    ControlPanelComponent,
     MotionControl,
     ComportControlComponent,
     CameraControlComponent,

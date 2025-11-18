@@ -8,6 +8,15 @@ import { interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from '../../services/settings-updates.service';
 
+declare global {
+  interface Window {
+    electronAPI?: {
+      selectFolder: () => Promise<string>;
+    };
+  }
+}
+
+
 @Component({
   standalone: true,
   selector: 'app-camera-control',
@@ -15,6 +24,7 @@ import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from
   styleUrls: ['./camera-control.component.css'],
   imports: [CommonModule, FormsModule, MatIconModule]
 })
+
 
 export class CameraControlComponent implements OnInit, OnDestroy {
 
