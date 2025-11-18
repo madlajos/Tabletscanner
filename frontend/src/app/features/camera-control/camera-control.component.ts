@@ -8,6 +8,8 @@ import { interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from '../../services/settings-updates.service';
 
+
+// TODO: Temporary placement; Relocate this to filesaver feature
 declare global {
   interface Window {
     electronAPI?: {
