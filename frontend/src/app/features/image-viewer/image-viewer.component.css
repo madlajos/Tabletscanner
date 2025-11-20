@@ -7,15 +7,13 @@
   background-color: #333;
   padding: 5px;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-
   /* updated for single column layout */
   display: flex;
   flex-direction: column;
-  height: 85%;       /* fill available height */
+  height: 90%;       /* fill available height */
   aspect-ratio: 4508 / 4096;
   min-height: 0;      /* allow child to shrink inside flex parents */
   flex: 1 1 auto;     /* grow within the middle column */
-
   /* removed: flex: 1 1 50%; aspect-ratio; fixed height */
 }
 

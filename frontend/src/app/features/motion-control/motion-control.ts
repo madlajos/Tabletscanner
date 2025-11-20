@@ -20,6 +20,9 @@ import { firstValueFrom } from 'rxjs';
 export class MotionControl implements OnInit, OnDestroy {
   private readonly BASE_URL = 'http://localhost:5000/api';
 
+  barLightOn = false;
+  ringLightOn = false;
+
   movementAmount: number = 1;
 
   motorOffState: boolean = false;
@@ -232,6 +235,18 @@ export class MotionControl implements OnInit, OnDestroy {
           console.warn('Motion platform reconnection attempt failed (unexpected).', error);
         },
       });
+  }
+
+  toggleBarLight(): void {
+    this.barLightOn = !this.barLightOn;
+    // TODO: call backend to actually switch the hardware
+    // this.http.post(`${this.BASE_URL}/barlight`, { on: this.barLightOn }).subscribe();
+  }
+
+  toggleRingLight(): void {
+    this.ringLightOn = !this.ringLightOn;
+    // TODO: call backend for ring light
+    // this.http.post(`${this.BASE_URL}/ringlight`, { on: this.ringLightOn }).subscribe();
   }
 
   // ---------- Helpers ----------

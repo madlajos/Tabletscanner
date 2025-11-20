@@ -4,5 +4,5 @@
     gap: 10px; /* Adds space between each popup */
     align-items: center; /* Centers them */
     width: 100%; /* Makes sure it spans the available space */
-    margin-left: 20px;
+    margin-left: 0px;
   }
