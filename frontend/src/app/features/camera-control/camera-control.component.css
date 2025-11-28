@@ -2,27 +2,25 @@
   display: block;
   padding-left: 0px;
   padding-top: 12px;
-  padding-bottom: 6px;
   font-family: 'Arial', sans-serif;
 }
 
 .camera-settings-table {
-  width: 100%;
   border-collapse: collapse;
 }
 
 .camera-settings-table th,
 .camera-settings-table td {
-  text-align: center;
-  padding: 4px 6px;
+  text-align: left;
+  padding: 4px 10px;
   color: #fff;
   font-size: 12px;
 }
 
 /* Input Fields */
 .camera-settings-table input {
-  width: 90%;
-  padding: 3px;
+  width: 60%;
+  padding: 4px;
   font-size: 12px;
   border-radius: 3px;
   border: 1px solid #555;
@@ -179,6 +177,3 @@ td button:hover {
   width: auto;              /* override table’s 30% rule */
   text-align: left;
 }
-
-/* Optional: left-align the whole cell (removes centre rule) */
-.csv-dir-cell { text-align: left; }

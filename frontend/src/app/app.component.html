@@ -1,7 +1,13 @@
 <main class="app-grid">
   <!-- Left column (1/5): Camera Settings -->
   <section class="panel">
-    <h3>Camera Settings</h3>
+          <div class="side-section">
+        <div class="side-section-header">
+          <span class="side-section-title">Asztalvezérlés</span>
+        </div>
+        <app-motion-control></app-motion-control>
+      </div>
+
     <div class="placeholder">
       <app-camera-control></app-camera-control>
     </div>
@@ -15,15 +21,10 @@
   <!-- Right column (1/5): Controls -->
   <section class="controls-panel">
     <div class="side-panel">
-      <div class="side-section">
-        <div class="side-section-header">
-          <span class="side-section-title">Vezérlőpult</span>
-        </div>
-        <app-motion-control></app-motion-control>
-      </div>
+
 
       <div class="side-section">
-        <div class="side-section-header-automeasurement">
+        <div class="side-section-header">
           <span class="side-section-title">Auto measurement</span>
         </div>
 

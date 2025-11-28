@@ -287,31 +287,3 @@
   height: 20px;
   display: block;
 }
-
-.lamp-buttons {
-  margin-top: 20px;
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-}
-
-.lamp-button {
-  @extend %button-base;
-
-  aspect-ratio: 1.6 / 1;
-  width: 100px;
-  max-width: 45%;
-  font-size: 0;
-  padding: 0;
-  position: relative;   /* make sure they define their own hit area */
-}
-
-.lamp-button.active {
-  background-color: var(--main-blue, #1f4b8f);
-}
-
-.lamp-icon {
-  width: 54px;
-  height: 54px;
-  display: block;
-}

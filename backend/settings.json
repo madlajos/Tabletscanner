@@ -8,5 +8,12 @@
         "Gain": 10.0,
         "Gamma": 1.0,
         "FrameRate": 10.0
+    },
+    "other_settings": {
+        "objective": "50x",
+        "save_location": "C:/Users/madla/OneDrive/Documents",
+        "background_subtraction": true,
+        "save_settings": false,
+        "camera_settings_file": "D:/source/TrashSort/settings.pfs"
     }
 }

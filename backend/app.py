@@ -821,6 +821,31 @@ def update_other_settings():
 def health_check():
     return jsonify({"ready": True}), 200
 
+@app.route('/api/select-file', methods=['GET'])
+def select_file():
+    """
+    Opens a file selection dialog (for .pfs camera setting files) and returns the chosen path.
+    """
+    try:
+        # Simple Tkinter-based file dialog (similar spirit to select_folder_external)
+        root = tk.Tk()
+        root.withdraw()  # hide the main window
+        root.update()
+        file_path = filedialog.askopenfilename(
+            title="Select camera settings file (.pfs)",
+            filetypes=[("Pylon Feature Set", "*.pfs"), ("All files", "*.*")]
+        )
+        root.destroy()
+
+        if not file_path:
+            file_path = ""
+
+        return jsonify({"file": file_path}), 200
+
+    except Exception as e:
+        app.logger.exception("File selection failed")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/select-folder', methods=['GET'])
 def select_folder():
     folder = select_folder_external()  # opens a Tkinter folder dialog

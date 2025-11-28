@@ -11,76 +11,66 @@
         </tr>
       </thead>
       <tbody>
+        <!-- Objective -->
         <tr>
-          <td>Class 1 Limit (%)</td>
+          <td>Objective</td>
           <td>
-            <input type="number"
-                   [(ngModel)]="sizeLimits['class1']"
-                   (blur)="applySizeLimit('class1')"
-                   class="styled-input"
-                   [disabled]="measurementActive" />
+            <select [(ngModel)]="otherSettings['objective']" (change)="applyOtherSetting('objective')"
+              class="styled-input" [disabled]="measurementActive">
+              <option value="50x">50x</option>
+              <option value="100x">100x</option>
+            </select>
           </td>
         </tr>
+
+        <!-- Camera settings file (.pfs) -->
         <tr>
-          <td>Class 2 Limit (%)</td>
+          <td>Camera Settings File (.pfs)</td>
           <td>
-            <input type="number"
-                   [(ngModel)]="sizeLimits['class2']"
-                   (blur)="applySizeLimit('class2')"
-                   class="styled-input"
-                   [disabled]="measurementActive" />
-          </td>
-        </tr>
-        <tr>
-          <td>Class 1 Count Limit</td>
-          <td>
-            <input type="number"
-                   [(ngModel)]="sizeLimits['ng_limit']"
-                   (blur)="applySizeLimit('ng_limit')"
-                   class="styled-input"
-                   [disabled]="measurementActive" />
-          </td>
-        </tr>
-        <tr>
-          <td>Save Data to CSV</td>
-          <td>
-            <input type="checkbox"
-                   [(ngModel)]="saveSettings['save_csv']"
-                   (change)="applySaveSetting('save_csv')"
-                   class="styled-input"
-                   [disabled]="measurementActive" />
-          </td>
-        </tr>
-        <tr>
-          <td colspan="2" class="csv-dir-cell">
             <div class="csv-input-wrapper">
-              <!-- Small browse button first -->
-              <button
-                type="button"
-                (click)="openFolderBrowser()"
-                [disabled]="measurementActive"
+              <button type="button" (click)="openCameraFileBrowser()" [disabled]="measurementActive"
+                class="csv-dir-btn">
+                <mat-icon>attach_file</mat-icon>
+              </button>
+
+              <input type="text" class="styled-input dir-display" [(ngModel)]="otherSettings['camera_settings_file']"
+                (blur)="applyOtherSetting('camera_settings_file')" [disabled]="measurementActive" readonly />
+            </div>
+          </td>
+        </tr>
+
+        <!-- Save location (folder for images) -->
+        <tr>
+          <td>Save Location</td>
+          <td class="csv-dir-cell">
+            <div class="csv-input-wrapper">
+              <button type="button" (click)="openImageFolderBrowser()" [disabled]="measurementActive"
                 class="csv-dir-btn">
                 <mat-icon>folder_open</mat-icon>
               </button>
 
-              <!-- Path textbox second -->
-              <input
-                type="text"
-                class="styled-input dir-display"
-                [(ngModel)]="saveSettings['csv_dir']"
-                [disabled]="measurementActive"
-                readonly />
+              <input type="text" class="styled-input dir-display" [(ngModel)]="otherSettings['save_location']"
+                (blur)="applyOtherSetting('save_location')" [disabled]="measurementActive" readonly />
             </div>
           </td>
         </tr>
+
+        <!-- Background subtraction -->
         <tr>
-          <td>Save Analysed Images</td>
+          <td>Background Subtraction</td>
           <td>
-            <input type="checkbox"
-                   [(ngModel)]="saveSettings['save_images']"
-                   (change)="applySaveSetting('save_images')"
-                   class="styled-input"
-                   [disabled]="measurementActive" />
+            <input type="checkbox" [(ngModel)]="otherSettings['background_subtraction']"
+              (change)="applyOtherSetting('background_subtraction')" class="styled-input"
+              [disabled]="measurementActive" />
+          </td>
+        </tr>
+
+        <!-- Save settings -->
+        <tr>
+          <td>Save Settings</td>
+          <td>
+            <input type="checkbox" [(ngModel)]="otherSettings['save_settings']"
+              (change)="applyOtherSetting('save_settings')" class="styled-input" [disabled]="measurementActive" />
           </td>
         </tr>
       </tbody>
@@ -95,102 +85,86 @@
     <h3>Kamerabeállítások</h3>
 
     <table class="camera-settings-table">
-      <thead>
-        <tr>
-          <th>Paraméter</th>
-          <th>Érték</th>
-        </tr>
-      </thead>
       <tbody>
         <tr>
           <td>Szélesség</td>
           <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.Width"
-                   (blur)="applySetting('Width')"
-                   [disabled]="!isConnected">
+            <input type="text" [(ngModel)]="cameraSettings.Width" (blur)="applySetting('Width')"
+              [disabled]="!isConnected">
           </td>
-        </tr>
-        <tr>
-          <td>Magasság</td>
+
+          
           <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.Height"
-                   (blur)="applySetting('Height')"
-                   [disabled]="!isConnected">
-          </td>
-        </tr>
-        <tr>
-          <td>X Eltolás</td>
-          <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.OffsetX"
-                   (blur)="applySetting('OffsetX')"
-                   [disabled]="!isConnected">
-          </td>
-        </tr>
-        <tr>
-          <td>Y Eltolás</td>
-          <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.OffsetY"
-                   (blur)="applySetting('OffsetY')"
-                   [disabled]="!isConnected">
-          </td>
-        </tr>
-        <tr>
-          <td>Expozíciós idő</td>
-          <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.ExposureTime"
-                   (blur)="applySetting('ExposureTime')"
-                   [disabled]="!isConnected">
-          </td>
-        </tr>
-        <tr>
-          <td>Erősítés<source media="(min-width: )" srcset="" type="image/"></td>
-          <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.Gain"
-                   (blur)="applySetting('Gain')"
-                   [disabled]="!isConnected">
-          </td>
-        </tr>
-        <tr>
-          <td>Gamma</td>
-          <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.Gamma"
-                   (blur)="applySetting('Gamma')"
-                   [disabled]="!isConnected">
-          </td>
-        </tr>
-        <tr>
-          <td>FPS</td>
-          <td>
-            <input type="text"
-                   [(ngModel)]="cameraSettings.FrameRate"
-                   (blur)="applySetting('FrameRate')"
-                   [disabled]="!isConnected">
+            
           </td>
         </tr>
 
-        <!-- Controls -->
         <tr>
-          <td>Vezérlés</td>
+          <td>Magasság</td>
           <td>
+            <input type="text" [(ngModel)]="cameraSettings.Height" (blur)="applySetting('Height')"
+              [disabled]="!isConnected">
+          </td>
+
+          <td>Záridő</td>
+                    <td>
+            <input type="text" [(ngModel)]="cameraSettings.ExposureTime" (blur)="applySetting('ExposureTime')"
+              [disabled]="!isConnected">
+          </td>
+                    <td>
+            <input type="text" [(ngModel)]="cameraSettings.ExposureTime" (blur)="applySetting('ExposureTime')"
+              [disabled]="!isConnected">
+          </td>
+        </tr>
+
+        <tr>
+          <td>X Eltolás</td>
+          <td>
+            <input type="text" [(ngModel)]="cameraSettings.OffsetX" (blur)="applySetting('OffsetX')"
+              [disabled]="!isConnected">
+          </td>
+
+          <td>Erősítés</td>
+          <td>
+            <input type="text" [(ngModel)]="cameraSettings.Gain" (blur)="applySetting('Gain')"
+              [disabled]="!isConnected">
+          </td>
+                   <td>
+            <input type="text" [(ngModel)]="cameraSettings.Gain" (blur)="applySetting('Gain')"
+              [disabled]="!isConnected">
+          </td>
+        </tr>
+
+        <tr>
+          <td>Y Eltolás</td>
+          <td>
+            <input type="text" [(ngModel)]="cameraSettings.OffsetY" (blur)="applySetting('OffsetY')"
+              [disabled]="!isConnected">
+          </td>
+
+          <td>FPS</td>
+                    <td>
+            <input type="text" [(ngModel)]="cameraSettings.Gamma" (blur)="applySetting('Gamma')"
+              [disabled]="!isConnected">
+          </td>
+                    <td>
+            <input type="text" [(ngModel)]="cameraSettings.Gamma" (blur)="applySetting('Gamma')"
+              [disabled]="!isConnected">
+          </td>
+        </tr>
+
+        <!-- Controls row spanning the whole width -->
+        <tr>
+          <td colspan="5">
             <div class="button-group">
-              <button type="button"
-                      (click)="toggleConnection()"
-                      [ngClass]="{'connect-button': true, 'connected': isConnected}">
+              <button type="button" (click)="toggleConnection()"
+                [ngClass]="{ 'connect-button': true, 'connected': isConnected }">
                 <mat-icon *ngIf="isConnected; else connectIcon">link_off</mat-icon>
                 <ng-template #connectIcon><mat-icon>link</mat-icon></ng-template>
               </button>
 
-              <button type="button"
-                      (click)="toggleStream()"
-                      [ngClass]="{'stream-button': true, 'streaming': isStreaming}"
-                      [disabled]="!isConnected">
+              <button type="button" (click)="toggleStream()"
+                [ngClass]="{ 'stream-button': true, 'streaming': isStreaming }" [disabled]="!isConnected">
                 <mat-icon *ngIf="isStreaming; else playIcon">stop</mat-icon>
                 <ng-template #playIcon><mat-icon>play_arrow</mat-icon></ng-template>
               </button>

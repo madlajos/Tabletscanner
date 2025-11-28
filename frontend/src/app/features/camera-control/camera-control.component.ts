@@ -14,6 +14,7 @@ declare global {
   interface Window {
     electronAPI?: {
       selectFolder: () => Promise<string>;
+      selectFile: () => Promise<string>;
     };
   }
 }
@@ -48,15 +49,22 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   // Settings
   cameraSettings: any = {};
 
-  // TODO: refactor to suit current settigns
-  saveSettings: SaveSettings = {
-    save_csv: false,
-    save_images: false,
-    csv_dir: ""
+  otherSettings = {
+    objective: '50x',
+    camera_settings_file: '',
+    save_location: 'C:\\Users\\Public\\Pictures',  // default folder
+    background_subtraction: false,
+    save_settings: false
   };
 
   loadedFileName: string = '';
   saveDirectory: string = 'C:\\Users\\Public\\Pictures';
+
+  saveSettings: SaveSettings = {
+    save_csv: false,
+    save_images: false,
+    csv_dir: 'C:\\Users\\Public\\Pictures'
+  };
 
   // TODO: remove these after refactor
   mainCameraSettings: any = this.cameraSettings;
@@ -120,33 +128,23 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     });
 
     // TODO: Refactor to set current 'other' settings
-    this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
+    this.http.get<{ other_settings: any }>(`${this.BASE_URL}/get-other-settings?category=other_settings`)
       .subscribe({
-        next: response => {
-          if (response && response.size_limits) {
-            // this.sizeLimits = response.size_limits;
-            // Publish the loaded settings to the shared service.
-            // this.settingsUpdatesService.updateSizeLimits(this.sizeLimits);
-            // console.log("Loaded size limits from backend:", this.sizeLimits);
+        next: res => {
+          if (res.other_settings) {
+            // Merge stored settings into our object
+            this.otherSettings = {
+              ...this.otherSettings,
+              ...res.other_settings
+            };
+            // Apply save location to shared service for consistency
+            if (this.otherSettings.save_location) {
+              this.sharedService.setSaveDirectory(this.otherSettings.save_location);
+            }
           }
         },
-        error: error => {
-          console.error("Error loading size limits from backend:", error);
-        }
-      });
-
-    this.http.get<{ save_settings: SaveSettings }>(`${this.BASE_URL}/get-other-settings?category=save_settings`)
-      .subscribe({
-        next: response => {
-          if (response && response.save_settings) {
-            this.saveSettings = response.save_settings;
-            if (!this.saveSettings.csv_dir) this.saveSettings.csv_dir = "";
-            this.settingsUpdatesService.updateSaveSettings(this.saveSettings);
-            console.log("Loaded Save Settings from backend:");
-          }
-        },
-        error: error => {
-          console.error("Error loading Save Settings from backend:", error);
+        error: err => {
+          console.warn('No saved other_settings (using defaults).', err);
         }
       });
   }
@@ -217,6 +215,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       });
   }
 
+
+
   // TODO: Refactor to load current 'other' settings
   loadOtherSettings(): void {
     this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
@@ -246,6 +246,82 @@ export class CameraControlComponent implements OnInit, OnDestroy {
           console.error("Error loading save settings from backend:", error);
         }
       });
+  }
+
+  applyOtherSetting(setting: string): void {
+    // Determine value to send (cast booleans to actual boolean type)
+    let value = this.otherSettings[setting as keyof typeof this.otherSettings];
+    if (typeof value === 'boolean') {
+      value = Boolean(value);
+    }
+    // Send update to backend
+    this.http.post(`${this.BASE_URL}/update-other-settings`, {
+      category: 'other_settings',
+      setting_name: setting,
+      setting_value: value
+    }).subscribe({
+      next: resp => {
+        console.log(`Updated ${setting} = ${value} in settings.json`);
+        // If the save location was changed, update shared service as well
+        if (setting === 'save_location') {
+          this.sharedService.setSaveDirectory(value as string);
+        }
+      },
+      error: err => {
+        console.error(`Failed to update setting ${setting}:`, err);
+      }
+    });
+  }
+
+  async openCameraFileBrowser(): Promise<void> {
+    if (window.electronAPI?.selectFile) {
+      // Electron environment: use a dialog to pick a .pfs file
+      try {
+        const filePath = await window.electronAPI.selectFile();  // hypothetical API
+        if (filePath) {
+          this.otherSettings.camera_settings_file = filePath;
+          this.applyOtherSetting('camera_settings_file');
+        }
+      } catch (e) {
+        console.error('File selection error:', e);
+      }
+    } else {
+      // Fallback: (could implement a backend route similar to select-folder)
+      this.http.get<{ file: string }>(`${this.BASE_URL}/select-file`).subscribe({
+        next: resp => {
+          if (resp.file) {
+            this.otherSettings.camera_settings_file = resp.file;
+            this.applyOtherSetting('camera_settings_file');
+          }
+        },
+        error: err => console.error('File dialog failed:', err)
+      });
+    }
+  }
+
+  async openImageFolderBrowser(): Promise<void> {
+    // Similar to openFolderBrowser, use existing backend dialog to choose folder
+    if (window.electronAPI?.selectFolder) {
+      try {
+        const folder = await window.electronAPI.selectFolder();
+        if (folder) {
+          this.otherSettings.save_location = folder;
+          this.applyOtherSetting('save_location');
+        }
+      } catch (e) {
+        console.error('Folder selection error:', e);
+      }
+    } else {
+      this.http.get<{ folder: string }>(`${this.BASE_URL}/select-folder`).subscribe({
+        next: resp => {
+          if (resp.folder) {
+            this.otherSettings.save_location = resp.folder;
+            this.applyOtherSetting('save_location');
+          }
+        },
+        error: err => console.error('Folder dialog failed:', err)
+      });
+    }
   }
 
   startConnectionPolling(intervalMs: number = 1000): void {
