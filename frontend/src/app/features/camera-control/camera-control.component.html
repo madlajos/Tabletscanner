@@ -2,18 +2,12 @@
 
   <!-- User Settings -->
   <section class="user-settings">
-    <h3>User Settings</h3>
+    <h3>Beállítások</h3>
     <table class="user-settings-table">
-      <thead>
-        <tr>
-          <th>Parameter</th>
-          <th>Value</th>
-        </tr>
-      </thead>
       <tbody>
         <!-- Objective -->
         <tr>
-          <td>Objective</td>
+          <td>Objektív</td>
           <td>
             <select [(ngModel)]="otherSettings['objective']" (change)="applyOtherSetting('objective')"
               class="styled-input" [disabled]="measurementActive">
@@ -21,56 +15,47 @@
               <option value="100x">100x</option>
             </select>
           </td>
-        </tr>
+
+<td>Háttérlevonás</td>
+<td>
+  <input
+    type="checkbox"
+    class="styled-checkbox"
+    [(ngModel)]="otherSettings['background_subtraction']"
+    (change)="applyOtherSetting('background_subtraction')"
+    [disabled]="measurementActive"
+  />
+</td>
+
+<td>Beáll ment</td>
+<td>
+  <input
+    type="checkbox"
+    class="styled-checkbox"
+    [(ngModel)]="otherSettings['save_settings']"
+    (change)="applyOtherSetting('save_settings')"
+    [disabled]="measurementActive"
+  />
+</td>
 
         <!-- Camera settings file (.pfs) -->
-        <tr>
-          <td>Camera Settings File (.pfs)</td>
-          <td>
-            <div class="csv-input-wrapper">
-              <button type="button" (click)="openCameraFileBrowser()" [disabled]="measurementActive"
-                class="csv-dir-btn">
-                <mat-icon>attach_file</mat-icon>
-              </button>
 
-              <input type="text" class="styled-input dir-display" [(ngModel)]="otherSettings['camera_settings_file']"
-                (blur)="applyOtherSetting('camera_settings_file')" [disabled]="measurementActive" readonly />
-            </div>
-          </td>
-        </tr>
 
         <!-- Save location (folder for images) -->
         <tr>
-          <td>Save Location</td>
-          <td class="csv-dir-cell">
+          <td>Mentés helye</td>
+          <td colspan="5" class="csv-dir-cell">
             <div class="csv-input-wrapper">
-              <button type="button" (click)="openImageFolderBrowser()" [disabled]="measurementActive"
-                class="csv-dir-btn">
-                <mat-icon>folder_open</mat-icon>
-              </button>
 
               <input type="text" class="styled-input dir-display" [(ngModel)]="otherSettings['save_location']"
                 (blur)="applyOtherSetting('save_location')" [disabled]="measurementActive" readonly />
+
+              <button type="button" (click)="openImageFolderBrowser()" [disabled]="measurementActive"
+                class="csv-dir-btn">
+                <mat-icon>folder </mat-icon>
+              </button>
+
             </div>
-          </td>
-        </tr>
-
-        <!-- Background subtraction -->
-        <tr>
-          <td>Background Subtraction</td>
-          <td>
-            <input type="checkbox" [(ngModel)]="otherSettings['background_subtraction']"
-              (change)="applyOtherSetting('background_subtraction')" class="styled-input"
-              [disabled]="measurementActive" />
-          </td>
-        </tr>
-
-        <!-- Save settings -->
-        <tr>
-          <td>Save Settings</td>
-          <td>
-            <input type="checkbox" [(ngModel)]="otherSettings['save_settings']"
-              (change)="applyOtherSetting('save_settings')" class="styled-input" [disabled]="measurementActive" />
           </td>
         </tr>
       </tbody>
@@ -93,9 +78,13 @@
               [disabled]="!isConnected">
           </td>
 
-          
           <td>
-            
+          </td>
+          <td class="lamp-cell">
+            <img class="lamp-icon" src="assets/SVG/ringlight_off.svg" alt="Dome light" />
+          </td>
+          <td class="lamp-cell">
+            <img class="lamp-icon" src="assets/SVG/barlight_off.svg" alt="Bar light" />
           </td>
         </tr>
 
@@ -107,11 +96,11 @@
           </td>
 
           <td>Záridő</td>
-                    <td>
+          <td>
             <input type="text" [(ngModel)]="cameraSettings.ExposureTime" (blur)="applySetting('ExposureTime')"
               [disabled]="!isConnected">
           </td>
-                    <td>
+          <td>
             <input type="text" [(ngModel)]="cameraSettings.ExposureTime" (blur)="applySetting('ExposureTime')"
               [disabled]="!isConnected">
           </td>
@@ -129,7 +118,7 @@
             <input type="text" [(ngModel)]="cameraSettings.Gain" (blur)="applySetting('Gain')"
               [disabled]="!isConnected">
           </td>
-                   <td>
+          <td>
             <input type="text" [(ngModel)]="cameraSettings.Gain" (blur)="applySetting('Gain')"
               [disabled]="!isConnected">
           </td>
@@ -142,16 +131,42 @@
               [disabled]="!isConnected">
           </td>
 
-          <td>FPS</td>
-                    <td>
+          <td>Gamma</td>
+          <td>
             <input type="text" [(ngModel)]="cameraSettings.Gamma" (blur)="applySetting('Gamma')"
               [disabled]="!isConnected">
           </td>
-                    <td>
+          <td>
             <input type="text" [(ngModel)]="cameraSettings.Gamma" (blur)="applySetting('Gamma')"
               [disabled]="!isConnected">
           </td>
         </tr>
+
+
+
+        <tr>
+          <td>Beállítás</td>
+          <td colspan="5">
+            <div class="csv-input-wrapper">
+
+
+              <input type="text" class="styled-input dir-display" [(ngModel)]="otherSettings['camera_settings_file']"
+                (blur)="applyOtherSetting('camera_settings_file')" [disabled]="measurementActive" readonly />
+
+              <button class="settings-button" (click)="openCameraFileBrowser()" [disabled]="measurementActive">
+                <mat-icon>save_settings</mat-icon>
+              </button>
+
+              <button class="settings-button" (click)="openCameraFileBrowser()" [disabled]="measurementActive">
+                <mat-icon> folder </mat-icon>
+              </button>
+
+            </div>
+          </td>
+        </tr>
+
+
+
 
         <!-- Controls row spanning the whole width -->
         <tr>

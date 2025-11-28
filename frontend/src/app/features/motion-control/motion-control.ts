@@ -47,6 +47,9 @@ export class MotionControl implements OnInit, OnDestroy {
   isEditingY: boolean = false;
   isEditingZ: boolean = false;
 
+  ringLightOn: boolean = false;
+  barLightOn: boolean = false;
+
 
   isHoming = false;
   private readonly HOMING_TIMEOUT_MS = 10000;
@@ -235,6 +238,21 @@ export class MotionControl implements OnInit, OnDestroy {
   }
 
   // ---------- Helpers ----------
+
+  toggleBarLight(): void {
+    if (this.barLightOn == false)
+      this.barLightOn = true
+    else
+      this.barLightOn = false
+  }
+
+
+  toggleRingLight(): void {
+    if (this.ringLightOn == false)
+      this.ringLightOn = true
+    else
+      this.ringLightOn = false
+  }
 
   resetMotorOffState(): void {
     // Many firmwares auto-enable steppers on the first move; we clear the UI flag.

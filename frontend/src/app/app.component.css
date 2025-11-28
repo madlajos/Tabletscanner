@@ -1,7 +1,14 @@
 :host {
-  display: block;
+  display: contents;
   height: 100vh;            /* full viewport height */
   overflow: hidden;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background-color: #111827; /* your dark color */
 }
 
 .app-grid {
@@ -15,23 +22,13 @@
 
 /* Left and middle cards */
 .panel,
-.viewer {
-  background: #212529;
-  border: 1px solid #2e2e2e;
+.viewer,
+.controls-panel {
+  background: #292929;
+  border: 1px solid #494949;
   border-radius: 8px;
   padding: 12px;
   min-height: 0;             /* allow grid child to shrink */
-}
-
-/* Right card: controls panel – same base look as other cards */
-.controls-panel {
-  background: #212529;
-  border: 1px solid #2e2e2e;
-  border-radius: 8px;
-  padding: 12px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 /* Left/Right placeholders */
@@ -53,16 +50,6 @@
   display: block;
   width: 100%;
   height: 100%;
-}
-
-/* Container for all sections (scrollable if needed) */
-.side-panel {
-  padding: 4px 0 0;
-  overflow-y: auto;
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
 /* Individual section in the controls panel */

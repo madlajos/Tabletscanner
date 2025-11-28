@@ -1,16 +1,12 @@
 <main class="app-grid">
   <!-- Left column (1/5): Camera Settings -->
   <section class="panel">
-          <div class="side-section">
-        <div class="side-section-header">
-          <span class="side-section-title">Asztalvezérlés</span>
-        </div>
-        <app-motion-control></app-motion-control>
+      <div class="side-section-header">
+        <span class="side-section-title">Vezérlőpult</span>
       </div>
+      <app-motion-control></app-motion-control>
 
-    <div class="placeholder">
       <app-camera-control></app-camera-control>
-    </div>
   </section>
 
   <!-- Middle column (3/5): Live view -->
@@ -23,17 +19,12 @@
     <div class="side-panel">
 
 
-      <div class="side-section">
         <div class="side-section-header">
           <span class="side-section-title">Auto measurement</span>
         </div>
 
-      </div>
-
-
-      <div class="side-section">
         <app-error-popup-list></app-error-popup-list>
-      </div>
+
 
     </div>
   </section>
