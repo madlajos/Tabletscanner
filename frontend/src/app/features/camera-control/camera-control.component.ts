@@ -77,18 +77,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   private settingsLoaded: boolean = false;
 
-  settingOrder: string[] = [
-    'Width',
-    'Height',
-    'OffsetX',
-    'OffsetY',
-    'ExposureTime',
-    'Gain',
-    'Gamma',
-    'FrameRate'
-  ];
-
-
   measurementActive: boolean = false;
   private measurementActiveSub!: Subscription;
 
@@ -214,8 +202,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         },
       });
   }
-
-
 
   // TODO: Refactor to load current 'other' settings
   loadOtherSettings(): void {
@@ -517,41 +503,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         console.error(`Error applying setting for camera:`, error);
       }
     );
-  }
-
-
-  applySizeLimit(limitName: 'class1' | 'class2' | 'ng_limit'): void {
-    let value = Number(this.sizeLimits[limitName]); // convert to number explicitly
-    console.log(`Applying size limit ${limitName}: ${value}`);
-
-    this.http.post(`${this.BASE_URL}/update-other-settings`, {
-      category: 'size_limits',
-      setting_name: limitName,
-      setting_value: value
-    }).subscribe({
-      next: (response: any) => {
-        console.log(`Size limit applied successfully:`, response);
-        // Update the local value with the response.
-        this.sizeLimits[limitName] = Number(response.updated_value);
-
-        // Optionally, reload all size limits from backend.
-        this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
-          .subscribe({
-            next: resp => {
-              if (resp && resp.size_limits) {
-                this.sizeLimits = resp.size_limits;
-                console.log("Reloaded size limits:", this.sizeLimits);
-                // Publish the updated limits to the shared service.
-                this.settingsUpdatesService.updateSizeLimits(this.sizeLimits);
-              }
-            },
-            error: err => console.error("Error reloading settings:", err)
-          });
-      },
-      error: error => {
-        console.error(`Error applying size limit ${limitName}:`, error);
-      }
-    });
   }
 
   applySaveSetting<K extends keyof SaveSettings>(settingName: K): void {

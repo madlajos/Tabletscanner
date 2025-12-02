@@ -164,9 +164,8 @@ td button:hover {
 
 /* Shrink the button only here */
 .csv-dir-btn {
-  padding: 2px 6px;         /* smaller than generic td button */
-  font-size: 11px;
-  max-width: 200px;          /* icon still visible but tight */
+  height: 26px;
+  width: 44px;          /* icon still visible but tight */
   flex: none;               /* don’t grow/shrink */
 }
 
@@ -205,7 +204,7 @@ td button:hover {
 .camera-settings-table td,
 .user-settings-table th,
 .user-settings-table td {
-  padding: 6px 8px;
+  padding: 6px 6px;
   font-size: 12px;
 }
 
@@ -252,5 +251,42 @@ td button:hover {
 .user-settings-table input.styled-checkbox:disabled,
 .camera-settings-table input.styled-checkbox:disabled {
   opacity: 0.5;
+  cursor: default;
+}
+
+
+/* Styled dropdown a User Settings táblában */
+.user-settings-table select.styled-input {
+  width: 100%;
+  padding: 3px 24px 3px 6px;  /* jobb oldalt több hely a nyíl miatt */
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #333;
+  color: #fff;
+  box-sizing: border-box;
+  cursor: pointer;
+
+  /* natív nyíl elrejtése, saját nyíl rajzolása */
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23ffffff' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 10px 6px;
+}
+
+/* fókusz – mint a gomboknál/mezőknél egy kis kiemelés */
+.user-settings-table select.styled-input:focus {
+  outline: none;
+  border-color: #2a628c;
+  box-shadow: 0 0 0 1px rgba(42, 98, 140, 0.7);
+}
+
+/* disabled állapot */
+.user-settings-table select.styled-input:disabled {
+  opacity: 0.6;
   cursor: default;
 }

@@ -20,7 +20,7 @@ body {
   gap: 12px;                /* small gap between columns */
 }
 
-/* Left and middle cards */
+/* Base styling for left, middle, and right panels */
 .panel,
 .viewer,
 .controls-panel {
@@ -28,42 +28,41 @@ body {
   border: 1px solid #494949;
   border-radius: 8px;
   padding: 12px;
-  min-height: 0;             /* allow grid child to shrink */
+  min-height: 0;
 }
 
-/* Left/Right placeholders */
+/* Left/Right placeholder text */
 .panel .placeholder {
-  color: #6b7280;            /* gray-500 */
+  color: #6b7280;
   font-size: 0.95rem;
 }
 
-/* Middle (live view) column fills available space */
+/* ----- Middle column: viewer ----- */
 .viewer {
   display: flex;
-  align-items: stretch;
-  justify-content: center;
-  overflow: hidden;          /* prevent scrollbars while viewer scales */
+  justify-content: center;     /* center horizontally */
+  align-items: center;         /* center vertically */
+  overflow: hidden;                 /* optional: shrink slightly for balance */
+  margin: 0 auto;              /* ensure horizontal centering */
 }
 
-/* Make the image viewer fill its card */
+/* app-image-viewer fills and scales within viewer */
 .viewer app-image-viewer {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
 }
 
-/* Individual section in the controls panel */
+/* Right-side panel sections */
 .side-section {
   border-radius: 6px;
   padding: 8px 8px 10px;
 }
 
-/* Header bar for each section */
 .side-section-header {
-  padding-bottom: 10px;
-  padding-top: 10px;
+  padding: 10px 20px;
   background-color: #3a3a3a;
-  padding-left:  20px;
   text-align: center;
 }
 

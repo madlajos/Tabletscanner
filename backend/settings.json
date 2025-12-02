@@ -5,13 +5,13 @@
         "OffsetX": 0,
         "OffsetY": 0,
         "ExposureTime": 100000.0,
-        "Gain": 10.0,
+        "Gain": 20.0,
         "Gamma": 1.0,
         "FrameRate": 10.0
     },
     "other_settings": {
         "objective": "100x",
-        "save_location": "C:/Users/madla/OneDrive/Documents",
+        "save_location": "D:/",
         "background_subtraction": true,
         "save_settings": true,
         "camera_settings_file": "D:/source/TrashSort/settings.pfs"

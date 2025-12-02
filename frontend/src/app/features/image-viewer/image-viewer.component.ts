@@ -1,34 +1,58 @@
-import { CommonModule } from '@angular/common';
-import { Component, ViewChild, ElementRef, AfterViewInit, OnDestroy } from '@angular/core';
-import { SharedService } from '../../shared.service';
+import {
+  Component,
+  ViewChild,
+  ElementRef,
+  AfterViewInit,
+  OnDestroy
+} from '@angular/core';
+import {
+  CommonModule,
+  NgIf,
+  NgForOf,
+  NgClass
+} from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
+import { MatIconModule } from '@angular/material/icon';
+import { SharedService } from '../../shared.service';
+
+interface SavedImage {
+  path: string;       // full-size image path (for opening in viewer)
+  thumbPath?: string; // thumbnail image path on disk
+  url: string;        // URL used in gallery (thumbnail)
+}
 
 @Component({
   standalone: true,
   selector: 'app-image-viewer',
   templateUrl: './image-viewer.component.html',
   styleUrls: ['./image-viewer.component.css'],
-  imports: [CommonModule]
+  imports: [CommonModule, NgIf, NgForOf, NgClass, MatIconModule]
 })
 export class ImageViewerComponent implements AfterViewInit, OnDestroy {
-  @ViewChild('videoContainer', { static: false }) videoContainer!: ElementRef<HTMLDivElement>;
+  @ViewChild('videoContainer', { static: false })
+  videoContainer!: ElementRef<HTMLDivElement>;
 
   isStreaming = false;
   private streamSub?: Subscription;
 
+  // Thumbnails of recently saved images
+  savedImages: SavedImage[] = [];
+  private readonly MAX_GALLERY_ITEMS = 6;  // smaller list = less work
+
   private readonly BASE_URL = 'http://localhost:5000/api';
 
-  constructor(public http: HttpClient, public sharedService: SharedService) {}
+  constructor(
+    public http: HttpClient,
+    public sharedService: SharedService
+  ) { }
 
   ngAfterViewInit(): void {
-    // 1) Initialize from the service getter so the UI reflects current state immediately
     if (typeof (this.sharedService as any).getCameraStreamStatus === 'function') {
       this.isStreaming = (this.sharedService as any).getCameraStreamStatus();
       this.updateStreamDisplay();
     }
 
-    // 2) Subscribe to streaming changes (prefer isStreaming$, else fall back to cameraStreamStatus$)
     const stream$ =
       (this.sharedService as any).isStreaming$ ||
       (this.sharedService as any).cameraStreamStatus$;
@@ -40,7 +64,9 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
         this.updateStreamDisplay();
       });
     } else {
-      console.warn('No streaming observable found on SharedService (isStreaming$ / cameraStreamStatus$).');
+      console.warn(
+        'No streaming observable found on SharedService (isStreaming$ / cameraStreamStatus$).'
+      );
     }
   }
 
@@ -67,7 +93,7 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
         img.style.objectFit = 'contain';
         container.appendChild(img);
       }
-      img.src = streamUrl; // <img> loads the MJPEG
+      img.src = streamUrl;
       img.onload = () => console.log('Stream loaded.');
       img.onerror = (err) => console.error('Failed to load stream.', err);
     } else {
@@ -76,5 +102,70 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
         img.remove();
       }
     }
+  }
+
+  captureImage(): void {
+    const targetDir = (this.sharedService as any).getSaveDirectory
+      ? (this.sharedService as any).getSaveDirectory()
+      : null;
+
+    if (!targetDir) {
+      console.warn('No save directory set. Cannot capture image.');
+      return;
+    }
+
+    this.http.post<{
+      message?: string;
+      path?: string;
+      error?: string;
+      thumb_path?: string;
+    }>(
+      `${this.BASE_URL}/save_raw_image`,
+      { target_folder: targetDir }
+    ).subscribe({
+      next: (res) => {
+        if (res?.path) {
+          console.log(`Image saved to: ${res.path}`);
+
+          const thumbPath = res.thumb_path || res.path;
+          const img: SavedImage = {
+            path: res.path,
+            thumbPath,
+            url: `${this.BASE_URL}/get_image?path=${encodeURIComponent(thumbPath)}`
+          };
+
+          this.savedImages.unshift(img);
+          if (this.savedImages.length > this.MAX_GALLERY_ITEMS) {
+            this.savedImages.pop();
+          }
+        } else if (res?.message) {
+          console.log(`Save image response: ${res.message}`);
+        } else {
+          console.log('Save image request completed with no path.');
+        }
+      },
+      error: (err) => {
+        console.error('Failed to save image.', err);
+      }
+    });
+  }
+
+  openImage(img: SavedImage): void {
+    this.http.post(
+      `${this.BASE_URL}/open_image`,
+      { path: img.path }
+    ).subscribe({
+      next: () => {
+        console.log('Opened image:', img.path);
+      },
+      error: (err) => {
+        console.error('Failed to open image.', err);
+      }
+    });
+  }
+
+  // For *ngFor to avoid re-rendering everything on each change
+  trackByPath(index: number, img: SavedImage): string {
+    return img.path;
   }
 }

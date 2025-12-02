@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, send_file
 from flask_cors import CORS
 import cv2
 import time
@@ -727,46 +727,97 @@ def grab_camera_image():
 @app.route('/api/save_raw_image', methods=['POST'])
 def save_raw_image_endpoint():
     data = request.get_json() or {}
-    target_folder = data.get("target_folder", "")
+    target_folder = data.get('target_folder')
+
     if not target_folder:
         return jsonify({"message": "Cancelled"}), 200
 
     try:
         os.makedirs(target_folder, exist_ok=True)
     except Exception as e:
-        app.logger.exception(f"Failed to create folder '{target_folder}': {e}")
         return jsonify({
-            "error": "Failed to create target folder",
-            "code": ErrorCode.GENERIC,
-            "popup": True
-        }), 500
-    
-    now = datetime.now().strftime("%Y%m%d%H%M%S")
-
-    image, *_ = grab_camera_image()
-    if image is None:
-        app.logger.error("Grab result is None for camera")
-        return jsonify({
-            "error": ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED, "Camera disconnected"),
-            "code": ErrorCode.CAMERA_DISCONNECTED,
+            "error": f"Could not create folder: {e}",
+            "code": "FOLDER_CREATION_FAILED",
             "popup": True
         }), 400
 
-    fn = os.path.join(target_folder, f"{now}.jpg")
-    try:
-        cv2.imwrite(fn, image)
-    except Exception as e:
-        app.logger.exception(f"Failed to write image '{fn}': {e}")
+    img = grab_camera_image()
+    if img is None:
         return jsonify({
-            "error": "Failed to save image",
-            "code": ErrorCode.GENERIC,
+            "error": "Camera disconnected or failed to grab image.",
+            "code": "CAMERA_DISCONNECTED",
             "popup": True
-        }), 500
+        }), 400
+
+    now = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    full_path = os.path.join(target_folder, f"{now}.jpg")
+
+    # Save full-res image (keep good quality)
+    cv2.imwrite(full_path, img)
+
+    # Thumbnail: small and compressed
+    thumb_path = None
+    try:
+        max_thumb_width = 200     # smaller than before
+        max_thumb_height = 150
+
+        h, w = img.shape[:2]
+        scale = min(max_thumb_width / w, max_thumb_height / h, 1.0)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+
+        thumb = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        thumb_path = os.path.join(target_folder, f"{now}_thumb.jpg")
+
+        # Lower JPEG quality for (much) smaller file
+        cv2.imwrite(
+            thumb_path,
+            thumb,
+            [int(cv2.IMWRITE_JPEG_QUALITY), 70]   # 60–75 is usually fine
+        )
+    except Exception as e:
+        print(f"Warning: could not create thumbnail: {e}")
+        thumb_path = None
 
     return jsonify({
         "message": "Raw image saved",
-        "path": fn
+        "path": full_path,
+        "thumb_path": thumb_path
     }), 200
+
+    
+@app.route('/api/get_image', methods=['GET'])
+def get_image():
+    path = request.args.get('path')
+    if not path:
+        return jsonify({"error": "No path specified"}), 400
+
+    if not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 404
+
+    # Assume JPEG; if you might save PNG/tiff, detect MIME type here.
+    return send_file(path, mimetype='image/jpeg')
+
+
+
+@app.route('/api/open_image', methods=['POST'])
+def open_image():
+    data = request.get_json() or {}
+    path = data.get('path')
+
+    if not path:
+        return jsonify({"error": "No path specified"}), 400
+
+    if not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        # Windows-only: open with default associated app (typically Photos)
+        os.startfile(path)  # type: ignore[attr-defined]
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"success": True}), 200
 
 @app.route('/api/get-other-settings', methods=['GET'])
 def get_other_settings():
