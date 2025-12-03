@@ -10,7 +10,7 @@
         "FrameRate": 10.0
     },
     "other_settings": {
-        "objective": "100x",
+        "objective": "50x",
         "save_location": "D:/",
         "background_subtraction": true,
         "save_settings": true,

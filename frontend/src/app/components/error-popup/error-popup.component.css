@@ -18,14 +18,6 @@
     content: "⚠️"; /* ⚠️ Unicode warning icon */
     font-size: 20px;
   }
-  
-  .error-popup-list {
-    display: flex;
-    flex-direction: column; /* Keep them stacked */
-    gap: 10px; /* Maintain spacing */
-    align-items: center; /* Center align */
-    width: 100%;
-  }
 
   .error-close {
     background: none;

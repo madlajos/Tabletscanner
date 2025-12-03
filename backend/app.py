@@ -1,3 +1,4 @@
+import io
 from flask import Flask, jsonify, request, Response, send_file
 from flask_cors import CORS
 import cv2
@@ -38,6 +39,14 @@ camera_properties = None
 latest_frames = None
 
 backend_ready = False
+
+
+
+GRID_SIZE_DEFAULT = 10
+ORIGIN_X_DEFAULT = 20.0
+ORIGIN_Y_DEFAULT = 20.0
+SPACING_DEFAULT = 20.0
+
 
 ### Error handling and logging ###
 @app.errorhandler(Exception)
@@ -493,78 +502,186 @@ def move_toolhead_relative():
 @app.route('/api/move_toolhead_absolute', methods=['POST'])
 def move_toolhead_absolute():
     try:
-        data = request.get_json()
-        x_pos = data.get('x')
-        y_pos = data.get('y')
-        z_pos = data.get('z')
-
-        motion_platform = globals.motion_platform
-        if motion_platform is None or not motion_platform.is_open:
-            return jsonify({'status': 'error', 'message': 'Printer not connected'}), 404
-
-        requested = {}
-        planned = {}
-        clamped_flags = {}
-        limits_out = {}
-
-        # Helper to process one axis if provided
-        def process_axis(ax, val):
-            if val is None:
-                return
-            tgt = float(val)
-            clamped, clipped, lo, hi = _clamp_axis(ax, tgt)
-            requested[ax] = tgt
-            planned[ax] = clamped
-            clamped_flags[ax] = bool(clipped)
-            limits_out[ax] = {'min': lo, 'max': hi}
-
-        process_axis('x', x_pos)
-        process_axis('y', y_pos)
-        process_axis('z', z_pos)
-
-        if not planned:
-            return jsonify({'status': 'error', 'message': 'No axes specified'}), 400
-
-        # If all provided axes clamp to their current values, skip sending a move
-        all_noop = True
-        curr_pos = getattr(globals, "last_toolhead_pos", {})
-        for ax, clamped_val in planned.items():
-            curr = curr_pos.get(ax)
-            if curr is None:
-                # Not homed axis; we cannot trust absolute; require homing first
-                return jsonify({'status': 'error',
-                                'message': f'Axis {ax.upper()} not homed; position unknown.'}), 409
-            if not math.isclose(float(curr), float(clamped_val), abs_tol=_EPS):
-                all_noop = False
-
-        if all_noop:
-            return jsonify({
-                'status': 'success',
-                'requested': requested,
-                'sent': {},
-                'clamped': clamped_flags,
-                'limits': limits_out,
-                'message': 'Requested positions equal to current (after clamping); no move sent.'
-            }), 200
-
-        # Send only the axes we plan to change
-        motioncontrols.move_to_position(
-            motion_platform,
-            planned.get('x'),
-            planned.get('y'),
-            planned.get('z')
+        data = request.get_json() or {}
+        resp, status = _move_toolhead_absolute_impl(
+            x_pos=data.get('x'),
+            y_pos=data.get('y'),
+            z_pos=data.get('z')
         )
+        return jsonify(resp), status
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    
+    
+    
+    # 1) Move the existing logic into a helper:
+
+def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
+    motion_platform = globals.motion_platform
+    if motion_platform is None or not motion_platform.is_open:
+        # same 404 as before
+        return {
+            'status': 'error',
+            'message': 'Printer not connected'
+        }, 404
+
+    requested = {}
+    planned = {}
+    clamped_flags = {}
+    limits_out = {}
+
+    def process_axis(ax, val):
+        if val is None:
+            return
+        tgt = float(val)
+        clamped, clipped, lo, hi = _clamp_axis(ax, tgt)
+        requested[ax] = tgt
+        planned[ax] = clamped
+        clamped_flags[ax] = bool(clipped)
+        limits_out[ax] = {'min': lo, 'max': hi}
+
+    process_axis('x', x_pos)
+    process_axis('y', y_pos)
+    process_axis('z', z_pos)
+
+    if not planned:
+        return {
+            'status': 'error',
+            'message': 'No axes specified'
+        }, 400
+
+    all_noop = True
+    curr_pos = getattr(globals, "last_toolhead_pos", {})
+    for ax, clamped_val in planned.items():
+        curr = curr_pos.get(ax)
+        if curr is None:
+            return {
+                'status': 'error',
+                'message': f'Axis {ax.upper()} not homed; position unknown.'
+            }, 409
+        if not math.isclose(float(curr), float(clamped_val), abs_tol=_EPS):
+            all_noop = False
+
+    if all_noop:
+        return {
+            'status': 'success',
+            'requested': requested,
+            'sent': {},
+            'clamped': clamped_flags,
+            'limits': limits_out,
+            'message': 'Requested positions equal to current (after clamping); no move sent.'
+        }, 200
+
+    motioncontrols.move_to_position(
+        motion_platform,
+        planned.get('x'),
+        planned.get('y'),
+        planned.get('z')
+    )
+
+    return {
+        'status': 'success',
+        'requested': requested,
+        'sent': planned,
+        'clamped': clamped_flags,
+        'limits': limits_out
+    }, 200
+
+
+@app.route('/api/auto_measurement', methods=['POST'])
+def auto_measurement():
+    try:
+        data = request.get_json() or {}
+
+        # ---- read and validate indices ----
+        idx_list = data.get('indices')
+        if not idx_list:
+            return jsonify({
+                'status': 'error',
+                'message': 'No indices provided'
+            }), 400
+
+        try:
+            # convert to ints and deduplicate, then sort for deterministic order
+            indices = sorted(set(int(i) for i in idx_list))
+        except (TypeError, ValueError):
+            return jsonify({
+                'status': 'error',
+                'message': 'Indices must be integers'
+            }), 400
+
+        grid_size = int(data.get('grid_size', GRID_SIZE_DEFAULT))
+
+        # bounds check: 1 .. grid_size^2
+        max_index = grid_size * grid_size
+        if any(i < 1 or i > max_index for i in indices):
+            return jsonify({
+                'status': 'error',
+                'message': 'One or more indices are out of bounds'
+            }), 400
+
+        autofocus = bool(data.get('autofocus', False))
+        lamp_top = bool(data.get('lamp_top', False))
+        lamp_side = bool(data.get('lamp_side', False))
+
+        origin_x = float(data.get('origin_x', ORIGIN_X_DEFAULT))
+        origin_y = float(data.get('origin_y', ORIGIN_Y_DEFAULT))
+        spacing = float(data.get('spacing', SPACING_DEFAULT))
+
+        # ---- map indices to positions ----
+        # Numbering is bottom-left = 1, increasing to the right,
+        # then next row up, etc. So:
+        #   zero_based = idx - 1
+        #   row_from_bottom = zero_based // grid_size
+        #   col = zero_based % grid_size
+        # and coordinates:
+        #   x = origin_x + col * spacing
+        #   y = origin_y + row_from_bottom * spacing
+        positions = []
+        for idx in indices:
+            zero_based = idx - 1
+            row_from_bottom = zero_based // grid_size
+            col = zero_based % grid_size
+            x = origin_x + col * spacing
+            y = origin_y + row_from_bottom * spacing
+            positions.append({'index': idx, 'x': x, 'y': y})
+
+        # Optionally: set lights here based on lamp_top / lamp_side
+        # TODO: implement your own G-code light control if needed
+
+        # ---- iterate through selected tablets ----
+        for pos in positions:
+            resp, status = _move_toolhead_absolute_impl(
+                x_pos=pos['x'],
+                y_pos=pos['y'],
+                z_pos=None
+            )
+            if status != 200:
+                # Abort on first failure
+                return jsonify({
+                    'status': 'error',
+                    'message': f"Move failed for tablet {pos['index']}",
+                    'move_response': resp
+                }), status
+
+            # TODO later:
+            # - autofocus routine if autofocus is True
+            # - capture using Basler
+            # - save image
 
         return jsonify({
             'status': 'success',
-            'requested': requested,
-            'sent': planned,
-            'clamped': clamped_flags,
-            'limits': limits_out
+            'message': f'Finished auto measurement for {len(indices)} tablets',
+            'indices': indices,
+            'positions': positions
         }), 200
 
+    except KeyError as ke:
+        return jsonify({'status': 'error', 'message': f'Missing key: {ke}'}), 400
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 
 ### Video streaming Function ###
@@ -732,6 +849,7 @@ def save_raw_image_endpoint():
     if not target_folder:
         return jsonify({"message": "Cancelled"}), 200
 
+    # Ensure folder exists
     try:
         os.makedirs(target_folder, exist_ok=True)
     except Exception as e:
@@ -741,7 +859,9 @@ def save_raw_image_endpoint():
             "popup": True
         }), 400
 
-    img = grab_camera_image()
+    # --- Grab frame from camera ---
+    img = grab_camera_image()  # your existing helper
+
     if img is None:
         return jsonify({
             "error": "Camera disconnected or failed to grab image.",
@@ -749,41 +869,83 @@ def save_raw_image_endpoint():
             "popup": True
         }), 400
 
+    # If grab_camera_image returns a tuple/list (e.g. (frame, meta)), unwrap it
+    if isinstance(img, (tuple, list)) and len(img) > 0:
+        img = img[0]
+
+    # Normalize to NumPy array
+    img_cv = np.asarray(img)
+    if not isinstance(img_cv, np.ndarray) or img_cv.ndim < 2:
+        return jsonify({
+            "error": f"Grabbed image is not a valid array (type={type(img)}, shape={getattr(img_cv, 'shape', None)})",
+            "code": "INVALID_IMAGE_DATA",
+            "popup": True
+        }), 500
+
+    # --- Save full-resolution image ---
     now = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     full_path = os.path.join(target_folder, f"{now}.jpg")
 
-    # Save full-res image (keep good quality)
-    cv2.imwrite(full_path, img)
-
-    # Thumbnail: small and compressed
-    thumb_path = None
     try:
-        max_thumb_width = 200     # smaller than before
-        max_thumb_height = 150
-
-        h, w = img.shape[:2]
-        scale = min(max_thumb_width / w, max_thumb_height / h, 1.0)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-
-        thumb = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        thumb_path = os.path.join(target_folder, f"{now}_thumb.jpg")
-
-        # Lower JPEG quality for (much) smaller file
-        cv2.imwrite(
-            thumb_path,
-            thumb,
-            [int(cv2.IMWRITE_JPEG_QUALITY), 70]   # 60–75 is usually fine
-        )
+        cv2.imwrite(full_path, img_cv)
     except Exception as e:
-        print(f"Warning: could not create thumbnail: {e}")
-        thumb_path = None
+        return jsonify({
+            "error": f"Could not save image: {e}",
+            "code": "IMAGE_SAVE_FAILED",
+            "popup": True
+        }), 500
 
+    # NOTE: no thumbnail file is written here anymore
     return jsonify({
         "message": "Raw image saved",
-        "path": full_path,
-        "thumb_path": thumb_path
+        "path": full_path
     }), 200
+
+
+@app.route('/api/get_thumbnail', methods=['GET'])
+def get_thumbnail():
+    """Return a small JPEG thumbnail generated on the fly from a saved image."""
+    path = request.args.get('path')
+    if not path:
+        return jsonify({"error": "No path specified"}), 400
+
+    if not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 404
+
+    # Read original image from disk
+    img = cv2.imread(path)
+    if img is None:
+        return jsonify({"error": "Could not read image file"}), 500
+
+    # Thumbnail parameters
+    max_thumb_width = 160
+    max_thumb_height = 120
+
+    # Slight blur to reduce noise before downscale
+    blurred = cv2.GaussianBlur(img, (3, 3), 0)
+
+    h, w = blurred.shape[:2]
+    scale = min(max_thumb_width / w, max_thumb_height / h, 1.0)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+
+    # Downscale using INTER_AREA (good for reduction)
+    thumb = cv2.resize(blurred, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    # Encode thumbnail to JPEG in memory (no disk write)
+    ok, buf = cv2.imencode(
+        ".jpg",
+        thumb,
+        [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # decent quality, small size
+    )
+    if not ok:
+        return jsonify({"error": "Could not encode thumbnail"}), 500
+
+    return send_file(
+        io.BytesIO(buf.tobytes()),
+        mimetype="image/jpeg"
+    )
+
 
     
 @app.route('/api/get_image', methods=['GET'])
@@ -1069,7 +1231,8 @@ def initialize_serial_devices():
             app.logger.error("Failed to auto-connect Motion Platform on startup.")
     except Exception as e:
         app.logger.error(f"Error initializing Motion Platform: {e}")
-        
+       
+
 if __name__ == '__main__':
     multiprocessing.freeze_support()
     

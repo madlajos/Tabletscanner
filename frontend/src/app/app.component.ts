@@ -15,6 +15,8 @@ import { CameraControlComponent } from './features/camera-control/camera-control
 import { ErrorPopupListComponent } from './components/error-popup-list/error-popup-list.component';
 import { BackendReadyService } from './services/backend-ready.service'; // Adjust the path as needed
 import { MotionControl } from './features/motion-control/motion-control';
+import { AutoMeasurementComponent } from './features/auto-measurement/auto-measurement.component';
+
 
 @Component({
   selector: 'app-root',
@@ -31,7 +33,8 @@ import { MotionControl } from './features/motion-control/motion-control';
     ImageViewerComponent,
     MotionControl,
     CameraControlComponent,
-    ErrorPopupListComponent
+    ErrorPopupListComponent,
+    AutoMeasurementComponent
   ],
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.css']

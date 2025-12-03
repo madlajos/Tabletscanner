@@ -1,0 +1,66 @@
+<div class="auto-measurement">
+  <div class="settings">
+    <div class="setting-row">
+      <label>
+        <input type="checkbox" [(ngModel)]="autofocus" />
+        Autofókusz
+      </label>
+    </div>
+    <div class="setting-row">
+      <label>
+        <input type="checkbox" [(ngModel)]="lampTop" />
+        Felső fény
+      </label>
+    </div>
+    <div class="setting-row">
+      <label>
+        <input type="checkbox" [(ngModel)]="lampSide" />
+        Súrló fény
+      </label>
+    </div>
+  </div>
+
+  <div class="tray-label">
+    Tálca:
+  </div>
+
+  <!-- SINGLE grid container; button/status are OUTSIDE it -->
+  <div class="tablet-grid" (mouseleave)="onGridMouseLeave()">
+  <div
+    *ngFor="let id of tablets"
+    class="tablet-dot"
+    [class.selected]="isDotSelected(id)"
+    (click)="onDotClick(id)"
+    (mouseenter)="onDotMouseEnter(id)"
+    [title]="'Tabletta ' + id"
+  ></div>
+</div>
+
+  <div class="buttons-row">
+  <button
+    class="start-button"
+    (click)="startMeasurement()"
+    [disabled]="!canStart()"
+  >
+    Mérés indítása
+  </button>
+
+  <button
+    class="clear-button"
+    (click)="clearSelection()"
+    [disabled]="!hasSelection()"
+  >
+    Kijelölés törlése
+  </button>
+</div>
+
+  <div class="status" *ngIf="isRunning">
+    Mérés folyamatban…
+  </div>
+  <div class="status success" *ngIf="!isRunning && successMessage">
+    {{ successMessage }}
+  </div>
+  <div class="status error" *ngIf="!isRunning && errorMessage">
+    {{ errorMessage }}
+  </div>
+</div>

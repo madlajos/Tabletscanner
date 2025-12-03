@@ -29,6 +29,9 @@ body {
   border-radius: 8px;
   padding: 12px;
   min-height: 0;
+
+   display: flex;
+  flex-direction: column;
 }
 
 /* Left/Right placeholder text */
@@ -72,4 +75,8 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #ffffff;
+}
+
+.panel app-error-popup-list {
+  margin-top: auto;  /* pushes it to the bottom of the column */
 }

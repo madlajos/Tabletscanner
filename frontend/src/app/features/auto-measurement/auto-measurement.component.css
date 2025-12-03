@@ -1,0 +1,219 @@
+:host {
+  display: block;
+}
+
+/* Outer card – similar to other control panels */
+.auto-measurement {
+  background-color: #3a3a3a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  color: #ddd;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* =======================
+   Settings row (checkboxes)
+   ======================= */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.setting-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: #ddd;
+  font-size: 12px;
+}
+
+/* Make checkboxes feel consistent with dark UI */
+.setting-row input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--main-blue, #1f4b8f);
+  cursor: pointer;
+}
+
+/* =======================
+   Grid label + wrapper
+   ======================= */
+
+.tray-label {
+  margin-top: 2px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #bbb;
+}
+
+/* Grid container – dark card style similar to motion controls */
+.tablet-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr); /* match gridSize in TS */
+  gap: 6px;
+  padding: 6px;
+  border-radius: 6px;
+  background-color: #2f2f2f;
+  border: 1px solid #444;
+
+  /* NEW: fill the whole column width */
+  width: 100%;
+  box-sizing: border-box;
+
+  /* NEW: center dots in each cell */
+  justify-items: center;
+  align-items: center;
+  aspect-ratio: 1;
+}
+
+/* Individual tablet dots – styled like mini buttons */
+.tablet-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #565555;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease-out,
+    box-shadow 0.18s ease-out,
+    transform 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Hover: soft glow and tiny scale up, same spirit as %button-base hover */
+.tablet-dot:hover {
+  background-color: #6a6a6a;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
+  transform: scale(1.05);
+}
+
+/* Selected range: use main blue accent */
+.tablet-dot.selected {
+  background-color: var(--main-blue, #1f4b8f);
+  box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
+}
+
+/* =======================
+   Start button – styled similar to action buttons
+   ======================= */
+
+.start-button {
+  margin-top: 6px;
+  align-self: flex-start;
+
+  border: none;
+  border-radius: 6px;
+  background-color: var(--main-blue, #1f4b8f);
+  color: #fff;
+
+  font-size: 12px;
+  font-weight: 500;
+
+  padding: 6px 12px;
+  cursor: pointer;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  transition:
+    background-color 0.25s ease-out,
+    transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1),
+    box-shadow 0.2s ease-out;
+}
+
+.start-button:hover:not(:disabled) {
+  background-color: #2360b2;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+  transform: translateY(-1px);
+}
+
+.start-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.start-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* =======================
+   Status messages
+   ======================= */
+
+.status {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.status.success {
+  color: #86e29b;
+}
+
+.status.error {
+  color: #ff7a7a;
+}
+
+
+.buttons-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.clear-button {
+  border-radius: 6px;
+  border: 1px solid #666;
+  background-color: transparent;
+  color: #ddd;
+
+  font-size: 12px;
+  font-weight: 400;
+
+  padding: 6px 10px;
+  cursor: pointer;
+
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  transition:
+    background-color 0.25s ease-out,
+    color 0.25s ease-out,
+    box-shadow 0.2s ease-out,
+    transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.clear-button:hover:not(:disabled) {
+  background-color: #444;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+  transform: translateY(-1px);
+}
+
+.clear-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.clear-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
