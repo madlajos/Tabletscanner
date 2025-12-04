@@ -57,14 +57,8 @@ body {
   height: 100%;
 }
 
-/* Right-side panel sections */
-.side-section {
-  border-radius: 6px;
-  padding: 8px 8px 10px;
-}
-
 .side-section-header {
-  padding: 10px 20px;
+  padding: 10px 10px;
   background-color: #3a3a3a;
   text-align: center;
 }
@@ -77,6 +71,37 @@ body {
   color: #ffffff;
 }
 
-.panel app-error-popup-list {
-  margin-top: auto;  /* pushes it to the bottom of the column */
+
+/* Right panel already flex via .controls-panel rule above,
+   now make its inner .side-panel fill and be a column */
+.controls-panel .side-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Logo sits at the bottom of side-panel */
+.side-panel-logo {
+  margin-top: auto;          /* this pushes it to the bottom */
+  padding-top: 8px;
+  border-top: 1px solid #444;
+  text-align: center;
+}
+
+.side-panel-logo img {
+  max-width: 140px;
+  max-height: 120px;
+  opacity: 0.85;
+  object-fit: contain;
+}
+
+.side-panel-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.controls-panel app-error-popup-list {
+  margin-top: auto;
+  margin-bottom: 10px;
 }

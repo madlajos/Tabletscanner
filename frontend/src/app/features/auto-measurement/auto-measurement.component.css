@@ -1,13 +1,12 @@
 :host {
   display: block;
+  padding-left: 0px;
+  padding-top: 12px;
+  font-family: 'Arial', sans-serif;
 }
-
-/* Outer card – similar to other control panels */
+/* Outer container */
 .auto-measurement {
-  background-color: #3a3a3a;
-  border-radius: 6px;
   padding: 10px 12px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   color: #ddd;
   font-size: 13px;
   display: flex;
@@ -15,74 +14,176 @@
   gap: 10px;
 }
 
+
 /* =======================
-   Settings row (checkboxes)
+   Measurement name row
    ======================= */
 
-.settings {
+.measurement-name-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.setting-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-}
-
-.setting-row label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  user-select: none;
-  color: #ddd;
+  gap: 3px;
+  
+  font-family: 'Arial', sans-serif;
   font-size: 12px;
 }
 
-/* Make checkboxes feel consistent with dark UI */
-.setting-row input[type='checkbox'] {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--main-blue, #1f4b8f);
-  cursor: pointer;
+.measurement-name-row label {
+  color: #ddd;
+}
+
+.measurement-name-input {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #333;
+  color: #fff;
+  box-sizing: border-box;
+  
+}
+
+.measurement-name-input:disabled {
+  opacity: 0.6;
 }
 
 /* =======================
-   Grid label + wrapper
+   Toggle buttons row
    ======================= */
 
-.tray-label {
-  margin-top: 2px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #bbb;
+.toggle-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
 }
 
-/* Grid container – dark card style similar to motion controls */
+.toggle-button {
+  flex: 1 1 0;
+  border-radius: 6px;
+  border: 1px solid #555;
+  background-color: #2f2f2f;
+  color: #ddd;
+
+  padding: 4px 6px;
+  cursor: pointer;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 12px;
+  gap: 3px;
+
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  transition:
+    background-color 0.2s ease-out,
+    border-color 0.2s ease-out,
+    box-shadow 0.2s ease-out,
+    transform 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.toggle-button img {
+  width: 50px;
+  height: 50px;
+  display: block;
+}
+
+.toggle-label {
+  white-space: nowrap;
+}
+
+.toggle-button:hover {
+  background-color: #3c3c3c;
+  border-color: #777;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.6);
+  transform: translateY(-1px);
+}
+
+.toggle-button.active {
+  background-color: var(--main-blue, #1f4b8f);
+  border-color: #1f4b8f;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
+}
+
+/* =======================
+   Selection header: count + clear button
+   ======================= */
+
+.selection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.selection-count {
+  color: #ccc;
+  font-family: 'Arial', sans-serif;
+}
+
+.selection-count .count {
+  font-weight: 600;
+  color: #f0f0f0;
+}
+
+/* Clear button: faint red -> normal red on hover */
+.clear-button {
+  border-radius: 4px;
+  border: 1px solid rgba(200, 60, 60, 0.6);
+  background-color: rgba(200, 60, 60, 0.1);
+  color: #f0b0b0;
+
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+
+  transition:
+    background-color 0.2s ease-out,
+    color 0.2s ease-out,
+    border-color 0.2s ease-out,
+    transform 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.clear-button:hover:not(:disabled) {
+  background-color: #c62828; /* normal red */
+  border-color: #c62828;
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.clear-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+}
+
+.clear-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* =======================
+   Grid and dots
+   ======================= */
+
 .tablet-grid {
   display: grid;
   grid-template-columns: repeat(10, 1fr); /* match gridSize in TS */
-  gap: 6px;
+  gap: 10px;
   padding: 6px;
   border-radius: 6px;
   background-color: #2f2f2f;
   border: 1px solid #444;
 
-  /* NEW: fill the whole column width */
   width: 100%;
   box-sizing: border-box;
 
-  /* NEW: center dots in each cell */
   justify-items: center;
   align-items: center;
-  aspect-ratio: 1;
 }
 
-/* Individual tablet dots – styled like mini buttons */
 .tablet-dot {
   width: 24px;
   height: 24px;
@@ -90,47 +191,71 @@
   background-color: #565555;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
   transition:
     background-color 0.2s ease-out,
     box-shadow 0.18s ease-out,
     transform 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-/* Hover: soft glow and tiny scale up, same spirit as %button-base hover */
+/* number inside the dot */
+.tablet-number {
+  font-size: 9px;
+  color: #b3b3b3; /* faint grey */
+  pointer-events: none;
+  font-family: 'Arial', sans-serif;
+}
+
 .tablet-dot:hover {
   background-color: #6a6a6a;
   box-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
-  transform: scale(1.05);
+  transform: scale(1.1);
 }
 
-/* Selected range: use main blue accent */
 .tablet-dot.selected {
   background-color: var(--main-blue, #1f4b8f);
   box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
 }
 
+.tablet-dot.selected:hover {
+  background-color: var(--main-blue, #1f4b8f);
+  box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
+    transform: scale(1.15);
+}
+
+.tablet-dot.selected .tablet-number {
+  color: #f9f9f9;
+  font-weight: 500;
+}
+
 /* =======================
-   Start button – styled similar to action buttons
+   Start / Stop button – full width
    ======================= */
 
 .start-button {
-  margin-top: 6px;
-  align-self: flex-start;
-
+  margin-top: 4px;
   border: none;
   border-radius: 6px;
   background-color: var(--main-blue, #1f4b8f);
   color: #fff;
 
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 
-  padding: 6px 12px;
+  padding: 7px 10px;
   cursor: pointer;
 
   display: inline-flex;
   align-items: center;
   justify-content: center;
+
+  width: 100%;
+  box-sizing: border-box;
+  align-self: stretch;
 
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 
@@ -140,10 +265,19 @@
     box-shadow 0.2s ease-out;
 }
 
+/* Red variant when measurementActive = true */
+.start-button.stop {
+  background-color: #c62828;
+}
+
 .start-button:hover:not(:disabled) {
   background-color: #2360b2;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
   transform: translateY(-1px);
+}
+
+.start-button.stop:hover:not(:disabled) {
+  background-color: #e53935;
 }
 
 .start-button:active:not(:disabled) {
@@ -155,6 +289,7 @@
   opacity: 0.55;
   cursor: default;
 }
+
 
 /* =======================
    Status messages
@@ -171,49 +306,4 @@
 
 .status.error {
   color: #ff7a7a;
-}
-
-
-.buttons-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.clear-button {
-  border-radius: 6px;
-  border: 1px solid #666;
-  background-color: transparent;
-  color: #ddd;
-
-  font-size: 12px;
-  font-weight: 400;
-
-  padding: 6px 10px;
-  cursor: pointer;
-
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-
-  transition:
-    background-color 0.25s ease-out,
-    color 0.25s ease-out,
-    box-shadow 0.2s ease-out,
-    transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-
-.clear-button:hover:not(:disabled) {
-  background-color: #444;
-  color: #fff;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
-  transform: translateY(-1px);
-}
-
-.clear-button:active:not(:disabled) {
-  transform: translateY(0) scale(0.97);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-}
-
-.clear-button:disabled {
-  opacity: 0.4;
-  cursor: default;
 }

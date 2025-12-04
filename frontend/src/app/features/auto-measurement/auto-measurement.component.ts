@@ -1,4 +1,4 @@
-import { Component, signal } from '@angular/core';
+import { Component, signal, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
@@ -18,9 +18,11 @@ export class AutoMeasurementComponent {
 
   readonly gridSize = 10; // change to 9 later if needed
 
-  // Tablet IDs with bottom-left = 1, top-right = gridSize^2
-  // Visual grid is still top row first, left to right,
-  // but IDs are numbered from bottom-left upwards.
+  // External connection status (parent can bind real values)
+  @Input() cameraConnected = true;
+  @Input() motionConnected = true;
+
+  // Tablet IDs, bottom-left = 1, top-right = gridSize^2
   readonly tablets = Array.from(
     { length: this.gridSize * this.gridSize },
     (_, i) => {
@@ -36,46 +38,73 @@ export class AutoMeasurementComponent {
   lampTop = false;
   lampSide = false;
 
-  // Set of selected tablet IDs (multi-range + holes)
+  // Measurement name
+  measurementName = '';
+
+  // Set of selected tablet IDs (supports multiple ranges + gaps)
   private selectedSignal = signal<Set<number>>(new Set<number>());
 
-  // Anchor for range-adding mode (first click)
+  // Range anchor for adding ranges (first click)
   private rangeAnchorSignal = signal<number | null>(null);
 
-  // Hover index used only for preview of the range from anchor
+  // Hover index for range preview
   private hoverIndexSignal = signal<number | null>(null);
 
-  isRunning = false;
+  // Is measurement currently running (toggled "on")
+  measurementActive = false;
+
   errorMessage: string | null = null;
   successMessage: string | null = null;
 
   constructor(private autoService: AutoMeasurementService) {}
 
-  // ==== CLICK SELECTION LOGIC ====
+  // ===== Derived properties =====
 
-  /**
-   * Click semantics:
-   * - If no anchor:
-   *    - if id is already selected -> toggle OFF (remove from measurement)
-   *    - else -> select it and set it as range anchor (so next click defines a range)
-   * - If anchor exists:
-   *    - if clicking the same anchor again -> just clear anchor (no change)
-   *    - else -> add the full range [anchor, id] to the selection and clear anchor
-   */
+  get selectedCount(): number {
+    return this.selectedSignal().size;
+  }
+
+  hasSelection(): boolean {
+    return this.selectedSignal().size > 0;
+  }
+
+  // Start/Stop button enabled state
+  // - when OFF: require selection + both devices connected
+  // - when ON: always allow clicking to stop
+  canStart(): boolean {
+    if (this.measurementActive) {
+      return true; // allow stopping
+    }
+    const hasSelected = this.selectedSignal().size > 0;
+    const connected = this.cameraConnected && this.motionConnected;
+    return hasSelected && connected;
+  }
+
+  // ===== CLICK SELECTION LOGIC =====
+  //
+  // Click behavior:
+  // - No anchor:
+  //    - if id already selected → toggle OFF
+  //    - else → select id, set as anchor
+  // - With anchor:
+  //    - if clicking anchor again → cancel range mode
+  //    - else → add [anchor, id] to selection, clear anchor
+
   onDotClick(id: number): void {
+    if (this.measurementActive) {
+      // Selection is locked while measurement is running
+      return;
+    }
+
     const selected = new Set(this.selectedSignal());
     const anchor = this.rangeAnchorSignal();
 
-    // No active range anchor yet
     if (anchor === null) {
       if (selected.has(id)) {
-        // Toggle off single tablet (e.g. click 16 to deselect from 11–21)
         selected.delete(id);
         this.selectedSignal.set(selected);
         this.hoverIndexSignal.set(null);
       } else {
-        // Start a new range and immediately select this tablet
-        // (e.g. click 26 -> 26 is added; anchor = 26)
         selected.add(id);
         this.selectedSignal.set(selected);
         this.rangeAnchorSignal.set(id);
@@ -84,15 +113,12 @@ export class AutoMeasurementComponent {
       return;
     }
 
-    // There is an active anchor
     if (id === anchor) {
-      // Second click on the same anchor: cancel range mode
       this.rangeAnchorSignal.set(null);
       this.hoverIndexSignal.set(null);
       return;
     }
 
-    // Add whole range [anchor, id] to selection (e.g. 26–36)
     const start = Math.min(anchor, id);
     const end = Math.max(anchor, id);
     for (let v = start; v <= end; v++) {
@@ -104,8 +130,11 @@ export class AutoMeasurementComponent {
     this.hoverIndexSignal.set(null);
   }
 
-  // Hover preview: show would-be range [anchor, hover]
   onDotMouseEnter(id: number): void {
+    if (this.measurementActive) {
+      this.hoverIndexSignal.set(null);
+      return;
+    }
     if (this.rangeAnchorSignal() !== null) {
       this.hoverIndexSignal.set(id);
     } else {
@@ -117,8 +146,9 @@ export class AutoMeasurementComponent {
     this.hoverIndexSignal.set(null);
   }
 
-  // ==== SELECTION QUERY (for CSS class .selected) ====
-
+  // Dots considered "selected" if:
+  // - truly selected, OR
+  // - part of the current preview range [anchor, hover]
   isDotSelected(id: number): boolean {
     const selected = this.selectedSignal();
     if (selected.has(id)) {
@@ -136,18 +166,10 @@ export class AutoMeasurementComponent {
     return false;
   }
 
-  // ==== BUTTON STATE / ACTION ====
-
-  canStart(): boolean {
-    return this.selectedSignal().size > 0 && !this.isRunning;
-  }
-
-   hasSelection(): boolean {
-    // either something is selected or a range is being prepared
-    return this.selectedSignal().size > 0 || this.rangeAnchorSignal() !== null;
-  }
-
-   clearSelection(): void {
+  clearSelection(): void {
+    if (this.measurementActive) {
+      return;
+    }
     this.selectedSignal.set(new Set<number>());
     this.rangeAnchorSignal.set(null);
     this.hoverIndexSignal.set(null);
@@ -155,7 +177,17 @@ export class AutoMeasurementComponent {
     this.successMessage = null;
   }
 
+  // ===== Start / Stop measurement =====
+
   startMeasurement(): void {
+    // Toggle behavior
+    if (this.measurementActive) {
+      // TODO: call backend stop endpoint when available
+      this.measurementActive = false;
+      this.successMessage = 'Mérés leállítva.';
+      return;
+    }
+
     const indices = Array.from(this.selectedSignal()).sort((a, b) => a - b);
     if (indices.length === 0) {
       return;
@@ -163,14 +195,16 @@ export class AutoMeasurementComponent {
 
     this.errorMessage = null;
     this.successMessage = null;
-    this.isRunning = true;
+    this.measurementActive = true;
 
     const req: AutoMeasurementRequest = {
       indices,
       grid_size: this.gridSize,
       autofocus: this.autofocus,
       lamp_top: this.lampTop,
-      lamp_side: this.lampSide
+      lamp_side: this.lampSide,
+      // measurementName could be added to the backend payload later:
+      // name: this.measurementName
     };
 
     this.autoService.startMeasurement(req).subscribe({
@@ -185,7 +219,7 @@ export class AutoMeasurementComponent {
         this.errorMessage = err?.error?.message ?? 'Szerver hiba az automata mérés közben.';
       },
       complete: () => {
-        this.isRunning = false;
+        this.measurementActive = false;
       }
     });
   }

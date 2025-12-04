@@ -2,7 +2,6 @@ import json
 import os
 
 class ErrorCode:
-    CAMERA_ERROR = "E1100"
     CAMERA_DISCONNECTED = "E1111"
     MOTIONPLATFORM_DISCONNECTED = "E1201"
     GENERIC = "GENERIC"

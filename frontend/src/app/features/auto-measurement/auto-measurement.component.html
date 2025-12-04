@@ -1,66 +1,101 @@
 <div class="auto-measurement">
-  <div class="settings">
-    <div class="setting-row">
-      <label>
-        <input type="checkbox" [(ngModel)]="autofocus" />
-        Autofókusz
-      </label>
-    </div>
-    <div class="setting-row">
-      <label>
-        <input type="checkbox" [(ngModel)]="lampTop" />
-        Felső fény
-      </label>
-    </div>
-    <div class="setting-row">
-      <label>
-        <input type="checkbox" [(ngModel)]="lampSide" />
-        Súrló fény
-      </label>
-    </div>
+  <!-- MEASUREMENT NAME -->
+  <div class="measurement-name-row">
+    <label for="measurementName">Mérés neve</label>
+    <input
+      id="measurementName"
+      type="text"
+      class="styled-input measurement-name-input"
+      [(ngModel)]="measurementName"
+      [disabled]="measurementActive"
+    />
   </div>
 
-  <div class="tray-label">
-    Tálca:
+  <!-- TOGGLE BUTTONS -->
+  <div class="toggle-row">
+    <button
+      type="button"
+      class="toggle-button"
+      [class.active]="autofocus"
+      (click)="autofocus = !autofocus"
+      [disabled]="measurementActive"
+    >
+      <img src="assets/SVG/auto_focus.svg" alt="Autofocus" />
+      <span class="toggle-label">Autofocus</span>
+    </button>
+
+    <button
+      type="button"
+      class="toggle-button"
+      [class.active]="lampTop"
+      (click)="lampTop = !lampTop"
+      [disabled]="measurementActive"
+    >
+      <img src="assets/SVG/ringlight_off.svg" alt="Dome light" />
+      <span class="toggle-label">Felső világítás</span>
+    </button>
+
+    <button
+      type="button"
+      class="toggle-button"
+      [class.active]="lampSide"
+      (click)="lampSide = !lampSide"
+      [disabled]="measurementActive"
+    >
+      <img src="assets/SVG/barlight_off.svg" alt="Bar light" />
+      <span class="toggle-label">Súrló világítás</span>
+    </button>
   </div>
 
-  <!-- SINGLE grid container; button/status are OUTSIDE it -->
+  <!-- SELECTION HEADER: COUNT + CLEAR BUTTON -->
+  <div class="selection-header">
+    <div class="selection-count">
+      Kijelölt tabletták száma:
+      <span class="count">{{ selectedCount }}</span>
+    </div>
+
+    <button
+      type="button"
+      class="clear-button"
+      (click)="clearSelection()"
+      [disabled]="!hasSelection() || measurementActive"
+    >
+      Kijelölés törlése
+    </button>
+  </div>
+
+  <!-- DOT GRID -->
   <div class="tablet-grid" (mouseleave)="onGridMouseLeave()">
-  <div
-    *ngFor="let id of tablets"
-    class="tablet-dot"
-    [class.selected]="isDotSelected(id)"
-    (click)="onDotClick(id)"
-    (mouseenter)="onDotMouseEnter(id)"
-    [title]="'Tabletta ' + id"
-  ></div>
-</div>
+    <div
+      *ngFor="let id of tablets"
+      class="tablet-dot"
+      [class.selected]="isDotSelected(id)"
+      (click)="onDotClick(id)"
+      (mouseenter)="onDotMouseEnter(id)"
+      [title]="'Tabletta ' + id"
+    >
+      <span class="tablet-number">{{ id }}</span>
+    </div>
+  </div>
 
-  <div class="buttons-row">
+  <!-- START / STOP BUTTON FULL WIDTH -->
   <button
     class="start-button"
+    [ngClass]="{ stop: measurementActive }"
     (click)="startMeasurement()"
     [disabled]="!canStart()"
   >
-    Mérés indítása
+    {{ measurementActive ? 'Mérés leállítása' : 'Mérés indítása' }}
   </button>
 
-  <button
-    class="clear-button"
-    (click)="clearSelection()"
-    [disabled]="!hasSelection()"
-  >
-    Kijelölés törlése
-  </button>
-</div>
-
-  <div class="status" *ngIf="isRunning">
+  <!-- STATUS MESSAGES -->
+  <div class="status" *ngIf="measurementActive">
     Mérés folyamatban…
   </div>
-  <div class="status success" *ngIf="!isRunning && successMessage">
+  <div class="status success" *ngIf="!measurementActive && successMessage">
     {{ successMessage }}
   </div>
-  <div class="status error" *ngIf="!isRunning && errorMessage">
+  <div class="status error" *ngIf="!measurementActive && errorMessage">
     {{ errorMessage }}
   </div>
 </div>
