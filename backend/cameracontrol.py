@@ -9,19 +9,9 @@ import os
 import time
 import requests
 import threading
-import globals
-from globals import app
 
+from globals import app, stream_running, stream_thread, camera
 from logger_config import CameraError
-
-
-CAMERA_PIXEL_FORMAT = "BayerGR10p"   # what the camera outputs
-OPENCV_PIXEL_TYPE = pylon.PixelType_BGR8packed  # what OpenCV receives
-
-converter = pylon.ImageFormatConverter()
-converter.OutputPixelFormat = OPENCV_PIXEL_TYPE
-converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
-
 
 opencv_display_format = 'BGR8'
 
@@ -44,32 +34,15 @@ def parse_args() -> Optional[str]:
 
 # Function to continuously generate and send frames
 def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
-    """
-    Generator that yields multipart JPEG frames.
-
-    REQUIREMENT:
-      - The camera can run in BayerGR10p (or any Bayer/packed format).
-      - A global (or otherwise persistent) `converter` must exist and be configured to output BGR8:
-            converter = pylon.ImageFormatConverter()
-            converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-            converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
-
-    This function:
-      Grab (locked) -> Convert (BayerGR10p -> BGR8) -> Release -> Resize -> JPEG encode -> Yield
-    """
     cam = getattr(globals, "camera", None)
     if not (cam and cam.IsOpen()):
         app.logger.error("Camera is not open.")
         return  # end generator immediately
 
-    # Ensure grabbing is started
-    if not cam.IsGrabbing():
-        cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-
-    app.logger.info("Camera streaming generator started.")
+    app.logger.info("Camera streaming thread started.")
     globals.stream_running = True
-
-    # Ensure a single grab lock exists
+    
+    # Ensure a single grab lock exists; TODO: Untested.
     lock = getattr(globals, "grab_lock", None)
     if lock is None:
         from threading import Lock
@@ -79,7 +52,7 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
     try:
         while getattr(globals, "stream_running", False):
             try:
-                # ---- Grab + convert inside the lock (short critical section) ----
+                # --- Grab inside the lock (short critical section) ---
                 with lock:
                     cam = getattr(globals, "camera", None)
                     if not (cam and cam.IsOpen()):
@@ -92,46 +65,31 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
                         grab_result.Release()
                         continue
 
-                    # Convert raw Bayer (e.g., BayerGR10p) -> BGR8 for OpenCV/JPEG
-                    image = converter.Convert(grab_result).GetArray()  # uint8, HxWx3 (BGR)
-                    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
+                    # Copy the array before releasing the result buffer
+                    image = grab_result.Array.copy()
                     grab_result.Release()
-
-                # ---- Resize outside the lock ----
+                    
                 if scale_factor and scale_factor != 1.0:
-                    h, w = image.shape[:2]
-                    new_w = max(1, int(w * scale_factor))
-                    new_h = max(1, int(h * scale_factor))
-                    image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                        h, w = image.shape[:2]
+                        new_w = max(1, int(w * scale_factor))
+                        new_h = max(1, int(h * scale_factor))
+                        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-                # ---- Encode to JPEG ----
-                ok, frame = cv2.imencode(
-                    ".jpg",
-                    image,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
-                )
+                ok, frame = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
                 if not ok:
                     app.logger.error("Failed to encode frame.")
                     continue
-
-                # ---- Yield multipart JPEG ----
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + frame.tobytes() + b"\r\n"
-                )
-
+ 
+            
             except Exception as e:
-                app.logger.error(f"Error in video stream loop: {e}")
-                if "Device has been removed" in str(e):
-                    break
-                continue
-
+                        app.logger.error(f"Error in video stream loop: {e}")
+                        # If device was removed, bail out; otherwise loop continues
+                        if "Device has been removed" in str(e):
+                            break
+                        continue
     finally:
         globals.stream_running = False
-        # Don't close the camera here unless you *want* streaming to own the camera lifetime.
         app.logger.info("Camera streaming generator stopped.")
-
         
 def get_camera(camera_id: str) -> pylon.InstantCamera:
     factory = pylon.TlFactory.GetInstance()
@@ -187,10 +145,8 @@ def setup_camera(camera: pylon.InstantCamera, camera_params: dict):
 
 def setup_pixel_format(camera: pylon.InstantCamera):
     try:
-        current = camera.PixelFormat.GetValue()
-        if current != CAMERA_PIXEL_FORMAT:
-            camera.PixelFormat.SetValue(CAMERA_PIXEL_FORMAT)
-            app.logger.info(f"PixelFormat set: {current} -> {CAMERA_PIXEL_FORMAT}")
+        if camera.PixelFormat.GetValue() != opencv_display_format:
+            camera.PixelFormat.SetValue(opencv_display_format)
     except Exception as e:
         app.logger.error(f"Error setting pixel format: {e}")
         raise CameraError("Failed to set pixel format.") from e
@@ -202,11 +158,11 @@ def start_streaming(camera: pylon.InstantCamera):
         while camera.IsGrabbing():
             grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
             if grab_result.GrabSucceeded():
-                image = converter.Convert(grab_result).GetArray()
+                image = grab_result.Array
                 cv2.imshow("Stream", image)
                 if cv2.waitKey(1) == 13:  # Enter key to exit streaming loop
                     break
-                handler.save_frame(image)  # Pass grab_result or image based on implementation
+                handler.save_frame(grab_result)  # Pass grab_result or image based on implementation
             grab_result.Release()
     except Exception as e:
         app.logger.error(f"Error during streaming: {e}")
