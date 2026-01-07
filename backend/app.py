@@ -25,6 +25,11 @@ import tkinter as tk
 from tkinter import filedialog
 from multiprocessing import Process, Queue
 import multiprocessing
+from cameracontrol import converter  # if not already imported
+import autofocus_main
+import traceback
+
+
 
 app = Flask(__name__)
 app.secret_key = 'Egis'
@@ -513,8 +518,19 @@ def move_toolhead_absolute():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     
     
-    
-    
+@app.route('/api/autofocus_coarse', methods=['POST'])
+def autofocus_coarse():
+    try:
+        resp = autofocus_main.autofocus_coarse(globals.motion_platform)
+        return jsonify(resp)
+    except Exception as e:
+        app.logger.exception("autofocus_coarse failed")  # logs full traceback
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'trace': traceback.format_exc()
+        }), 500
+
     # 1) Move the existing logic into a helper:
 
 def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
@@ -752,12 +768,13 @@ def generate_frames(scale_factor=0.1):
             with globals.grab_lock:
                 grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
                 if grab_result.GrabSucceeded():
-                    image = grab_result.Array
+                    image = converter.Convert(grab_result).GetArray()
                     if scale_factor != 1.0:
                         width = int(image.shape[1] * scale_factor)
                         height = int(image.shape[0] * scale_factor)
                         image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
                     success, frame = cv2.imencode('.jpg', image)
+                    
                     if success:
                         yield (b'--frame\r\n'
                                b'Content-Type: image/jpeg\r\n\r\n' + frame.tobytes() + b'\r\n')
