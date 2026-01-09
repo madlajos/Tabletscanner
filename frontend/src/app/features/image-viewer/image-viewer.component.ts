@@ -104,48 +104,64 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   captureImage(): void {
-  const targetDir = (this.sharedService as any).getSaveDirectory
-    ? (this.sharedService as any).getSaveDirectory()
-    : null;
+    const targetDir = (this.sharedService as any).getSaveDirectory
+      ? (this.sharedService as any).getSaveDirectory()
+      : null;
 
-  if (!targetDir) {
-    console.warn('No save directory set. Cannot capture image.');
-    return;
-  }
-
-  this.http.post<{
-    message?: string;
-    path?: string;
-    error?: string;
-  }>(
-    `${this.BASE_URL}/save_raw_image`,
-    { target_folder: targetDir }
-  ).subscribe({
-    next: (res) => {
-      if (res?.path) {
-        console.log(`Image saved to: ${res.path}`);
-
-        const img: SavedImage = {
-          path: res.path,
-          // use dynamic thumbnail endpoint; no thumb file on disk
-          url: `${this.BASE_URL}/get_thumbnail?path=${encodeURIComponent(res.path)}`
-        };
-
-        this.savedImages.unshift(img);
-        if (this.savedImages.length > this.MAX_GALLERY_ITEMS) {
-          this.savedImages.pop();
-        }
-      } else if (res?.message) {
-        console.log(`Save image response: ${res.message}`);
-      } else {
-        console.log('Save image request completed with no path.');
-      }
-    },
-    error: (err) => {
-      console.error('Failed to save image.', err);
+    if (!targetDir) {
+      console.warn('No save directory set. Cannot capture image.');
+      return;
     }
-  });
-}
+
+    // Fetch current "other_settings" from backend so we can embed metadata
+    this.http.get<{ other_settings: any }>(`${this.BASE_URL}/get-other-settings?category=other_settings`)
+      .subscribe({
+        next: (resp) => {
+          const metadata = resp?.other_settings || {};
+
+          this.http.post<{
+            message?: string;
+            path?: string;
+            error?: string;
+          }>(
+            `${this.BASE_URL}/save_raw_image`,
+            { target_folder: targetDir, metadata }
+          ).subscribe({
+            next: (res) => {
+              if (res?.path) {
+                console.log(`Image saved to: ${res.path}`);
+
+                const img: SavedImage = {
+                  path: res.path,
+                  // use dynamic thumbnail endpoint; no thumb file on disk
+                  url: `${this.BASE_URL}/get_thumbnail?path=${encodeURIComponent(res.path)}`
+                };
+
+                this.savedImages.unshift(img);
+                if (this.savedImages.length > this.MAX_GALLERY_ITEMS) {
+                  this.savedImages.pop();
+                }
+              } else if (res?.message) {
+                console.log(`Save image response: ${res.message}`);
+              } else {
+                console.log('Save image request completed with no path.');
+              }
+            },
+            error: (err) => {
+              console.error('Failed to save image.', err);
+            }
+          });
+        },
+        error: (err) => {
+          console.warn('Could not fetch other_settings; saving without metadata.', err);
+          // fallback: save without metadata
+          this.http.post(`${this.BASE_URL}/save_raw_image`, { target_folder: targetDir }).subscribe({
+            next: () => console.log('Saved image without metadata'),
+            error: (e) => console.error('Failed to save image.', e)
+          });
+        }
+      });
+  }
 
 
   openImage(img: SavedImage): void {

@@ -18,6 +18,7 @@ import json
 from threading import Lock
 from settings_manager import load_settings, save_settings, get_settings
 import numpy as np
+from PIL import Image
 
 from logger_config import setup_logger
 from error_codes import ErrorCode, ERROR_MESSAGES
@@ -856,7 +857,37 @@ def save_raw_image_endpoint():
     full_path = os.path.join(target_folder, f"{now}.jpg")
 
     try:
-        cv2.imwrite(full_path, img_cv)
+        # Convert BGR (OpenCV) -> RGB (Pillow)
+        img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
+
+        # Prepare EXIF metadata (ImageDescription and UserComment)
+        metadata = data.get('metadata') if isinstance(data, dict) else None
+        meta_json = None
+        if isinstance(metadata, dict):
+            meta_fields = {
+                'objective': metadata.get('objective'),
+                # support both possible keys used in templates
+                'spacer_rings': metadata.get('spacer_rings'),
+                'camera_settings_file': metadata.get('camera_settings_file')
+            }
+            # remove None entries
+            meta_fields = {k: v for k, v in meta_fields.items() if v is not None}
+            try:
+                meta_json = json.dumps(meta_fields, ensure_ascii=False)
+            except Exception:
+                meta_json = None
+
+        if meta_json:
+            exif_obj = Image.Exif()
+            # 0x010E = ImageDescription, 0x9286 = UserComment
+            try:
+                exif_obj[0x010E] = meta_json
+            except Exception:
+                pass
+            pil_img.save(full_path, format='JPEG', quality=95, exif=exif_obj)
+        else:
+            pil_img.save(full_path, format='JPEG', quality=95)
     except Exception as e:
         return jsonify({
             "error": f"Could not save image: {e}",
