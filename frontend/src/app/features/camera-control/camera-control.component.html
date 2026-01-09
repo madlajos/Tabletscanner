@@ -5,7 +5,7 @@
     <h3>Mentési Beállítások</h3>
     <table class="user-settings-table">
       <tbody>
-        <!-- Objective -->
+        <!-- Top row: Objektív + Közgyűrűk -->
         <tr>
           <td>Objektív</td>
           <td>
@@ -16,27 +16,42 @@
             </select>
           </td>
 
-<td>Háttérlevonás</td>
-<td>
-  <input
-    type="checkbox"
-    class="styled-checkbox"
-    [(ngModel)]="otherSettings['background_subtraction']"
-    (change)="applyOtherSetting('background_subtraction')"
-    [disabled]="measurementActive"
-  />
-</td>
+          <td>Közgyűrűk</td>
+          <td>
+            <select [(ngModel)]="otherSettings['spacer_rings']" (change)="applyOtherSetting('spacer_rings')"
+              class="styled-input" [disabled]="measurementActive">
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </td>
+        </tr>
 
-<td>Beállítások</td>
-<td>
-  <input
-    type="checkbox"
-    class="styled-checkbox"
-    [(ngModel)]="otherSettings['save_settings']"
-    (change)="applyOtherSetting('save_settings')"
-    [disabled]="measurementActive"
-  />
-</td>
+        <!-- Second row: Háttérlevonás + Beállítások -->
+        <tr>
+          <td>Háttérlevonás</td>
+          <td>
+            <input
+              type="checkbox"
+              class="styled-checkbox"
+              [(ngModel)]="otherSettings['background_subtraction']"
+              (change)="applyOtherSetting('background_subtraction')"
+              [disabled]="measurementActive"
+            />
+          </td>
+
+          <td>Beállítások</td>
+          <td>
+            <input
+              type="checkbox"
+              class="styled-checkbox"
+              [(ngModel)]="otherSettings['save_settings']"
+              (change)="applyOtherSetting('save_settings')"
+              [disabled]="measurementActive"
+            />
+          </td>
+        </tr>
 
         <!-- Camera settings file (.pfs) -->
 

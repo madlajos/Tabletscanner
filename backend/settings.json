@@ -10,10 +10,11 @@
         "FrameRate": 10.0
     },
     "other_settings": {
-        "objective": "100x",
+        "objective": "50x",
         "save_location": "D:/",
         "background_subtraction": false,
-        "save_settings": true,
-        "camera_settings_file": "C:/Users/madla/OneDrive/Desktop/a2A4508-20ucBAS_40697387.pfs"
+        "save_settings": false,
+        "camera_settings_file": "C:/Users/madla/OneDrive/Desktop/a2A4508-20ucBAS_40697387.pfs",
+        "spacer_rings": "0"
     }
 }

@@ -51,6 +51,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   otherSettings = {
     objective: '50x',
+    spacer_rings: '0',
     camera_settings_file: '',
     save_location: 'C:\\Users\\Public\\Pictures',  // default folder
     background_subtraction: false,
