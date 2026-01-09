@@ -163,6 +163,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
             // We are connected → stop reconnection loop
             this.stopReconnectionPolling();
 
+            // Clear the camera error since we're now connected
+            this.errorNotificationService.removeError(this.CAMERA_ERR_CODE);
+
             // Only push "true" -> UI when backend actually reports it AND UI isn't already true.
             if (response.streaming && !this.isStreaming) {
               this.sharedService.setCameraStreamStatus(true);

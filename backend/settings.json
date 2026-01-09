@@ -4,16 +4,16 @@
         "Height": 4096,
         "OffsetX": 0,
         "OffsetY": 0,
-        "ExposureTime": 100000.0,
-        "Gain": 20.0,
+        "ExposureTime": 10000.0,
+        "Gain": 1.0,
         "Gamma": 1.0,
         "FrameRate": 10.0
     },
     "other_settings": {
-        "objective": "50x",
+        "objective": "100x",
         "save_location": "D:/",
-        "background_subtraction": true,
+        "background_subtraction": false,
         "save_settings": true,
-        "camera_settings_file": "D:/source/TrashSort/settings.pfs"
+        "camera_settings_file": "C:/Users/madla/OneDrive/Desktop/a2A4508-20ucBAS_40697387.pfs"
     }
 }

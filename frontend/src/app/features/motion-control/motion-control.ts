@@ -29,9 +29,11 @@ export class MotionControl implements OnInit, OnDestroy {
   zPosition: number | string = '?';
 
   xMin: number = 0;
-  xMax: number = 200;
+  xMax: number = 175;
   yMin: number = 0;
-  yMax: number = 200;
+  yMax: number = 175;
+  zMin: number = 0;
+  zMax: number = 25;
 
   private originalOnFocus = { x: undefined as any, y: undefined as any, z: undefined as any };
   private skipNextBlurRevert = false;
@@ -513,6 +515,19 @@ export class MotionControl implements OnInit, OnDestroy {
       },
     });
   }
+
+
+  autoFocusCoarse(): void {
+  this.http.post(`${this.BASE_URL}/autofocus_coarse`, {}).subscribe({
+    next: (resp) => {
+      console.log('Autofocus response:', resp);
+    },
+    error: (error) => {
+      console.error('Autofocus error:', error);
+    },
+  });
+}
+
 
   // ---------- UI helpers ----------
 

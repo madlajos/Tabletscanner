@@ -25,6 +25,49 @@ converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
 
 opencv_display_format = 'BGR8'
 
+
+def grab_and_convert_frame(camera, timeout_ms=5000):
+    """
+    Unified frame grab and conversion function.
+    
+    Grabs a frame from the camera, converts BayerGR10p -> BGR8, and releases the grab result.
+    The returned frame is BGR8 (uint8, HxWx3) ready for OpenCV processing.
+    
+    Args:
+        camera: Basler InstantCamera object (must be open and grabbing)
+        timeout_ms: Timeout in milliseconds for frame retrieval
+        
+    Returns:
+        frame_bgr: NumPy array (HxWx3, uint8, BGR format)
+        
+    Raises:
+        RuntimeError: If camera not open/grabbing, or grab fails
+    """
+    if not (camera and camera.IsOpen()):
+        raise RuntimeError("Camera not open")
+    
+    if not camera.IsGrabbing():
+        raise RuntimeError("Camera not grabbing")
+    
+    try:
+        grab_result = camera.RetrieveResult(int(timeout_ms), pylon.TimeoutHandling_ThrowException)
+        if not grab_result.GrabSucceeded():
+            grab_result.Release()
+            raise RuntimeError("Frame grab unsuccessful")
+        
+        # Convert BayerGR10p (or raw Bayer) -> BGR8 for OpenCV
+        frame_bgr = converter.Convert(grab_result).GetArray()
+        
+        # Return a copy so the frame persists after release
+        return frame_bgr.copy()
+        
+    finally:
+        try:
+            grab_result.Release()
+        except Exception:
+            pass
+
+
 def abort(reason: str, return_code: int = 1, usage: bool = False):
     app.logger.error(reason)
     sys.exit(return_code)
@@ -42,27 +85,25 @@ def parse_args() -> Optional[str]:
 
     return None if argc == 0 else args[0]
 
-# Function to continuously generate and send frames
 def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
     """
-    Generator that yields multipart JPEG frames.
-
-    REQUIREMENT:
-      - The camera can run in BayerGR10p (or any Bayer/packed format).
-      - A global (or otherwise persistent) `converter` must exist and be configured to output BGR8:
-            converter = pylon.ImageFormatConverter()
-            converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-            converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
-
-    This function:
-      Grab (locked) -> Convert (BayerGR10p -> BGR8) -> Release -> Resize -> JPEG encode -> Yield
+    Generator that yields multipart JPEG frames from the camera.
+    
+    Uses grab_and_convert_frame() for unified BayerGR10p -> BGR8 conversion.
+    All frames are converted to BGR immediately after grabbing for consistency.
+    
+    Args:
+        scale_factor: Resize factor (1.0 = no resize)
+        jpeg_quality: JPEG encoding quality (1-100)
+        
+    Yields:
+        bytes: Multipart JPEG frame ready for HTTP streaming
     """
     cam = getattr(globals, "camera", None)
     if not (cam and cam.IsOpen()):
         app.logger.error("Camera is not open.")
-        return  # end generator immediately
+        return
 
-    # Ensure grabbing is started
     if not cam.IsGrabbing():
         cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
 
@@ -79,42 +120,34 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
     try:
         while getattr(globals, "stream_running", False):
             try:
-                # ---- Grab + convert inside the lock (short critical section) ----
+                # Grab and convert inside the lock (short critical section)
                 with lock:
                     cam = getattr(globals, "camera", None)
                     if not (cam and cam.IsOpen()):
                         app.logger.warning("Camera closed during streaming.")
                         break
 
-                    grab_result = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-                    if not grab_result.GrabSucceeded():
-                        app.logger.warning("Grab did not succeed.")
-                        grab_result.Release()
-                        continue
+                    # Use unified grab+convert function
+                    image_bgr = grab_and_convert_frame(cam, timeout_ms=5000)
 
-                    # Convert raw Bayer (e.g., BayerGR10p) -> BGR8 for OpenCV/JPEG
-                    image = converter.Convert(grab_result).GetArray()  # uint8, HxWx3 (BGR)
-
-                    grab_result.Release()
-
-                # ---- Resize outside the lock ----
+                # Resize outside the lock
                 if scale_factor and scale_factor != 1.0:
-                    h, w = image.shape[:2]
+                    h, w = image_bgr.shape[:2]
                     new_w = max(1, int(w * scale_factor))
                     new_h = max(1, int(h * scale_factor))
-                    image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    image_bgr = cv2.resize(image_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-                # ---- Encode to JPEG ----
+                # Encode to JPEG
                 ok, frame = cv2.imencode(
                     ".jpg",
-                    image,
+                    image_bgr,
                     [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
                 )
                 if not ok:
                     app.logger.error("Failed to encode frame.")
                     continue
 
-                # ---- Yield multipart JPEG ----
+                # Yield multipart JPEG
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n\r\n" + frame.tobytes() + b"\r\n"
@@ -128,7 +161,6 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
 
     finally:
         globals.stream_running = False
-        # Don't close the camera here unless you *want* streaming to own the camera lifetime.
         app.logger.info("Camera streaming generator stopped.")
 
         
@@ -417,22 +449,21 @@ def apply_camera_settings(camera, camera_properties, settings):
         raise CameraError("Error applying camera settings.") from e
 
 def validate_and_set_camera_param(camera, param_name: str, param_value: float, properties: dict):
-    global stream_running, stream_thread
     valid_value = validate_param(param_name, param_value, properties)
 
     try:
-        was_streaming = stream_running
+        was_streaming = globals.stream_running
 
         # Stop streaming if changing critical dimensions
         if param_name in ['Width', 'Height'] and was_streaming:
-            stream_running = False
+            globals.stream_running = False
             if camera.IsGrabbing():
                 camera.StopGrabbing()
                 app.logger.info(f"Camera stream stopped to apply {param_name} change.")
-            if stream_thread and stream_thread.is_alive():
-                stream_thread.join(timeout=2)
+            if globals.stream_thread and globals.stream_thread.is_alive():
+                globals.stream_thread.join(timeout=2)
                 app.logger.info("Camera stream thread joined.")
-            stream_thread = None
+            globals.stream_thread = None
             time.sleep(0.5)
 
         if not camera.IsOpen():
@@ -466,9 +497,9 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
 
         # Restart streaming if we had to stop it
         if param_name in ['Width', 'Height'] and was_streaming:
-            stream_running = True
-            stream_thread = threading.Thread(target=stream_video, args=(1.0, 80))
-            stream_thread.start()
+            globals.stream_running = True
+            globals.stream_thread = threading.Thread(target=stream_video, args=(1.0, 80))
+            globals.stream_thread.start()
             app.logger.info(f"Camera stream restarted after {param_name} change.")
 
     except Exception as e:

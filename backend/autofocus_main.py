@@ -3,19 +3,35 @@ import time
 import globals
 from motioncontrols import move_relative
 from autofocus_back import process_frame, detect_largest_object_square_roi
-from cameracontrol import converter
+import porthandler
 
 
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
 
+def wait_motion_done(motion_platform):
+    # Megvárja, amíg a firmware befejezi az összes mozgást
+    porthandler.write(motion_platform, "M400")
+
 def clamp(v, vmin, vmax):
     return max(vmin, min(vmax, v))
 
 def acquire_frame(timeout_ms=2000):
-    from pypylon import pylon
-
+    """
+    Acquires a single frame from the camera with BGR8 conversion.
+    
+    Uses the unified grab_and_convert_frame() for consistent BayerGR10p -> BGR8 conversion.
+    
+    Args:
+        timeout_ms: Timeout in milliseconds for frame retrieval
+        
+    Returns:
+        frame_bgr: NumPy array (HxWx3, uint8, BGR format)
+        
+    Raises:
+        RuntimeError: If camera not ready/open/grabbing or grab fails
+    """
     cam = globals.camera
     if cam is None or not cam.IsOpen():
         raise RuntimeError("Camera not ready")
@@ -26,45 +42,39 @@ def acquire_frame(timeout_ms=2000):
         if not cam.IsGrabbing():
             raise RuntimeError("Camera is not grabbing. Stream must be running.")
 
-        grab_result = cam.RetrieveResult(int(timeout_ms), pylon.TimeoutHandling_ThrowException)
-        try:
-            if not grab_result.GrabSucceeded():
-                raise RuntimeError("Grab failed")
-
-            # Convert BayerGR10p (or whatever the camera outputs) -> BGR8 for OpenCV
-            frame_bgr = converter.Convert(grab_result).GetArray()
-
-            # If you need to keep it beyond this scope, copy it (safe):
-            frame_bgr = frame_bgr.copy()
-
-        finally:
-            grab_result.Release()
+        # Use unified grab+convert function
+        from cameracontrol import grab_and_convert_frame
+        frame_bgr = grab_and_convert_frame(cam, timeout_ms=timeout_ms)
 
     return frame_bgr
 
 
-def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=3):
-    """
-    Relatív lépéssel odaáll target_z-re (virtuális Z), és visszaadja az új current_z-t.
-    """
-    dz = 1
+def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=1):
+    dz = float(target_z) - float(current_z)
+    print('Menj' + str(dz) + 'pozira')
     if abs(dz) > 1e-9:
         move_relative(motion_platform, z=dz)
-        if settle_s > 0:
+
+        # ✅ IDE KELL: várjuk meg a mozgás végét
+        wait_motion_done(motion_platform)
+
+        # opcionális: kis extra rezgéscsillapítás
+        if settle_s and settle_s > 0:
             time.sleep(settle_s)
-    return target_z
+
+    return float(target_z)
 
 
 def measure_focus_score(frame, roi):
     return process_frame(frame, roi=roi)
 
 
-def measure_score(motion_platform, current_z, target_z, roi, settle_s=0.0, n_frames=1, timeout_ms=2000):
+def measure_score(motion_platform, current_z, target_z, roi,  n_frames=1, timeout_ms=2000):
     """
     Elmegy target_z-re, készít n_frames képet, score-ol, és visszaadja (új_z, score).
     n_frames>1 esetén mediánt veszünk (zaj ellen).
     """
-    current_z = move_to_virtual_z(motion_platform, current_z, target_z, settle_s=settle_s)
+    current_z = move_to_virtual_z(motion_platform, current_z, target_z)
 
     scores = []
     n = max(1, int(n_frames))
@@ -74,6 +84,7 @@ def measure_score(motion_platform, current_z, target_z, roi, settle_s=0.0, n_fra
 
     scores.sort()
     score = scores[len(scores) // 2]  # median
+    print('Scores: ' + str(scores))
     return current_z, score
 
 
@@ -96,11 +107,11 @@ def autofocus_coarse(
     fine1_offsets=(-1.0, -0.5, 0.0, +0.5, +1.0),
 
     # Fine 2 around fine1 best
-    fine2_step=0.25,
-    fine2_halfspan=0.25,
+    fine2_step=0.1,
+    fine2_halfspan=0.5,
 
     # Measurement
-    settle_s=0.5,
+
     n_frames=1,
     roi_square_scale=0.8,
     grab_timeout_ms=2000,
@@ -122,7 +133,7 @@ def autofocus_coarse(
 
     # Virtuális Z nyilvántartás (0 a híváskori Z-hez képest)
     current_z = 0.0
-    current_z = move_to_virtual_z(motion_platform, current_z, float(z_min), settle_s=settle_s)
+    current_z = move_to_virtual_z(motion_platform, current_z, float(z_min))
 
     # --- ROI detektálás 1x ---
     first_frame = acquire_frame(timeout_ms=grab_timeout_ms)
@@ -149,7 +160,7 @@ def autofocus_coarse(
     while z <= float(z_max):
         current_z, s = measure_score(
             motion_platform, current_z, z,
-            roi=roi, settle_s=settle_s, n_frames=n_frames, timeout_ms=grab_timeout_ms
+            roi=roi,  n_frames=n_frames, timeout_ms=grab_timeout_ms
         )
         coarse_points.append((z, s))
 
@@ -171,19 +182,8 @@ def autofocus_coarse(
 
     if best_z is None:
         raise RuntimeError("Coarse scan nem adott best_z-t.")
+    print('Best z: ' + str(best_z))
 
-    # --- Coarse érvényesség ellenőrzés: legyen elég kontraszt a score-ok között ---
-    if len(coarse_points) >= 2:
-        scores_only = [s for _, s in coarse_points]
-        score_min = min(scores_only)
-        score_max = max(scores_only)
-        if (score_max - score_min) <= 0.2:
-            raise RuntimeError(
-                f"Coarse scan érvénytelen: score_max-score_min={score_max - score_min:.4f} <= 0.2 "
-                f"(max={score_max:.4f}, min={score_min:.4f})."
-            )
-    else:
-        raise RuntimeError("Coarse scan érvénytelen: túl kevés mérési pont.")
 
     # -----------------------------------------------------------------
     # 2) FINE 1
@@ -192,17 +192,17 @@ def autofocus_coarse(
         clamp(best_z + float(off), float(z_min), float(z_max))
         for off in fine1_offsets
     ))
-
+    print('Fine1_targets_z:' + str(fine1_targets))
     fine1_points = []
     for zf in fine1_targets:
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
-            roi=roi, settle_s=settle_s, n_frames=n_frames, timeout_ms=grab_timeout_ms
+            roi=roi, n_frames=n_frames, timeout_ms=grab_timeout_ms
         )
         fine1_points.append((zf, sf))
 
     best1_z, best1_s = max(fine1_points, key=lambda p: p[1])
-
+    print('Fine best z: ' + str(best1_z))
     # -----------------------------------------------------------------
     # 3) FINE 2
     # -----------------------------------------------------------------
@@ -218,20 +218,20 @@ def autofocus_coarse(
         clamp(best1_z + off, float(z_min), float(z_max))
         for off in offsets2
     ))
-
+    print('Fine2 targets: ' + str(fine2_targets))
     fine2_points = []
     for zf in fine2_targets:
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
-            roi=roi, settle_s=settle_s, n_frames=n_frames, timeout_ms=grab_timeout_ms
+            roi=roi,  n_frames=n_frames, timeout_ms=grab_timeout_ms
         )
         fine2_points.append((zf, sf))
 
     final_z, final_s = max(fine2_points, key=lambda p: p[1])
-
+    print('Final_z: ' + str(final_z))
     # opcionális: ráállunk a legjobb fókuszra
     if move_to_best:
-        current_z = move_to_virtual_z(motion_platform, current_z, final_z, settle_s=settle_s)
+        current_z = move_to_virtual_z(motion_platform, current_z, final_z)
 
     # abszolút z (ha a rendszered cache-eli valahol)
     abs_z0 = None

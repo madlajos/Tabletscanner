@@ -14,6 +14,7 @@ import { ImageViewerComponent } from './features/image-viewer/image-viewer.compo
 import { CameraControlComponent } from './features/camera-control/camera-control.component';
 import { ErrorPopupListComponent } from './components/error-popup-list/error-popup-list.component';
 import { BackendReadyService } from './services/backend-ready.service'; // Adjust the path as needed
+import { ErrorNotificationService } from './services/error-notification.service';
 import { MotionControl } from './features/motion-control/motion-control';
 import { AutoMeasurementComponent } from './features/auto-measurement/auto-measurement.component';
 
@@ -47,6 +48,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   constructor(
     private http: HttpClient,
     private backendReadyService: BackendReadyService,
+    private errorNotificationService: ErrorNotificationService,
     private lightbox: Lightbox,
     private cdRef: ChangeDetectorRef,
   ) {}
@@ -56,6 +58,11 @@ export class AppComponent implements OnInit, AfterViewInit {
     try {
       await this.backendReadyService.waitForBackendReady();
       console.log("Backend is ready.");
+      
+      // Clear any transient errors from initialization (e.g., camera disconnected during startup)
+      // Once backend is ready, devices should reconnect automatically
+      this.errorNotificationService.removeError('E1111'); // Camera disconnected error
+      
       this.backendReady = true;
       this.cdRef.detectChanges();
     } catch (error) {

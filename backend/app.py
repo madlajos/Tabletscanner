@@ -6,7 +6,7 @@ import time
 import globals
 from pypylon import pylon
 from cameracontrol import (apply_camera_settings, 
-                           validate_and_set_camera_param, get_camera_properties)
+                           validate_and_set_camera_param, get_camera_properties, stream_video)
 import porthandler
 import motioncontrols
 import os
@@ -704,8 +704,8 @@ def auto_measurement():
 @app.route('/api/start-video-stream', methods=['GET'])
 def start_video_stream():
     """
-    Returns a live MJPEG response from generate_frames().
-    This is the *only* place we call generate_frames, to avoid double-streaming.
+    Returns a live MJPEG response from stream_video().
+    This is the *only* place we call stream_video, to avoid double-streaming.
     """
     try:
         scale_factor = float(request.args.get('scale', 0.1))
@@ -722,7 +722,7 @@ def start_video_stream():
 
         app.logger.info(f"Starting video stream")
         return Response(
-            generate_frames(scale_factor),
+            stream_video(scale_factor),
             mimetype='multipart/x-mixed-replace; boundary=frame'
         )
 
@@ -753,48 +753,15 @@ def stop_video_stream():
         app.logger.exception(f"Unexpected exception while stopping camera stream.")
         return jsonify({"error": str(e)}), 500
 
-def generate_frames(scale_factor=0.1):
-    app.logger.info(f"Generating frames with scale factor {scale_factor}")
-    camera = globals.camera
-    if not camera:
-        app.logger.error(f"Camera is not connected.")
-        return
-    if not camera.IsGrabbing():
-        app.logger.info(f"Camera starting grabbing.")
-        camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-
-    try:
-        while globals.stream_running:
-            with globals.grab_lock:
-                grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-                if grab_result.GrabSucceeded():
-                    image = converter.Convert(grab_result).GetArray()
-                    if scale_factor != 1.0:
-                        width = int(image.shape[1] * scale_factor)
-                        height = int(image.shape[0] * scale_factor)
-                        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
-                    success, frame = cv2.imencode('.jpg', image)
-                    
-                    if success:
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + frame.tobytes() + b'\r\n')
-                grab_result.Release()
-    except Exception as e:
-        app.logger.error(f"Error in video stream: {e}")
-        if "Device has been removed" in str(e):
-            globals.stream_running = False
-            if camera and camera.IsOpen():
-                try:
-                    camera.StopGrabbing()
-                    camera.Close()
-                except Exception as close_err:
-                    app.logger.error(f"Failed to close camera after unplug: {close_err}")
-            # FIX: clear the correct reference (was `globals.cameras = None`)
-            globals.camera = None
-    finally:
-        app.logger.info(f"Camera streaming thread stopped.")
 
 def grab_camera_image():
+    """
+    Grabs a single frame from the camera and converts to BGR8.
+    
+    Returns:
+        tuple: (frame_bgr, error_response, error_code) where frame_bgr is uint8 BGR array,
+               or (None, error_json, error_code) on failure
+    """
     try:
         lock = getattr(globals, "grab_lock", None)
         if lock is None:
@@ -811,43 +778,28 @@ def grab_camera_image():
                     "popup": True
                 }), 400
 
-            # Retry grabbing the image up to 10 times.
-            grab_result = retry_operation(
-                lambda: attempt_frame_grab(cam),
-                max_retries=10,
-                wait=1
-            )
-
-            if grab_result is None:
-                app.logger.error("Grab result is None for camera")
+            if not cam.IsGrabbing():
+                app.logger.error("Camera is not grabbing.")
                 return None, jsonify({
-                    "error": ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED),
+                    "error": "Camera is not grabbing. Start the video stream first.",
                     "code": ErrorCode.CAMERA_DISCONNECTED,
                     "popup": True
-                }), 400
+                }), 503
 
+            # Use unified grab+convert function
             try:
-                if not grab_result.GrabSucceeded():
-                    app.logger.error("Grab result unsuccessful for camera")
-                    return None, jsonify({
-                        "error": ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED),
-                        "code": ErrorCode.CAMERA_DISCONNECTED,
-                        "popup": True
-                    }), 400
-            except Exception as e:
-                app.logger.exception(f"Exception while checking GrabSucceeded: {e}")
+                from cameracontrol import grab_and_convert_frame
+                frame_bgr = grab_and_convert_frame(cam, timeout_ms=5000)
+                app.logger.info("Image grabbed and converted to BGR successfully.")
+                globals.latest_image = frame_bgr
+                return frame_bgr, None, None
+            except RuntimeError as e:
+                app.logger.error(f"Frame grab failed: {e}")
                 return None, jsonify({
-                    "error": ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED, "Camera disconnected."),
+                    "error": "Failed to grab frame from camera",
                     "code": ErrorCode.CAMERA_DISCONNECTED,
                     "popup": True
                 }), 400
-
-            app.logger.info("Image grabbed successfully.")
-            image = grab_result.Array
-            globals.latest_image = image.copy()
-            grab_result.Release()
-            
-            return image, None, None
 
     except Exception as e:
         app.logger.exception(f"Error grabbing image: {e}")
@@ -1110,15 +1062,6 @@ def select_folder_external() -> str:
     except Exception as e:
         print("Folder selection failed:", e)
         return ""
-    
-def attempt_frame_grab(camera):
-    # Attempt to retrieve the image result.
-    grab_result = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-    # Check if the frame grab was successful.
-    if not grab_result.GrabSucceeded():
-        grab_result.Release()
-        raise Exception(f"Grab result unsuccessful for camera")
-    return grab_result
 
 def connect_camera_internal():
     factory = pylon.TlFactory.GetInstance()
@@ -1140,18 +1083,49 @@ def connect_camera_internal():
             "name": selected_cam.GetModelName(),
         }
 
-    try:
-        globals.camera = pylon.InstantCamera(factory.CreateDevice(selected_cam))
-        globals.camera.Open()
-        
-    except Exception as e:
-        # Use GetPortName() if available; otherwise, fallback.
-        port_name = selected_cam.GetPortName() if hasattr(selected_cam, "GetPortName") else "unknown"
-        app.logger.exception(f"Failed to connect to camera on port {port_name}: {e}")
+    # Try to open the camera with a small retry loop. On some Windows setups
+    # the Pylon SDK can leave the device in a transient state after frequent
+    # restarts; attempt a few times and do a clean close on failure to avoid
+    # leaving the camera partially opened.
+    max_attempts = 3
+    open_success = False
+    port_name = selected_cam.GetPortName() if hasattr(selected_cam, "GetPortName") else "unknown"
+    for attempt in range(1, max_attempts + 1):
+        try:
+            app.logger.info(f"Attempting to open camera {port_name} (try {attempt}/{max_attempts})")
+            cam = pylon.InstantCamera(factory.CreateDevice(selected_cam))
+            cam.Open()
+            # success
+            globals.camera = cam
+            open_success = True
+            break
+        except Exception as e:
+            app.logger.warning(f"Camera open attempt {attempt} failed: {e}")
+            try:
+                # best-effort cleanup of partial camera object
+                if 'cam' in locals() and cam is not None:
+                    try:
+                        if cam.IsOpen():
+                            cam.Close()
+                    except Exception:
+                        pass
+                    try:
+                        del cam
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # small backoff before retry
+            time.sleep(0.5 * attempt)
+
+    if not open_success:
+        app.logger.exception(f"Failed to connect to camera on port {port_name} after {max_attempts} attempts")
         return {
             "error": ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED, "Camera not connected."),
             "code": ErrorCode.CAMERA_DISCONNECTED,
-            "popup": True
+            "popup": True,
+            "details": "Camera failed to open; try replugging the device if problem persists."
         }
 
     if not globals.camera.IsOpen():
@@ -1249,6 +1223,31 @@ def initialize_serial_devices():
     except Exception as e:
         app.logger.error(f"Error initializing Motion Platform: {e}")
        
+def shutdown_devices():
+    """Clean shutdown of all devices before exit."""
+    app.logger.info("Shutting down devices...")
+    
+    # Close camera stream and camera
+    try:
+        stop_camera_stream()
+        cam = globals.camera
+        if cam and cam.IsOpen():
+            cam.Close()
+        globals.camera = None
+        app.logger.info("Camera closed successfully.")
+    except Exception as e:
+        app.logger.debug(f"Error closing camera: {e}")
+    
+    # Close motion platform serial port
+    try:
+        ser = globals.motion_platform
+        if ser and getattr(ser, 'is_open', False):
+            ser.close()
+            globals.motion_platform = None
+            app.logger.info("Motion platform disconnected successfully.")
+    except Exception as e:
+        app.logger.debug(f"Error closing motion platform: {e}")      
+       
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
@@ -1257,4 +1256,7 @@ if __name__ == '__main__':
     initialize_cameras()
     initialize_serial_devices()
     
-    app.run(debug=False, use_reloader=False)
+    try:
+        app.run(debug=False, use_reloader=False)
+    finally:
+        shutdown_devices()
