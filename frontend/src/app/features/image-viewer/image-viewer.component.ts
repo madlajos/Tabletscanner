@@ -41,6 +41,15 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
 
   private readonly BASE_URL = 'http://localhost:5000/api';
 
+  // Zoom and pan state
+  zoomLevel = 1.0;
+  panX = 0;
+  panY = 0;
+  private isDragging = false;
+  private dragStart = { x: 0, y: 0 };
+  private lastClickTime = 0;
+  private readonly DOUBLE_CLICK_THRESHOLD = 300; // ms
+
   constructor(
     public http: HttpClient,
     public sharedService: SharedService
@@ -66,6 +75,17 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
       console.warn(
         'No streaming observable found on SharedService (isStreaming$ / cameraStreamStatus$).'
       );
+    }
+
+    // Add zoom/pan event listeners to the video container
+    if (this.videoContainer) {
+      const container = this.videoContainer.nativeElement;
+      container.addEventListener('wheel', (e) => this.onMouseWheel(e), false);
+      container.addEventListener('mousedown', (e) => this.onMouseDown(e));
+      container.addEventListener('mousemove', (e) => this.onMouseMove(e));
+      container.addEventListener('mouseup', () => this.onMouseUp());
+      container.addEventListener('mouseleave', () => this.onMouseUp());
+      container.addEventListener('dblclick', () => this.resetZoomAndPan());
     }
   }
 
@@ -181,5 +201,101 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
   // For *ngFor to avoid re-rendering everything on each change
   trackByPath(index: number, img: SavedImage): string {
     return img.path;
+  }
+
+  // Zoom and pan event handlers
+  private onMouseWheel(event: WheelEvent): void {
+    // Only zoom if Ctrl key is held
+    if (!event.ctrlKey) return;
+
+    event.preventDefault();
+
+    const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+    const newZoom = this.zoomLevel * zoomFactor;
+
+    // Clamp zoom between 1.0 (original) and 5.0 (max 5x zoom)
+    this.zoomLevel = Math.max(1.0, Math.min(5.0, newZoom));
+    this.applyTransform();
+  }
+
+  private onMouseDown(event: MouseEvent): void {
+    // Record double-click for reset
+    const now = Date.now();
+    if (now - this.lastClickTime < this.DOUBLE_CLICK_THRESHOLD) {
+      this.lastClickTime = 0;
+      return; // Handled by dblclick event
+    }
+    this.lastClickTime = now;
+
+    // Start dragging only if zoomed in
+    if (this.zoomLevel > 1.0) {
+      event.preventDefault(); // Prevent browser's default drag behavior
+      this.isDragging = true;
+      this.dragStart = { x: event.clientX, y: event.clientY };
+    }
+  }
+
+  private onMouseMove(event: MouseEvent): void {
+    if (!this.isDragging || this.zoomLevel <= 1.0) return;
+
+    const container = this.videoContainer?.nativeElement;
+    if (!container) return;
+
+    // Calculate delta from initial drag position
+    const deltaX = event.clientX - this.dragStart.x;
+    const deltaY = event.clientY - this.dragStart.y;
+
+    // Apply delta to current pan position
+    this.panX += deltaX;
+    this.panY += deltaY;
+
+    // Update drag start for next move
+    this.dragStart = { x: event.clientX, y: event.clientY };
+
+    // Clamp pan to prevent dragging beyond image boundaries
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+    const maxPanX = (this.zoomLevel - 1) * containerWidth / 2;
+    const maxPanY = (this.zoomLevel - 1) * containerHeight / 2;
+
+    this.panX = Math.max(-maxPanX, Math.min(maxPanX, this.panX));
+    this.panY = Math.max(-maxPanY, Math.min(maxPanY, this.panY));
+
+    this.applyTransform();
+  }
+
+  private onMouseUp(): void {
+    this.isDragging = false;
+  }
+
+  private resetZoomAndPan(): void {
+    this.zoomLevel = 1.0;
+    this.panX = 0;
+    this.panY = 0;
+    this.applyTransform();
+  }
+
+  private applyTransform(): void {
+    const container = this.videoContainer?.nativeElement;
+    if (!container) return;
+
+    const img = container.querySelector('img');
+    if (img) {
+      const transform = `scale(${this.zoomLevel}) translate(${this.panX}px, ${this.panY}px)`;
+      (img as HTMLImageElement).style.transform = transform;
+      (img as HTMLImageElement).style.transformOrigin = 'center center';
+      (img as HTMLImageElement).style.transition = this.isDragging ? 'none' : 'transform 0.2s ease-out';
+    }
+  }
+
+  isZoomed(): boolean {
+    return this.zoomLevel > 1.0;
+  }
+
+  getCursorStyle(): string {
+    if (this.zoomLevel > 1.0) {
+      return this.isDragging ? 'grabbing' : 'grab';
+    }
+    return 'default';
   }
 }

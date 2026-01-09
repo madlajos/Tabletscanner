@@ -12,7 +12,9 @@
   </div>
 
   <div class="live-view">
-    <div #videoContainer class="video-host" [class.hidden]="!sharedService.getCameraStreamStatus()"></div>
+    <div #videoContainer class="video-host" [class.hidden]="!sharedService.getCameraStreamStatus()" 
+         [class.zoomed]="isZoomed()" 
+         [style.cursor]="getCursorStyle()"></div>
 
     <button class="capture-button" (click)="captureImage()" [disabled]="!sharedService.getCameraStreamStatus()"
       title="Save Snapshot">

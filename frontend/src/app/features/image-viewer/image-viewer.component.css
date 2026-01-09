@@ -63,15 +63,38 @@
 .video-host {
   width: 100%;
   height: 100%;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
-/* Keep your original “cover” behavior for consistency */
+/* Enable smooth zoom/pan transitions */
+.video-host.zoomed {
+  overflow: auto;
+}
+
+/* Keep your original "cover" behavior for consistency */
 .live-view img,
 .video-host img {
   width: 100%;
   height: 100%;
   object-fit: cover;   /* original behavior; switch to 'contain' if you prefer no cropping */
   display: block;
+  transform-origin: center center;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-user-drag: none;
+  draggable: false;
+}
+
+.video-host img:active {
+  cursor: grabbing;
 }
 
 .placeholder {
