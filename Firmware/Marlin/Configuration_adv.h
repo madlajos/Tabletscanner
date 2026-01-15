@@ -660,7 +660,7 @@
  */
 #define FAST_PWM_FAN    // 1. Enable Fast PWM (Hardware Timers)
 #if ENABLED(FAST_PWM_FAN)
-  #define FAST_PWM_FAN_FREQUENCY 100  // 2. Set frequency to 100Hz
+  #define FAST_PWM_FAN_FREQUENCY 500  // 2. Set frequency to 500Hz
   //#define USE_OCR2A_AS_TOP
   #ifndef FAST_PWM_FAN_FREQUENCY
     #ifdef __AVR__
@@ -670,6 +670,15 @@
     #endif
   #endif
 #endif
+
+/**
+ * Fan Inverting Mask
+ * Invert the logic of specific fans.
+ * Bit 0 = FAN0, Bit 1 = FAN1, etc.
+ * We want to invert ONLY FAN0 (Lamp 1), so we use a value of 1.
+ */
+
+#define STARTUP_COMMANDS "M106 P0 S255"
 
 /**
  * Assign more PWM fans for part cooling, synchronized with Fan 0
