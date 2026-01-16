@@ -5,7 +5,7 @@
     <h3>Mentési Beállítások</h3>
     <table class="user-settings-table">
       <tbody>
-        <!-- Top row: Objektív + Közgyűrűk -->
+        <!-- Top row: Objektív -->
         <tr>
           <td>Objektív</td>
           <td>
@@ -15,7 +15,10 @@
               <option value="100x">100x</option>
             </select>
           </td>
+        </tr>
 
+        <!-- Second row: Közgyűrűk -->
+        <tr>
           <td>Közgyűrűk</td>
           <td>
             <select [(ngModel)]="otherSettings['spacer_rings']" (change)="applyOtherSetting('spacer_rings')"
@@ -28,7 +31,7 @@
           </td>
         </tr>
 
-        <!-- Second row: Háttérlevonás + Beállítások -->
+        <!-- Third row: Háttérlevonás -->
         <tr>
           <td>Háttérlevonás</td>
           <td>
@@ -37,17 +40,6 @@
               class="styled-checkbox"
               [(ngModel)]="otherSettings['background_subtraction']"
               (change)="applyOtherSetting('background_subtraction')"
-              [disabled]="measurementActive"
-            />
-          </td>
-
-          <td>Beállítások</td>
-          <td>
-            <input
-              type="checkbox"
-              class="styled-checkbox"
-              [(ngModel)]="otherSettings['save_settings']"
-              (change)="applyOtherSetting('save_settings')"
               [disabled]="measurementActive"
             />
           </td>

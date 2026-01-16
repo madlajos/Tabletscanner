@@ -6,7 +6,8 @@ import cv2
 
 import globals
 from motioncontrols import move_relative
-from autofocus_back import process_frame, detect_largest_object_square_roi
+
+from autofocus_back import process_frame, detect_largest_object_square_roi, edge_definition_score
 from cameracontrol import converter
 import porthandler
 
@@ -152,12 +153,10 @@ def measure_focus_score(frame, roi):
 def measure_score(
     motion_platform, current_z, target_z, roi,
     n_frames=1, timeout_ms=2000,
-    debug=False, debug_buffer=None, stage="unk"
+    debug=False, debug_buffer=None, stage="unk",
+    frame_scale=1.0,
+    score_fn=None,   # ✅ ha megadod, ezt használja (pl. edge score)
 ):
-    """
-    Elmegy target_z-re, készít n_frames képet, score-ol.
-    Debug módban NEM ment fájlba, hanem memóriába gyűjti a nyers frame-eket.
-    """
     current_z = move_to_virtual_z(motion_platform, current_z, target_z)
 
     scores = []
@@ -166,7 +165,11 @@ def measure_score(
     for i in range(n):
         frame = acquire_frame(timeout_ms=timeout_ms)
 
-        # memóriába gyűjtés
+        # ✅ downscale (gyorsítás + stabilabb)
+        if frame_scale is not None and float(frame_scale) != 1.0:
+            frame = cv2.resize(frame, None, fx=float(frame_scale), fy=float(frame_scale), interpolation=cv2.INTER_AREA)
+
+        # debug buffer (a már kicsinyített képet mentjük)
         if debug and debug_buffer is not None:
             debug_buffer.append({
                 "stage": stage,
@@ -175,14 +178,17 @@ def measure_score(
                 "frame": frame.copy(),
             })
 
-        scores.append(measure_focus_score(frame, roi))
+        if score_fn is None:
+            s = measure_focus_score(frame, roi)
+        else:
+            s = score_fn(frame)
+
+        scores.append(s)
 
     scores.sort()
-    score = scores[len(scores) // 2]  # median
+    score = scores[len(scores) // 2]
     print("Scores: " + str(scores))
-
     return current_z, score
-
 
 # ---------------------------------------------------------------------
 # Autofocus main
@@ -191,7 +197,8 @@ def autofocus_coarse(
     motion_platform,
     z_min=0.0,
     z_max=25.0,
-
+    frame_scale=0.35,   # ✅ még kisebb kép (pl. 0.5 helyett 0.35 vagy 0.3)
+    edge_ring_width=5,  # ✅ perem-sáv vastagság
     # Coarse scan
     coarse_step=2.0,
     drop_ratio=0.92,
@@ -230,10 +237,16 @@ def autofocus_coarse(
     debug_buffer = [] if debug else None
 
     current_z = 0.0
-    current_z = move_to_virtual_z(motion_platform, current_z, float(z_min))
+    # ✅ induljunk a legmagasabb pozícióról
+    current_z = move_to_virtual_z(motion_platform, current_z, float(z_max))
 
     # --- ROI detektálás 1x ---
     first_frame = acquire_frame(timeout_ms=grab_timeout_ms)
+
+    # ✅ ugyanaz a downscale az ROI detekthez is
+    if frame_scale is not None and float(frame_scale) != 1.0:
+        first_frame = cv2.resize(first_frame, None, fx=float(frame_scale), fy=float(frame_scale),
+                                 interpolation=cv2.INTER_AREA)
 
     if debug and debug_buffer is not None:
         debug_buffer.append({
@@ -253,24 +266,27 @@ def autofocus_coarse(
         roi = None
 
     # -----------------------------------------------------------------
-    # 1) COARSE SCAN
+    # 1) COARSE SCAN (✅ z_max -> z_min)
     # -----------------------------------------------------------------
     coarse_points = []  # (z, score)
     best_z = None
     best_score = float("-inf")
     bad_count = 0
 
-    z = float(z_min)
+    z = float(z_max)
     i = 0
-    while z <= float(z_max):
+    step = abs(float(coarse_step))  # biztos pozitív
+    while z >= float(z_min):
         current_z, s = measure_score(
             motion_platform, current_z, z,
-            roi=roi,
+            roi=None,  # ✅ coarse-hoz nem kell ROI
             n_frames=n_frames,
             timeout_ms=grab_timeout_ms,
             debug=debug,
             debug_buffer=debug_buffer,
-            stage="coarse"
+            stage="coarse",
+            frame_scale=frame_scale,
+            score_fn=lambda fr: edge_definition_score(fr, ring_width=edge_ring_width),
         )
         coarse_points.append((z, s))
 
@@ -279,7 +295,9 @@ def autofocus_coarse(
             best_z = z
             bad_count = 0
 
-        if (i + 1) >= int(min_points) and (best_z is not None) and (z > best_z):
+        # ✅ Early-stop lefelé:
+        # akkor "best után vagyunk", ha z < best_z (mert z csökken)
+        if (i + 1) >= int(min_points) and (best_z is not None) and (z < best_z):
             if s < best_score * float(drop_ratio):
                 bad_count += 1
             else:
@@ -287,7 +305,7 @@ def autofocus_coarse(
             if bad_count >= int(bad_needed):
                 break
 
-        z += float(coarse_step)
+        z -= step
         i += 1
 
     if best_z is None:
@@ -334,7 +352,9 @@ def autofocus_coarse(
             timeout_ms=grab_timeout_ms,
             debug=debug,
             debug_buffer=debug_buffer,
-            stage="fine1"
+            stage="fine1",
+            frame_scale=frame_scale,
+            score_fn=None
         )
         fine1_points.append((zf, sf))
 
@@ -367,7 +387,9 @@ def autofocus_coarse(
             timeout_ms=grab_timeout_ms,
             debug=debug,
             debug_buffer=debug_buffer,
-            stage="fine2"
+            stage="fine2",
+            frame_scale=frame_scale,
+            score_fn=None
         )
         fine2_points.append((zf, sf))
 

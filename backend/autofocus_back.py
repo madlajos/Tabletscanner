@@ -3,6 +3,53 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import glob
+def edge_definition_score(frame_bgr, ring_width=5):
+    """
+    Objektum-háttér perem definíció:
+    - Otsu + legnagyobb kontúr => objektum maszk
+    - ring = dilate(mask) - erode(mask)
+    - score = átlagos Scharr gradiens a ring pixeleken
+
+    Nagyobb = élesebb kontúr.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return None
+
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+
+    # Otsu
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # invert ha kell (foreground fehér legyen)
+    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
+    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
+    if fg < bg:
+        bw = 255 - bw
+
+    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    c = max(contours, key=cv2.contourArea)
+
+    mask = np.zeros_like(bw)
+    cv2.drawContours(mask, [c], -1, 255, thickness=cv2.FILLED)
+
+    k = max(1, int(ring_width))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
+    dil = cv2.dilate(mask, kernel, iterations=1)
+    ero = cv2.erode(mask, kernel, iterations=1)
+    ring = cv2.subtract(dil, ero)
+
+    gx = cv2.Scharr(gray, cv2.CV_64F, 1, 0)
+    gy = cv2.Scharr(gray, cv2.CV_64F, 0, 1)
+    mag = np.sqrt(gx * gx + gy * gy)
+
+    vals = mag[ring > 0]
+    if vals.size == 0:
+        return None
+
+    return round(float(np.mean(vals)), 4)
 
 # ---- 1. Focus score számoló függvény ----
 def process_frame(frame, roi=None):
