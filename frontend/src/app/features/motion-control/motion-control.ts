@@ -242,18 +242,94 @@ export class MotionControl implements OnInit, OnDestroy {
   // ---------- Helpers ----------
 
   toggleBarLight(): void {
-    if (this.barLightOn == false)
-      this.barLightOn = true
-    else
-      this.barLightOn = false
+    if (!this.barLightOn) {
+      // Turning bar on: if dome is on, turn it off first
+      if (this.ringLightOn) {
+        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
+          next: () => {
+            this.ringLightOn = false;
+            // Now turn bar on
+            this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
+              next: () => {
+                this.barLightOn = true;
+              },
+              error: (err) => {
+                console.error('Failed to turn on bar light', err);
+              }
+            });
+          },
+          error: (err) => {
+            console.error('Failed to turn off dome light', err);
+          }
+        });
+      } else {
+        // Dome is off, just turn bar on
+        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
+          next: () => {
+            this.barLightOn = true;
+          },
+          error: (err) => {
+            console.error('Failed to turn on bar light', err);
+          }
+        });
+      }
+    } else {
+      // Turning bar off
+      this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
+        next: () => {
+          this.barLightOn = false;
+        },
+        error: (err) => {
+          console.error('Failed to turn off bar light', err);
+        }
+      });
+    }
   }
 
 
-  toggleRingLight(): void {
-    if (this.ringLightOn == false)
-      this.ringLightOn = true
-    else
-      this.ringLightOn = false
+  toggleDomeLight(): void {
+    if (!this.ringLightOn) {
+      // Turning dome on: if bar is on, turn it off first
+      if (this.barLightOn) {
+        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
+          next: () => {
+            this.barLightOn = false;
+            // Now turn dome on
+            this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
+              next: () => {
+                this.ringLightOn = true;
+              },
+              error: (err) => {
+                console.error('Failed to turn on dome light', err);
+              }
+            });
+          },
+          error: (err) => {
+            console.error('Failed to turn off bar light', err);
+          }
+        });
+      } else {
+        // Bar is off, just turn dome on
+        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
+          next: () => {
+            this.ringLightOn = true;
+          },
+          error: (err) => {
+            console.error('Failed to turn on dome light', err);
+          }
+        });
+      }
+    } else {
+      // Turning dome off
+      this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
+        next: () => {
+          this.ringLightOn = false;
+        },
+        error: (err) => {
+          console.error('Failed to turn off dome light', err);
+        }
+      });
+    }
   }
 
   resetMotorOffState(): void {

@@ -532,6 +532,25 @@ def autofocus_coarse():
             'trace': traceback.format_exc()
         }), 500
 
+
+@app.route('/api/send_gcode', methods=['POST'])
+def send_gcode():
+    try:
+        data = request.get_json()
+        command = data.get('command')
+        if not command:
+            return jsonify({'error': 'No command provided'}), 400
+
+        ser = globals.motion_platform
+        if not ser or not ser.is_open:
+            return jsonify({'error': 'Motion platform not connected'}), 503
+
+        porthandler.write(ser, command)
+        return jsonify({'message': 'Command sent'}), 200
+    except Exception as e:
+        app.logger.exception("send_gcode failed")
+        return jsonify({'error': str(e)}), 500
+
     # 1) Move the existing logic into a helper:
 
 def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
