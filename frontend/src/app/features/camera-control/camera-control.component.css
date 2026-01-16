@@ -6,6 +6,7 @@
 
 .camera-settings-table {
   border-collapse: collapse;
+  width: 100%;
 }
 
 .camera-settings-table th,
@@ -16,15 +17,24 @@
   font-size: 12px;
 }
 
+.camera-settings-table td:first-child {
+  width: 25%;
+}
+
+.camera-settings-table td:not(:first-child) {
+  width: 37.5%;
+}
+
 /* Input Fields */
 .camera-settings-table input {
-  width: 80%;
+  width: 60%;
   padding: 4px;
   font-size: 12px;
   border-radius: 3px;
   border: 1px solid #555;
   background-color: #333;
   color: #fff;
+  text-align: center;
 }
 
 /* Ensure Buttons Are Aligned Horizontally */
@@ -174,6 +184,7 @@ td button:hover {
   min-width: 0;             /* prevent flex overflow */
   width: auto;              /* override table’s 30% rule */
   text-align: left;
+  max-width: 180px;         /* shorten the Beállítás textbox */
 }
 
 .camera-settings-table td.lamp-cell {
@@ -185,6 +196,14 @@ td button:hover {
 .lamp-icon {
   height: 32px;            /* tweak this until it almost fills the row */
   width: auto;
+  vertical-align: middle;
+  margin-left: 22%;
+}
+
+.icon-cell {
+  text-align: center;
+  vertical-align: middle;
+  width: 37.5%;
 }
 
 .settings-button{

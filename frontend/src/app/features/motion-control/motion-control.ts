@@ -252,6 +252,7 @@ export class MotionControl implements OnInit, OnDestroy {
             this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
               next: () => {
                 this.barLightOn = true;
+                this.applyCameraSettingsForLight('bar');
               },
               error: (err) => {
                 console.error('Failed to turn on bar light', err);
@@ -267,6 +268,7 @@ export class MotionControl implements OnInit, OnDestroy {
         this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
           next: () => {
             this.barLightOn = true;
+            this.applyCameraSettingsForLight('bar');
           },
           error: (err) => {
             console.error('Failed to turn on bar light', err);
@@ -298,6 +300,7 @@ export class MotionControl implements OnInit, OnDestroy {
             this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
               next: () => {
                 this.ringLightOn = true;
+                this.applyCameraSettingsForLight('dome');
               },
               error: (err) => {
                 console.error('Failed to turn on dome light', err);
@@ -313,6 +316,7 @@ export class MotionControl implements OnInit, OnDestroy {
         this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
           next: () => {
             this.ringLightOn = true;
+            this.applyCameraSettingsForLight('dome');
           },
           error: (err) => {
             console.error('Failed to turn on dome light', err);
@@ -637,5 +641,10 @@ export class MotionControl implements OnInit, OnDestroy {
     if (axis === 'x') this.isEditingX = false;
     else if (axis === 'y') this.isEditingY = false;
     else this.isEditingZ = false;
+  }
+
+  applyCameraSettingsForLight(light: 'dome' | 'bar'): void {
+    // Emit an event to notify the camera control component to apply the corresponding settings
+    this.sharedService.applyCameraSettingsForLight(light);
   }
 }

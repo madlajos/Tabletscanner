@@ -116,6 +116,15 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       this.isStreaming = status;
     });
 
+    // Listen for light changes and apply corresponding camera settings
+    this.sharedService.lightSettings$.subscribe(light => {
+      if (light === 'dome') {
+        this.applyLightSpecificSettings('Dome');
+      } else if (light === 'bar') {
+        this.applyLightSpecificSettings('Bar');
+      }
+    });
+
     // TODO: Refactor to set current 'other' settings
     this.http.get<{ other_settings: any }>(`${this.BASE_URL}/get-other-settings?category=other_settings`)
       .subscribe({
@@ -472,13 +481,29 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   loadCameraSettings(): void {
-    this.http.get<CameraSettings>(`${this.BASE_URL}/get-camera-settings`)
+    this.http.get<any>(`${this.BASE_URL}/get-camera-settings`)
       .subscribe({
-        next: (settings: CameraSettings) => {
-          this.cameraSettings = settings;
-          this.settingsUpdatesService.updateCameraSettings(settings);
-          console.log(`Loaded main camera settings:`, settings);
+        next: (response: any) => {
+          // Load main settings
+          if (response.camera_params) {
+            this.cameraSettings = { ...this.cameraSettings, ...response.camera_params };
+          }
+          
+          // Load light-specific settings
+          if (response.camera_params_dome) {
+            Object.keys(response.camera_params_dome).forEach(key => {
+              this.cameraSettings[`${key}_Dome`] = response.camera_params_dome[key];
+            });
+          }
+          
+          if (response.camera_params_bar) {
+            Object.keys(response.camera_params_bar).forEach(key => {
+              this.cameraSettings[`${key}_Bar`] = response.camera_params_bar[key];
+            });
+          }
 
+          this.settingsUpdatesService.updateCameraSettings(this.cameraSettings);
+          console.log(`Loaded camera settings:`, this.cameraSettings);
         },
         error: error => console.error(`Error loading camera settings:`, error)
       });
@@ -488,25 +513,93 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     const value = this.cameraSettings[setting];
     console.log(`Applying setting ${setting}: ${value}`);
 
-    this.http.post(`${this.BASE_URL}/update-camera-settings`, {
-      setting_name: setting,
-      setting_value: value
-    }).subscribe(
-      (response: any) => {
-        console.log(`Setting applied successfully for camera:`, response);
+    // Check if this is a light-specific setting (e.g., ExposureTime_Dome, Gain_Bar, Gamma_Dome)
+    const lightMatch = setting.match(/(ExposureTime|Gain|Gamma)_(Dome|Bar)/);
+    
+    if (lightMatch) {
+      // Light-specific setting
+      const settingName = lightMatch[1];
+      const lightSuffix = lightMatch[2];
+      const lightName = lightSuffix.toLowerCase();
 
-        const correctedValue = response?.updated_value;
+      this.http.post(`${this.BASE_URL}/update-camera-settings-light`, {
+        light: lightName,
+        setting_name: settingName,
+        setting_value: value
+      }).subscribe(
+        (response: any) => {
+          console.log(`Light-specific setting applied successfully:`, response);
 
-        // Only update the input if the backend corrected it
-        if (correctedValue !== undefined && correctedValue !== value) {
-          this.cameraSettings[setting] = correctedValue;
-          console.log(`Corrected ${setting}: ${value} → ${correctedValue}`);
+          const correctedValue = response?.updated_value;
+
+          if (correctedValue !== undefined && correctedValue !== value) {
+            this.cameraSettings[setting] = correctedValue;
+            console.log(`Corrected ${setting}: ${value} → ${correctedValue}`);
+          }
+        },
+        error => {
+          console.error(`Error applying light-specific setting ${setting}:`, error);
         }
-      },
-      error => {
-        console.error(`Error applying setting for camera:`, error);
+      );
+    } else {
+      // Non-light-specific setting (deprecated path - kept for backwards compatibility)
+      this.http.post(`${this.BASE_URL}/update-camera-settings`, {
+        setting_name: setting,
+        setting_value: value
+      }).subscribe(
+        (response: any) => {
+          console.log(`Setting applied successfully for camera:`, response);
+
+          const correctedValue = response?.updated_value;
+
+          // Only update the input if the backend corrected it
+          if (correctedValue !== undefined && correctedValue !== value) {
+            this.cameraSettings[setting] = correctedValue;
+            console.log(`Corrected ${setting}: ${value} → ${correctedValue}`);
+          }
+        },
+        error => {
+          console.error(`Error applying setting for camera:`, error);
+        }
+      );
+    }
+  }
+
+  applyLightSpecificSettings(lightSuffix: 'Dome' | 'Bar'): void {
+    // Apply the light-specific settings (e.g., ExposureTime_Dome, Gain_Dome, Gamma_Dome)
+    const lightName = lightSuffix.toLowerCase();
+    const settings = [
+      { key: `ExposureTime_${lightSuffix}`, name: 'ExposureTime' },
+      { key: `Gain_${lightSuffix}`, name: 'Gain' },
+      { key: `Gamma_${lightSuffix}`, name: 'Gamma' }
+    ];
+
+    settings.forEach(setting => {
+      const value = this.cameraSettings[setting.key];
+      if (value !== undefined) {
+        console.log(`Applying light-specific setting ${setting.key}: ${value}`);
+
+        this.http.post(`${this.BASE_URL}/update-camera-settings-light`, {
+          light: lightName,
+          setting_name: setting.name,
+          setting_value: value
+        }).subscribe(
+          (response: any) => {
+            console.log(`Setting applied successfully:`, response);
+
+            const correctedValue = response?.updated_value;
+
+            if (correctedValue !== undefined && correctedValue !== value) {
+              this.cameraSettings[setting.key] = correctedValue;
+              console.log(`Corrected ${setting.key}: ${value} → ${correctedValue}`);
+            }
+          },
+          error => {
+            console.error(`Error applying setting ${setting.key}:`, error);
+          }
+        );
       }
-    );
+    });
   }
 
   applySaveSetting<K extends keyof SaveSettings>(settingName: K): void {

@@ -53,6 +53,9 @@ export class SharedService {
   private cameraStreamStatus = new BehaviorSubject<boolean>(false);
   cameraStreamStatus$ = this.cameraStreamStatus.asObservable();
 
+  private lightSettingsSubject = new BehaviorSubject<'dome' | 'bar' | null>(null);
+  lightSettings$ = this.lightSettingsSubject.asObservable();
+
   isCameraConnected$ = this.cameraConnectionStatus.asObservable().pipe();
   isCameraStreaming$ = this.cameraStreamStatus.asObservable().pipe();
 
@@ -95,17 +98,21 @@ export class SharedService {
   }
 
   toggleStream(): void {
-    const isStreaming = this.getCameraStreamStatus();  // Make sure this is defined first
-  
-    console.log(`Toggling camera stream. Current status: ${isStreaming}`);  // Now it works
-  
+    const isStreaming = this.getCameraStreamStatus();
+    
+    console.log(`Toggling camera stream. Current status: ${isStreaming}`);
+    
     this.setCameraStreamStatus(!isStreaming);
-  
+    
     if (isStreaming) {
       this.stopStream();
     } else {
       this.startStream();
     }
+  }
+
+  applyCameraSettingsForLight(light: 'dome' | 'bar'): void {
+    this.lightSettingsSubject.next(light);
   }
   
   startStream(): void {

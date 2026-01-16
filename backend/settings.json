@@ -1,20 +1,20 @@
 {
-    "camera_params": {
-        "Width": 4508,
-        "Height": 4096,
-        "OffsetX": 0,
-        "OffsetY": 0,
-        "ExposureTime": 10000.0,
+    "camera_params_dome": {
+        "ExposureTime": 5000.0,
         "Gain": 1.0,
-        "Gamma": 1.0,
-        "FrameRate": 10.0
+        "Gamma": 1.0
+    },
+    "camera_params_bar": {
+        "ExposureTime": 50000.0,
+        "Gain": 10.0,
+        "Gamma": 0.6
     },
     "other_settings": {
-        "objective": "50x",
+        "objective": "100x",
         "save_location": "D:/",
         "background_subtraction": false,
         "save_settings": false,
         "camera_settings_file": "C:/Users/madla/OneDrive/Desktop/a2A4508-20ucBAS_40697387.pfs",
-        "spacer_rings": "0"
+        "spacer_rings": "3"
     }
 }

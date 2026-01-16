@@ -421,10 +421,12 @@ def validate_param(param_name: str, param_value: float, properties: dict) -> flo
 def apply_camera_settings(camera, camera_properties, settings):
     app.logger.info(f"Loaded settings in apply_camera_settings: {settings}")
 
-    camera_settings = settings.get('camera', {}) or {}
+    # Try to get light-specific settings (camera_params_dome or camera_params_bar)
+    # If neither exists, fall back to old 'camera' section for backwards compatibility
+    camera_settings = settings.get('camera_params_dome', {}) or settings.get('camera_params_bar', {}) or settings.get('camera', {}) or {}
 
     if not camera_settings:
-        app.logger.warning("No camera settings found under settings['camera']. Skipping apply.")
+        app.logger.warning("No camera settings found. Skipping apply.")
         return
     
     if not camera or not camera.IsOpen():

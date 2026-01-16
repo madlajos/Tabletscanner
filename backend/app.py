@@ -379,18 +379,14 @@ def get_camera_settings():
         app.logger.info("API Call: /api/get-camera-settings")
         
         settings_data = get_settings()
-        camera_settings = settings_data.get('camera_params', {})
+        camera_settings_dome = settings_data.get('camera_params_dome', {})
+        camera_settings_bar = settings_data.get('camera_params_bar', {})
 
-        if not camera_settings:
-            app.logger.warning("No settings found for Camera.")
-            return jsonify({
-                "error": "No settings found for Camera",
-                "code": ErrorCode.GENERIC,
-                "popup": True
-            }), 404
-
-        app.logger.info(f"Sending camera settings to frontend: {camera_settings}")
-        return jsonify(camera_settings), 200
+        app.logger.info(f"Sending camera settings to frontend")
+        return jsonify({
+            "camera_params_dome": camera_settings_dome,
+            "camera_params_bar": camera_settings_bar
+        }), 200
 
     except Exception as e:
         app.logger.exception("Failed to get camera settings")
@@ -428,20 +424,69 @@ def update_camera_settings():
             camera_properties
         )
 
-        # Persist the validated value in settings.json
+        # NOTE: Direct camera settings endpoint deprecated. Use /api/update-camera-settings-light instead.
+        # For now, log and return error.
+        app.logger.warning("Direct camera settings update called; this endpoint is deprecated. Use /api/update-camera-settings-light")
+        return jsonify({
+            "error": "This endpoint is deprecated. Use /api/update-camera-settings-light instead.",
+            "code": ErrorCode.GENERIC,
+            "popup": False
+        }), 400
+
+    except Exception as e:
+        app.logger.exception("Failed to update camera settings")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/update-camera-settings-light', methods=['POST'])
+def update_camera_settings_light():
+    """Update light-specific camera settings (Dome or Bar)"""
+    try:
+        data = request.json
+        light = data.get('light')  # 'dome' or 'bar'
+        setting_name = data.get('setting_name')
+        setting_value = data.get('setting_value')
+
+        if light not in ('dome', 'bar'):
+            return jsonify({"error": "Invalid light. Must be 'dome' or 'bar'."}), 400
+
+        app.logger.info(f"Updating {light} camera setting: {setting_name} = {setting_value}")
+
+        # Fetch camera and current camera_properties
+        camera = globals.camera
+        camera_properties = globals.camera_properties
+
+        # Fallback: Refresh properties if missing
+        if not camera_properties or setting_name not in camera_properties:
+            app.logger.warning("camera_properties missing or incomplete; fetching fresh values...")
+            camera_properties = get_camera_properties(camera)
+            globals.camera_properties = camera_properties
+
+        # Apply the setting to the camera
+        updated_value = validate_and_set_camera_param(
+            camera,
+            setting_name,
+            setting_value,
+            camera_properties
+        )
+
+        # Persist the validated value in settings.json under the light-specific section
         settings_data = get_settings()
-        settings_data['camera_params'][setting_name] = updated_value
+        category = f'camera_params_{light}'
+        if category not in settings_data:
+            settings_data[category] = {}
+        settings_data[category][setting_name] = updated_value
         save_settings()
 
-        app.logger.info(f"Camera setting {setting_name} updated and saved to settings.json")
+        app.logger.info(f"{light} camera setting {setting_name} updated and saved to settings.json")
 
         return jsonify({
-            "message": f"Camera {setting_name} updated and saved.",
+            "message": f"{light.capitalize()} camera {setting_name} updated and saved.",
             "updated_value": updated_value
         }), 200
 
     except Exception as e:
-        app.logger.exception("Failed to update camera settings")
+        app.logger.exception("Failed to update light-specific camera settings")
         return jsonify({"error": str(e)}), 500
     
     

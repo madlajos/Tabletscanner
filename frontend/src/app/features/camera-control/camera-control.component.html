@@ -86,73 +86,45 @@
 
     <table class="camera-settings-table">
       <tbody>
+        <!-- Icons row -->
         <tr>
-          <td>Szélesség</td>
-          <td>
-            <input type="text" [(ngModel)]="cameraSettings.Width" (blur)="applySetting('Width')"
-              [disabled]="!isConnected">
-          </td>
-
-          <td>
-          </td>
-          <td class="lamp-cell">
-            <img class="lamp-icon" src="assets/SVG/ringlight_off.svg" alt="Dome light" />
-          </td>
-          <td class="lamp-cell">
-            <img class="lamp-icon" src="assets/SVG/barlight_off.svg" alt="Bar light" />
-          </td>
+          <td></td>
+          <td class="icon-cell"><img class="lamp-icon" src="assets/SVG/ringlight_off.svg" alt="Dome light" /></td>
+          <td class="icon-cell"><img class="lamp-icon" src="assets/SVG/barlight_off.svg" alt="Bar light" /></td>
         </tr>
 
         <tr>
-          <td>Magasság</td>
-          <td>
-            <input type="text" [(ngModel)]="cameraSettings.Height" (blur)="applySetting('Height')"
-              [disabled]="!isConnected">
-          </td>
-
           <td>Záridő</td>
           <td>
-            <input type="text" [(ngModel)]="cameraSettings.ExposureTime" (blur)="applySetting('ExposureTime')"
+            <input type="text" [(ngModel)]="cameraSettings.ExposureTime_Dome" (blur)="applySetting('ExposureTime_Dome')"
               [disabled]="!isConnected">
           </td>
           <td>
-            <input type="text" [(ngModel)]="cameraSettings.ExposureTime" (blur)="applySetting('ExposureTime')"
+            <input type="text" [(ngModel)]="cameraSettings.ExposureTime_Bar" (blur)="applySetting('ExposureTime_Bar')"
               [disabled]="!isConnected">
           </td>
         </tr>
 
         <tr>
-          <td>X Eltolás</td>
-          <td>
-            <input type="text" [(ngModel)]="cameraSettings.OffsetX" (blur)="applySetting('OffsetX')"
-              [disabled]="!isConnected">
-          </td>
-
           <td>Erősítés</td>
           <td>
-            <input type="text" [(ngModel)]="cameraSettings.Gain" (blur)="applySetting('Gain')"
+            <input type="text" [(ngModel)]="cameraSettings.Gain_Dome" (blur)="applySetting('Gain_Dome')"
               [disabled]="!isConnected">
           </td>
           <td>
-            <input type="text" [(ngModel)]="cameraSettings.Gain" (blur)="applySetting('Gain')"
+            <input type="text" [(ngModel)]="cameraSettings.Gain_Bar" (blur)="applySetting('Gain_Bar')"
               [disabled]="!isConnected">
           </td>
         </tr>
 
         <tr>
-          <td>Y Eltolás</td>
-          <td>
-            <input type="text" [(ngModel)]="cameraSettings.OffsetY" (blur)="applySetting('OffsetY')"
-              [disabled]="!isConnected">
-          </td>
-
           <td>Gamma</td>
           <td>
-            <input type="text" [(ngModel)]="cameraSettings.Gamma" (blur)="applySetting('Gamma')"
+            <input type="text" [(ngModel)]="cameraSettings.Gamma_Dome" (blur)="applySetting('Gamma_Dome')"
               [disabled]="!isConnected">
           </td>
           <td>
-            <input type="text" [(ngModel)]="cameraSettings.Gamma" (blur)="applySetting('Gamma')"
+            <input type="text" [(ngModel)]="cameraSettings.Gamma_Bar" (blur)="applySetting('Gamma_Bar')"
               [disabled]="!isConnected">
           </td>
         </tr>
@@ -161,7 +133,7 @@
 
         <tr>
           <td>Beállítás</td>
-          <td colspan="5">
+          <td colspan="2">
             <div class="csv-input-wrapper">
 
 
@@ -185,7 +157,7 @@
 
         <!-- Controls row spanning the whole width -->
         <tr>
-          <td colspan="5">
+          <td colspan="3">
             <div class="button-group">
               <button type="button" (click)="toggleConnection()"
                 [ngClass]="{ 'connect-button': true, 'connected': isConnected }">
