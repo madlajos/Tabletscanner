@@ -149,7 +149,7 @@ def get_serial_device_status(device_name):
                     buf += chunk
                     if b"ok" in buf.lower():
                         break
-            if buf:
+            if buf and b"ok" not in buf.lower():
                 app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
         except Exception as e:
             app.logger.debug(f"status probe error (ignored): {e}")
@@ -200,6 +200,26 @@ def api_home_toolhead():
             motioncontrols.home_axes(ser, *axes)
         else:
             motioncontrols.home_axes(ser)
+        
+        # Wait for homing to complete by draining any buffered responses
+        # The board sends "ok" when ready, but may also send "echo:busy: processing" while working
+        try:
+            deadline = time.monotonic() + 20.0  # 20 second timeout for homing
+            buf = bytearray()
+            while time.monotonic() < deadline:
+                iw = getattr(ser, 'in_waiting', 0) or 0
+                if iw:
+                    chunk = ser.read(min(iw, 256))
+                    if chunk:
+                        buf += chunk
+                        # Homing complete when we see "ok" (at end of response)
+                        if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
+                            break
+                else:
+                    time.sleep(0.05)
+        except Exception as e:
+            app.logger.warning(f"Error waiting for homing completion: {e}")
+        
         globals.toolhead_homed = True
         return jsonify({'ok': True, 'homed_axes': axes or ['x','y','z']})
     except Exception as e:

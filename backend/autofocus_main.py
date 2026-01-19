@@ -24,7 +24,28 @@ def safe_float_str(x, nd=3) -> str:
     return f"{float(x):.{nd}f}".replace(".", "p").replace("-", "m")
 
 def wait_motion_done(motion_platform):
-    porthandler.write(motion_platform, "M400")
+    """Send M400 and wait for board to acknowledge completion."""
+    try:
+        with porthandler.motion_lock:
+            motion_platform.write(b"M400\n")
+            motion_platform.flush()
+            
+            # Wait for "ok" response from board
+            deadline = time.monotonic() + 30.0  # 30 second timeout
+            buf = bytearray()
+            while time.monotonic() < deadline:
+                iw = getattr(motion_platform, 'in_waiting', 0) or 0
+                if iw:
+                    chunk = motion_platform.read(min(iw, 256))
+                    if chunk:
+                        buf += chunk
+                        if b"ok" in buf.lower():
+                            break
+                else:
+                    time.sleep(0.01)
+    except Exception as e:
+        import logging
+        logging.warning(f"wait_motion_done error: {e}")
 
 def clamp(v, vmin, vmax):
     return max(vmin, min(vmax, v))
@@ -130,7 +151,7 @@ def acquire_frame(timeout_ms=2000):
     return frame_bgr
 
 
-def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=1):
+def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=0):
     dz = float(target_z) - float(current_z)
     print("Menj " + str(target_z) + " pozira")
     if abs(dz) > 1e-9:

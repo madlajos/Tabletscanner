@@ -167,9 +167,6 @@ def parse_position(response):
 # motioncontrols.py
 
 def move_to_position(motion_platform, x_pos=None, y_pos=None, z_pos=None):
-    # Absolute mode
-    porthandler.write(motion_platform, "G90")
-
     parts = []
     if x_pos is not None:
         parts.append(f"X{x_pos}")
@@ -181,10 +178,61 @@ def move_to_position(motion_platform, x_pos=None, y_pos=None, z_pos=None):
     if not parts:
         return  # nothing to do
 
-    move_command = "G1 " + " ".join(parts)
-
     try:
-        porthandler.write(motion_platform, move_command)
+        with porthandler.motion_lock:
+            # Flush input buffer to clear any stale data
+            try:
+                if hasattr(motion_platform, "reset_input_buffer"):
+                    motion_platform.reset_input_buffer()
+                else:
+                    iw = getattr(motion_platform, "in_waiting", 0) or 0
+                    if iw:
+                        motion_platform.read(iw)
+            except Exception:
+                pass
+            
+            # Absolute mode
+            motion_platform.write(b"G90\n")
+            motion_platform.flush()
+            time.sleep(0.05)
+            
+            # Drain G90 response
+            try:
+                deadline = time.monotonic() + 0.5
+                while time.monotonic() < deadline:
+                    iw = getattr(motion_platform, 'in_waiting', 0) or 0
+                    if iw:
+                        motion_platform.read(iw)
+                    if not iw:
+                        break
+            except Exception:
+                pass
+
+        move_command = "G1 " + " ".join(parts)
+        
+        with porthandler.motion_lock:
+            motion_platform.write((move_command + "\n").encode())
+            motion_platform.flush()
+            
+            # Wait for move to complete by draining response
+            # The board sends "ok" when ready
+            try:
+                deadline = time.monotonic() + 30.0  # 30 second timeout for move
+                buf = bytearray()
+                while time.monotonic() < deadline:
+                    iw = getattr(motion_platform, 'in_waiting', 0) or 0
+                    if iw:
+                        chunk = motion_platform.read(min(iw, 256))
+                        if chunk:
+                            buf += chunk
+                            # Move complete when we see "ok"
+                            if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
+                                break
+                    else:
+                        time.sleep(0.01)
+            except Exception as e:
+                log.debug(f"Error waiting for move completion: {e}")
+            
     except Exception as e:
         print(f"Error occurred while sending move to position command: {e}")
 
@@ -192,9 +240,6 @@ def move_to_position(motion_platform, x_pos=None, y_pos=None, z_pos=None):
 # Moves the Motion platform by the specified values.
 # Can be called with 1-3 arguements, like move_relative(printer, x=1, y=1)
 def move_relative(motion_platform, x=None, y=None, z=None):
-    # Set the printer to use relative coordinates
-    porthandler.write(motion_platform, "G91")
-
     # Construct the move command with the specified distances
     move_command = "G1"
 
@@ -211,7 +256,58 @@ def move_relative(motion_platform, x=None, y=None, z=None):
         move_command += f" Z{z}"
 
     try:
+        with porthandler.motion_lock:
+            # Flush input buffer to clear any stale data
+            try:
+                if hasattr(motion_platform, "reset_input_buffer"):
+                    motion_platform.reset_input_buffer()
+                else:
+                    iw = getattr(motion_platform, "in_waiting", 0) or 0
+                    if iw:
+                        motion_platform.read(iw)
+            except Exception:
+                pass
+            
+            # Set relative mode
+            motion_platform.write(b"G91\n")
+            motion_platform.flush()
+            time.sleep(0.05)
+            
+            # Drain G91 response
+            try:
+                deadline = time.monotonic() + 0.5
+                while time.monotonic() < deadline:
+                    iw = getattr(motion_platform, 'in_waiting', 0) or 0
+                    if iw:
+                        motion_platform.read(iw)
+                    if not iw:
+                        break
+            except Exception:
+                pass
+
         # Send the move command to the printer
-        porthandler.write(motion_platform, move_command)
+        with porthandler.motion_lock:
+            motion_platform.write((move_command + "\n").encode())
+            motion_platform.flush()
+            
+            # Wait for move to complete by draining response
+            # The board sends "ok" when ready
+            try:
+                deadline = time.monotonic() + 30.0  # 30 second timeout for move
+                buf = bytearray()
+                while time.monotonic() < deadline:
+                    iw = getattr(motion_platform, 'in_waiting', 0) or 0
+                    if iw:
+                        chunk = motion_platform.read(min(iw, 256))
+                        if chunk:
+                            buf += chunk
+                            # Move complete when we see "ok"
+                            if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
+                                break
+                    else:
+                        time.sleep(0.01)
+            except Exception as e:
+                log.debug(f"Error waiting for move completion: {e}")
+            
     except Exception as e:
         print(f"Error occurred while sending move command: {e}")
