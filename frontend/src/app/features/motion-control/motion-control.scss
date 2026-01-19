@@ -143,12 +143,6 @@
   }
 }
 
-.home-button.long-pressed {
-  background-color: var(--main-blue, #224477);
-  box-shadow: inset 3px 3px 8px rgba(0, 0, 0, 0.6);
-  transform: translateY(3px);
-}
-
 // =======================
 // Movement / Direction Buttons
 // =======================
@@ -237,6 +231,58 @@
 
   &.active {
     background-color: var(--main-blue, #224477);
+  }
+
+  // Homing in progress: orange/amber with pulsing effect
+  &.homing {
+    background-color: #cc8800;
+    box-shadow: 0 0 12px rgba(204, 136, 0, 0.6), inset 3px 3px 8px rgba(0, 0, 0, 0.6);
+    animation: homing-pulse 1.2s ease-in-out infinite;
+
+    &:disabled {
+      opacity: 1; // keep full opacity during homing
+    }
+  }
+
+  // Homed successfully: blue
+  &.homed {
+    background-color: var(--main-blue, #1f4b8f);
+    box-shadow: 0 2px 6px rgba(26, 125, 201, 0.5);
+
+    &:hover:not(:disabled) {
+      background-color: #0d5a99;
+    }
+  }
+
+  // Autofocusing in progress: orange/amber with pulsing effect
+  &.autofocusing {
+    background-color: #cc8800;
+    box-shadow: 0 0 12px rgba(204, 136, 0, 0.6), inset 3px 3px 8px rgba(0, 0, 0, 0.6);
+    animation: homing-pulse 1.2s ease-in-out infinite;
+
+    &:disabled {
+      opacity: 1; // keep full opacity during autofocus
+    }
+  }
+
+  // Autofocused successfully: blue
+  &.autofocused {
+    background-color: var(--main-blue, #1f4b8f);
+    box-shadow: 0 2px 6px rgba(26, 125, 201, 0.5);
+
+    &:hover:not(:disabled) {
+      background-color: #0d5a99;
+    }
+  }
+}
+
+// Pulsing animation for homing state
+@keyframes homing-pulse {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(204, 136, 0, 0.6), inset 3px 3px 8px rgba(0, 0, 0, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(204, 136, 0, 0.9), inset 3px 3px 8px rgba(0, 0, 0, 0.6);
   }
 }
 

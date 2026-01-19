@@ -38,35 +38,47 @@
   <div class="controls-container">
     <div class="movement-buttons">
       <!-- -X -->
-      <button class="direction-button rotate-up" (click)="moveToolHeadRelative('x', -movementAmount)">
+      <button class="direction-button rotate-up" 
+        (click)="moveToolHeadRelative('x', -movementAmount)"
+        [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/arrow.svg" alt="Move X-" class="direction-icon" />
       </button>
 
       <div class="movement-column">
         <!-- +Y -->
-        <button class="direction-button rotate-right" (click)="moveToolHeadRelative('y', movementAmount)">
+        <button class="direction-button rotate-right" 
+          (click)="moveToolHeadRelative('y', movementAmount)"
+          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Y+" class="direction-icon" />
         </button>
         <div class="gap"></div>
         <!-- -Y -->
-        <button class="direction-button rotate-left" (click)="moveToolHeadRelative('y', -movementAmount)">
+        <button class="direction-button rotate-left" 
+          (click)="moveToolHeadRelative('y', -movementAmount)"
+          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Y-" class="direction-icon" />
         </button>
       </div>
 
       <!-- +X -->
-      <button class="direction-button rotate-down" (click)="moveToolHeadRelative('x', movementAmount)">
+      <button class="direction-button rotate-down" 
+        (click)="moveToolHeadRelative('x', movementAmount)"
+        [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/arrow.svg" alt="Move X+" class="direction-icon" />
       </button>
 
       <div class="movement-column">
         <!-- +Z -->
-        <button class="direction-button rotate-right" (click)="moveToolHeadRelative('z', movementAmount)">
+        <button class="direction-button rotate-right" 
+          (click)="moveToolHeadRelative('z', movementAmount)"
+          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Z+" class="direction-icon" />
         </button>
         <div class="gap"></div>
         <!-- -Z -->
-        <button class="direction-button rotate-left" (click)="moveToolHeadRelative('z', -movementAmount)">
+        <button class="direction-button rotate-left" 
+          (click)="moveToolHeadRelative('z', -movementAmount)"
+          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Z-" class="direction-icon" />
         </button>
       </div>
@@ -74,47 +86,58 @@
 
     <div class="home-buttons-grid">
       <!-- Home (Z → Y → X) -->
-      <button class="home-button" (click)="homeAllAxesInOrder()" [class.long-pressed]="isHoming">
+      <button class="home-button" 
+        (click)="homeAllAxesInOrder()" 
+        [class.homing]="isHoming"
+        [class.homed]="xHomed && yHomed && zHomed"
+        [disabled]="isHoming || !isConnected">
         <img src="assets/SVG/home.svg" alt="Home" class="home-icon" />
       </button>
 
       <!-- First tablet position -->
-      <button class="home-button" (click)="moveToolHeadAbsolute()">
+      <button class="home-button" 
+        (click)="moveToolHeadAbsolute()"
+        [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/first_tablet_pos.svg" alt="First tablet position" class="home-icon" />
       </button>
 
       <!-- Service position -->
-      <button class="home-button">
+      <button class="home-button"
+        [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/service_pos.svg" alt="Service position" class="home-icon" />
       </button>
 
       <!-- Autofocus -->
-      <button class="home-button" (click)="autoFocusCoarse()">
+      <button class="home-button" 
+        (click)="autoFocusCoarse()" 
+        [class.autofocusing]="isAutofocusing"
+        [class.autofocused]="autofocusDone"
+        [disabled]="isAutofocusing || !isConnected || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/auto_focus.svg" alt="Autofocus" class="home-icon" />
       </button>
     </div>
   </div>
 
   <div class="movement-amount-buttons">
-    <button [class.active]="movementAmount === 0.1" (click)="setMovementAmount(0.1)">0.1</button>
-    <button [class.active]="movementAmount === 1" (click)="setMovementAmount(1)">1</button>
-    <button [class.active]="movementAmount === 10" (click)="setMovementAmount(10)">10</button>
+    <button [class.active]="movementAmount === 0.1" (click)="setMovementAmount(0.1)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">0.1</button>
+    <button [class.active]="movementAmount === 1" (click)="setMovementAmount(1)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">1</button>
+    <button [class.active]="movementAmount === 10" (click)="setMovementAmount(10)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">10</button>
     <!-- Tablet step: selects 12.5 mm as movementAmount -->
-    <button class="tablet-step-button" [class.active]="movementAmount === 12.5" (click)="setMovementAmount(12.5)">
+    <button class="tablet-step-button" [class.active]="movementAmount === 12.5" (click)="setMovementAmount(12.5)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
       <img src="assets/SVG/tablet.svg" alt="Tablet step 12.5 mm" class="tablet-icon" />
     </button>
-    <button [class.active]="movementAmount === 25" (click)="setMovementAmount(25)">25</button>
-    <button [class.active]="movementAmount === 50" (click)="setMovementAmount(50)">50</button>
-    <button [class.active]="movementAmount === 100" (click)="setMovementAmount(100)">100</button>
+    <button [class.active]="movementAmount === 25" (click)="setMovementAmount(25)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">25</button>
+    <button [class.active]="movementAmount === 50" (click)="setMovementAmount(50)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">50</button>
+    <button [class.active]="movementAmount === 100" (click)="setMovementAmount(100)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">100</button>
   </div>
 
   <div class="lamp-buttons">
-    <button class="lamp-button" [class.active]="ringLightOn" (click)="toggleDomeLight()">
+    <button class="lamp-button" [class.active]="ringLightOn" (click)="toggleDomeLight()" [disabled]="!isConnected">
       <img [src]="ringLightOn ? 'assets/SVG/ringlight_on.svg' : 'assets/SVG/ringlight_off.svg'" alt="Ring light"
         class="lamp-icon" />
     </button>
 
-    <button class="lamp-button" [class.active]="barLightOn" (click)="toggleBarLight()">
+    <button class="lamp-button" [class.active]="barLightOn" (click)="toggleBarLight()" [disabled]="!isConnected">
       <img [src]="barLightOn ? 'assets/SVG/barlight_on.svg' : 'assets/SVG/barlight_off.svg'" alt="Bar light"
         class="lamp-icon" />
     </button>

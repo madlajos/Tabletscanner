@@ -151,6 +151,16 @@ def get_serial_device_status(device_name):
                         break
             if buf and b"ok" not in buf.lower():
                 app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
+        except (OSError, PermissionError) as e:
+            # USB disconnected or permission denied
+            app.logger.warning(f"Motion platform disconnected (USB error): {e}")
+            try:
+                ser.close()
+            except Exception:
+                pass
+            globals.motion_platform = None
+            porthandler.motion_platform = None
+            return jsonify({'connected': False}), 200
         except Exception as e:
             app.logger.debug(f"status probe error (ignored): {e}")
         return jsonify({'connected': True, 'port': ser.port}), 200
@@ -175,6 +185,21 @@ def get_motion_platform_position():
         if all(k in pos and isinstance(pos[k], (int, float)) for k in ('x','y','z')):
             globals.last_toolhead_pos = pos
         return jsonify(globals.last_toolhead_pos), 200
+    except (OSError, PermissionError) as e:
+        # USB disconnected or permission denied
+        app.logger.warning(f"Motion platform disconnected during position query (USB error): {e}")
+        try:
+            ser.close()
+        except Exception:
+            pass
+        globals.motion_platform = None
+        porthandler.motion_platform = None
+        # Return error response with code so frontend knows it's disconnected
+        return jsonify({
+            'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True
+        }), 503
     except Exception as e:
         app.logger.warning(f"get position failed (returning cache): {e}")
         return jsonify(globals.last_toolhead_pos), 200
@@ -217,11 +242,39 @@ def api_home_toolhead():
                             break
                 else:
                     time.sleep(0.05)
+        except (OSError, PermissionError) as e:
+            app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
+            try:
+                ser.close()
+            except Exception:
+                pass
+            globals.motion_platform = None
+            porthandler.motion_platform = None
+            return jsonify({
+                'ok': False, 
+                'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
+                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+                'popup': True
+            }), 503
         except Exception as e:
             app.logger.warning(f"Error waiting for homing completion: {e}")
         
         globals.toolhead_homed = True
         return jsonify({'ok': True, 'homed_axes': axes or ['x','y','z']})
+    except (OSError, PermissionError) as e:
+        app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
+        try:
+            ser.close()
+        except Exception:
+            pass
+        globals.motion_platform = None
+        porthandler.motion_platform = None
+        return jsonify({
+            'ok': False, 
+            'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True
+        }), 503
     except Exception as e:
         app.logger.exception("Homing failed")
         return jsonify({'ok': False, 'error': str(e)}), 500
@@ -530,7 +583,12 @@ def move_toolhead_relative():
     try:
         motion_platform = globals.motion_platform
         if motion_platform is None or not motion_platform.is_open:
-            return jsonify({'status': 'error', 'message': 'Printer not connected'}), 404
+            return jsonify({
+                'status': 'error', 
+                'message': 'Printer not connected',
+                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+                'popup': True
+            }), 503
 
         # Need a known current position (homed) to clamp relative moves
         curr = globals.last_toolhead_pos.get(axis) if hasattr(globals, "last_toolhead_pos") else None
@@ -555,7 +613,22 @@ def move_toolhead_relative():
             }), 200
 
         move_args = {axis: adj}
-        motioncontrols.move_relative(motion_platform, **move_args)
+        try:
+            motioncontrols.move_relative(motion_platform, **move_args)
+        except (OSError, PermissionError) as e:
+            app.logger.warning(f"Motion platform disconnected during move (USB error): {e}")
+            try:
+                motion_platform.close()
+            except Exception:
+                pass
+            globals.motion_platform = None
+            porthandler.motion_platform = None
+            return jsonify({
+                'status': 'error',
+                'message': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
+                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+                'popup': True
+            }), 503
 
         return jsonify({
             'status': 'success',
@@ -587,8 +660,31 @@ def move_toolhead_absolute():
 @app.route('/api/autofocus_coarse', methods=['POST'])
 def autofocus_coarse():
     try:
-        resp = autofocus_main.autofocus_coarse(globals.motion_platform)
+        motion_platform = globals.motion_platform
+        if not motion_platform or not getattr(motion_platform, 'is_open', False):
+            return jsonify({
+                'status': 'error',
+                'message': 'Motion platform not connected',
+                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+                'popup': True
+            }), 503
+        
+        resp = autofocus_main.autofocus_coarse(motion_platform)
         return jsonify(resp)
+    except (OSError, PermissionError) as e:
+        app.logger.warning(f"Motion platform disconnected during autofocus (USB error): {e}")
+        try:
+            motion_platform.close()
+        except Exception:
+            pass
+        globals.motion_platform = None
+        porthandler.motion_platform = None
+        return jsonify({
+            'status': 'error',
+            'message': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True
+        }), 503
     except Exception as e:
         app.logger.exception("autofocus_coarse failed")  # logs full traceback
         return jsonify({
@@ -624,8 +720,10 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
         # same 404 as before
         return {
             'status': 'error',
-            'message': 'Printer not connected'
-        }, 404
+            'message': 'Printer not connected',
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True
+        }, 503
 
     requested = {}
     planned = {}
@@ -674,12 +772,32 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
             'message': 'Requested positions equal to current (after clamping); no move sent.'
         }, 200
 
-    motioncontrols.move_to_position(
-        motion_platform,
-        planned.get('x'),
-        planned.get('y'),
-        planned.get('z')
-    )
+    try:
+        motioncontrols.move_to_position(
+            motion_platform,
+            planned.get('x'),
+            planned.get('y'),
+            planned.get('z')
+        )
+    except (OSError, PermissionError) as e:
+        app.logger.warning(f"Motion platform disconnected during move (USB error): {e}")
+        try:
+            motion_platform.close()
+        except Exception:
+            pass
+        globals.motion_platform = None
+        porthandler.motion_platform = None
+        return {
+            'status': 'error',
+            'message': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True
+        }, 503
+    except Exception as e:
+        return {
+            'status': 'error',
+            'message': str(e)
+        }, 500
 
     return {
         'status': 'success',

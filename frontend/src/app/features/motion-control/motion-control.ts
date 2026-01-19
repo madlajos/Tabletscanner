@@ -59,6 +59,9 @@ export class MotionControl implements OnInit, OnDestroy {
   yHomed: boolean = false;
   zHomed: boolean = false;
 
+  isAutofocusing = false;
+  autofocusDone = false;
+
   constructor(
     private http: HttpClient,
     private errorNotificationService: ErrorNotificationService,
@@ -598,15 +601,22 @@ export class MotionControl implements OnInit, OnDestroy {
 
 
   autoFocusCoarse(): void {
-  this.http.post(`${this.BASE_URL}/autofocus_coarse`, {}).subscribe({
-    next: (resp) => {
-      console.log('Autofocus response:', resp);
-    },
-    error: (error) => {
-      console.error('Autofocus error:', error);
-    },
-  });
-}
+    this.isAutofocusing = true;
+    this.autofocusDone = false;
+    
+    this.http.post(`${this.BASE_URL}/autofocus_coarse`, {}).subscribe({
+      next: (resp) => {
+        console.log('Autofocus response:', resp);
+        this.isAutofocusing = false;
+        this.autofocusDone = true;
+      },
+      error: (error) => {
+        console.error('Autofocus error:', error);
+        this.isAutofocusing = false;
+        this.autofocusDone = false;
+      },
+    });
+  }
 
 
   // ---------- UI helpers ----------
