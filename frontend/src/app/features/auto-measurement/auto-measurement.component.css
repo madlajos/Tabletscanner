@@ -14,6 +14,61 @@
   gap: 10px;
 }
 
+/* =======================
+   Save location row
+   ======================= */
+
+.save-location-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: 'Arial', sans-serif;
+  font-size: 12px;
+}
+
+.save-location-row label {
+  color: #ddd;
+}
+
+.save-location-input-group {
+  display: flex;
+  gap: 4px;
+}
+
+.save-location-input {
+  flex: 1;
+  padding: 3px 6px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #333;
+  color: #fff;
+  box-sizing: border-box;
+}
+
+.save-location-input:disabled {
+  opacity: 0.6;
+}
+
+.browse-button {
+  padding: 3px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #444;
+  color: #ddd;
+  cursor: pointer;
+  transition: background-color 0.2s ease-out;
+}
+
+.browse-button:hover:not(:disabled) {
+  background-color: #555;
+}
+
+.browse-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 
 /* =======================
    Measurement name row
@@ -216,6 +271,7 @@
   transform: scale(1.1);
 }
 
+/* Selected state (blue) - for selection before measurement starts */
 .tablet-dot.selected {
   background-color: var(--main-blue, #224477);
   box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
@@ -228,6 +284,57 @@
 }
 
 .tablet-dot.selected .tablet-number {
+  color: #f9f9f9;
+  font-weight: 500;
+}
+
+/* Pending state (blue) - tablets waiting to be measured during measurement */
+.tablet-dot.pending {
+  background-color: var(--main-blue, #224477);
+  box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
+}
+
+.tablet-dot.pending .tablet-number {
+  color: #f9f9f9;
+  font-weight: 500;
+}
+
+/* In-progress state (yellow) - tablet currently being measured */
+.tablet-dot.in-progress {
+  background-color: #f9a825;
+  box-shadow: 0 0 12px rgba(249, 168, 37, 0.9);
+  animation: pulse-yellow 1s ease-in-out infinite;
+}
+
+.tablet-dot.in-progress .tablet-number {
+  color: #1a1a1a;
+  font-weight: 600;
+}
+
+@keyframes pulse-yellow {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 8px rgba(249, 168, 37, 0.7);
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 16px rgba(249, 168, 37, 1);
+  }
+}
+
+/* Completed state (green) - tablets that have been measured */
+.tablet-dot.completed {
+  background-color: #2e7d32;
+  box-shadow: 0 0 8px rgba(46, 125, 50, 0.9);
+}
+
+.tablet-dot.completed:hover {
+  background-color: #388e3c;
+  box-shadow: 0 0 10px rgba(46, 125, 50, 0.9);
+  transform: scale(1.1);
+}
+
+.tablet-dot.completed .tablet-number {
   color: #f9f9f9;
   font-weight: 500;
 }
@@ -306,4 +413,8 @@
 
 .status.error {
   color: #ff7a7a;
+}
+
+.status.warning {
+  color: #f5c86d;
 }

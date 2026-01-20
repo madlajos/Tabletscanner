@@ -89,11 +89,11 @@
           <td>Záridő</td>
           <td>
             <input type="text" [(ngModel)]="cameraSettings.ExposureTime_Dome" (blur)="applySetting('ExposureTime_Dome')"
-              [disabled]="!isConnected">
+              [disabled]="!isConnected || measurementActive">
           </td>
           <td>
             <input type="text" [(ngModel)]="cameraSettings.ExposureTime_Bar" (blur)="applySetting('ExposureTime_Bar')"
-              [disabled]="!isConnected">
+              [disabled]="!isConnected || measurementActive">
           </td>
         </tr>
 
@@ -101,11 +101,11 @@
           <td>Erősítés</td>
           <td>
             <input type="text" [(ngModel)]="cameraSettings.Gain_Dome" (blur)="applySetting('Gain_Dome')"
-              [disabled]="!isConnected">
+              [disabled]="!isConnected || measurementActive">
           </td>
           <td>
             <input type="text" [(ngModel)]="cameraSettings.Gain_Bar" (blur)="applySetting('Gain_Bar')"
-              [disabled]="!isConnected">
+              [disabled]="!isConnected || measurementActive">
           </td>
         </tr>
 
@@ -113,11 +113,11 @@
           <td>Gamma</td>
           <td>
             <input type="text" [(ngModel)]="cameraSettings.Gamma_Dome" (blur)="applySetting('Gamma_Dome')"
-              [disabled]="!isConnected">
+              [disabled]="!isConnected || measurementActive">
           </td>
           <td>
             <input type="text" [(ngModel)]="cameraSettings.Gamma_Bar" (blur)="applySetting('Gamma_Bar')"
-              [disabled]="!isConnected">
+              [disabled]="!isConnected || measurementActive">
           </td>
         </tr>
 
@@ -152,13 +152,14 @@
           <td colspan="3">
             <div class="button-group">
               <button type="button" (click)="toggleConnection()"
-                [ngClass]="{ 'connect-button': true, 'connected': isConnected }">
+                [ngClass]="{ 'connect-button': true, 'connected': isConnected }"
+                [disabled]="measurementActive">
                 <mat-icon *ngIf="isConnected; else connectIcon">link_off</mat-icon>
                 <ng-template #connectIcon><mat-icon>link</mat-icon></ng-template>
               </button>
 
               <button type="button" (click)="toggleStream()"
-                [ngClass]="{ 'stream-button': true, 'streaming': isStreaming }" [disabled]="!isConnected">
+                [ngClass]="{ 'stream-button': true, 'streaming': isStreaming }" [disabled]="!isConnected || measurementActive">
                 <mat-icon *ngIf="isStreaming; else playIcon">stop</mat-icon>
                 <ng-template #playIcon><mat-icon>play_arrow</mat-icon></ng-template>
               </button>

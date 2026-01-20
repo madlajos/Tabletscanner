@@ -1,4 +1,27 @@
 <div class="auto-measurement">
+  <!-- SAVE DIRECTORY -->
+  <div class="save-location-row">
+    <label>Mentési hely</label>
+    <div class="save-location-input-group">
+      <input
+        type="text"
+        class="styled-input save-location-input"
+        [(ngModel)]="saveLocation"
+        [disabled]="measurementActive"
+        placeholder="Válasszon mappát..."
+        readonly
+      />
+      <button
+        type="button"
+        class="browse-button"
+        (click)="selectSaveFolder()"
+        [disabled]="measurementActive"
+      >
+        ...
+      </button>
+    </div>
+  </div>
+
   <!-- MEASUREMENT NAME -->
   <div class="measurement-name-row">
     <label for="measurementName">Mérés neve</label>
@@ -8,6 +31,7 @@
       class="styled-input measurement-name-input"
       [(ngModel)]="measurementName"
       [disabled]="measurementActive"
+      placeholder="Adja meg a mérés nevét..."
     />
   </div>
 
@@ -70,6 +94,9 @@
       *ngFor="let id of tablets"
       class="tablet-dot"
       [class.selected]="isDotSelected(id)"
+      [class.completed]="isDotCompleted(id)"
+      [class.in-progress]="isDotInProgress(id)"
+      [class.pending]="getDotState(id) === 'pending' && measurementActive"
       (click)="onDotClick(id)"
       (mouseenter)="onDotMouseEnter(id)"
       [title]="'Tabletta ' + id"
@@ -88,9 +115,14 @@
     {{ measurementActive ? 'Mérés leállítása' : 'Mérés indítása' }}
   </button>
 
+  <!-- VALIDATION MESSAGE -->
+  <div class="status warning" *ngIf="!measurementActive && validationMessage">
+    {{ validationMessage }}
+  </div>
+
   <!-- STATUS MESSAGES -->
   <div class="status" *ngIf="measurementActive">
-    Mérés folyamatban…
+    Mérés folyamatban… ({{ currentTabletIndex }}/{{ selectedCount }})
   </div>
   <div class="status success" *ngIf="!measurementActive && successMessage">
     {{ successMessage }}

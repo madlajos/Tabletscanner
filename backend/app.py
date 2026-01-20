@@ -66,6 +66,34 @@ def handle_global_exception(error):
         "popup": True
     }), 500
 
+
+def _handle_motion_usb_disconnect(ser, context: str = "operation"):
+    """
+    Handle USB disconnection for motion platform.
+    Closes the serial port and clears global references.
+    
+    Args:
+        ser: The serial port object
+        context: String describing what operation was happening (for logging)
+    
+    Returns:
+        tuple: (error_json, status_code) ready to return from Flask endpoint
+    """
+    app.logger.warning(f"Motion platform disconnected during {context} (USB error)")
+    try:
+        if ser:
+            ser.close()
+    except Exception:
+        pass
+    globals.motion_platform = None
+    porthandler.motion_platform = None
+    return jsonify({
+        'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
+        'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+        'popup': True
+    }), 503
+
+
 def retry_operation(operation, max_retries=3, wait=1, exceptions=(Exception,)):
     """
     Attempts to run 'operation' up to 'max_retries' times.
@@ -186,20 +214,7 @@ def get_motion_platform_position():
             globals.last_toolhead_pos = pos
         return jsonify(globals.last_toolhead_pos), 200
     except (OSError, PermissionError) as e:
-        # USB disconnected or permission denied
-        app.logger.warning(f"Motion platform disconnected during position query (USB error): {e}")
-        try:
-            ser.close()
-        except Exception:
-            pass
-        globals.motion_platform = None
-        porthandler.motion_platform = None
-        # Return error response with code so frontend knows it's disconnected
-        return jsonify({
-            'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
-            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
-            'popup': True
-        }), 503
+        return _handle_motion_usb_disconnect(ser, "position query")
     except Exception as e:
         app.logger.warning(f"get position failed (returning cache): {e}")
         return jsonify(globals.last_toolhead_pos), 200
@@ -616,19 +631,7 @@ def move_toolhead_relative():
         try:
             motioncontrols.move_relative(motion_platform, **move_args)
         except (OSError, PermissionError) as e:
-            app.logger.warning(f"Motion platform disconnected during move (USB error): {e}")
-            try:
-                motion_platform.close()
-            except Exception:
-                pass
-            globals.motion_platform = None
-            porthandler.motion_platform = None
-            return jsonify({
-                'status': 'error',
-                'message': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
-                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
-                'popup': True
-            }), 503
+            return _handle_motion_usb_disconnect(motion_platform, "relative move")
 
         return jsonify({
             'status': 'success',
@@ -672,19 +675,7 @@ def autofocus_coarse():
         resp = autofocus_main.autofocus_coarse(motion_platform)
         return jsonify(resp)
     except (OSError, PermissionError) as e:
-        app.logger.warning(f"Motion platform disconnected during autofocus (USB error): {e}")
-        try:
-            motion_platform.close()
-        except Exception:
-            pass
-        globals.motion_platform = None
-        porthandler.motion_platform = None
-        return jsonify({
-            'status': 'error',
-            'message': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
-            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
-            'popup': True
-        }), 503
+        return _handle_motion_usb_disconnect(motion_platform, "autofocus")
     except Exception as e:
         app.logger.exception("autofocus_coarse failed")  # logs full traceback
         return jsonify({
@@ -808,98 +799,316 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
     }, 200
 
 
-@app.route('/api/auto_measurement', methods=['POST'])
-def auto_measurement():
+def _turn_on_dome_light():
+    """Turn on dome light (M106 P0 S0) and turn off bar light (M106 P1 S0)."""
+    ser = globals.motion_platform
+    if ser and ser.is_open:
+        porthandler.write(ser, "M106 P1 S0")   # bar off
+        time.sleep(0.05)
+        porthandler.write(ser, "M106 P0 S0")   # dome on (S0 = on for this inverted setup)
+        time.sleep(0.05)
+
+def _turn_on_bar_light():
+    """Turn on bar light (M106 P1 S255) and turn off dome light (M106 P0 S255)."""
+    ser = globals.motion_platform
+    if ser and ser.is_open:
+        porthandler.write(ser, "M106 P0 S255")  # dome off
+        time.sleep(0.05)
+        porthandler.write(ser, "M106 P1 S255")  # bar on
+        time.sleep(0.05)
+
+def _turn_off_all_lights():
+    """Turn off both lights."""
+    ser = globals.motion_platform
+    if ser and ser.is_open:
+        porthandler.write(ser, "M106 P0 S255")  # dome off
+        time.sleep(0.05)
+        porthandler.write(ser, "M106 P1 S0")    # bar off
+        time.sleep(0.05)
+
+def _apply_camera_settings_for_light(light: str):
+    """Apply camera settings for specific light (dome or bar)."""
+    settings_data = get_settings()
+    camera = globals.camera
+    camera_properties = globals.camera_properties
+    
+    if not camera or not camera.IsOpen():
+        app.logger.warning("Camera not open, cannot apply light settings")
+        return
+    
+    if not camera_properties:
+        try:
+            camera_properties = get_camera_properties(camera)
+            globals.camera_properties = camera_properties
+        except Exception as e:
+            app.logger.warning(f"Could not get camera properties: {e}")
+            return
+    
+    category = f'camera_params_{light}'
+    light_settings = settings_data.get(category, {})
+    
+    for setting_name, setting_value in light_settings.items():
+        try:
+            validate_and_set_camera_param(camera, setting_name, setting_value, camera_properties)
+        except Exception as e:
+            app.logger.warning(f"Could not apply {setting_name} for {light}: {e}")
+
+def _capture_and_save_image(target_folder: str, filename: str) -> str:
+    """Capture image from camera and save to target folder. Returns saved file path."""
+    # Grab frame from camera
+    frame_result = grab_camera_image()
+    
+    if isinstance(frame_result, tuple):
+        frame = frame_result[0]
+        if frame is None:
+            raise RuntimeError("Failed to grab image from camera")
+    else:
+        frame = frame_result
+        if frame is None:
+            raise RuntimeError("Failed to grab image from camera")
+    
+    img_cv = np.asarray(frame)
+    if not isinstance(img_cv, np.ndarray) or img_cv.ndim < 2:
+        raise RuntimeError("Invalid image data from camera")
+    
+    full_path = os.path.join(target_folder, f"{filename}.jpg")
+    
+    # Convert BGR -> RGB for Pillow
+    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(img_rgb)
+    pil_img.save(full_path, format='JPEG', quality=95)
+    
+    return full_path
+
+
+def _wait_for_motion_complete(ser, timeout=30.0):
+    """Wait for motion to complete using M400 command."""
+    try:
+        with porthandler.motion_lock:
+            # Clear input buffer first
+            try:
+                if hasattr(ser, "reset_input_buffer"):
+                    ser.reset_input_buffer()
+                else:
+                    iw = getattr(ser, "in_waiting", 0) or 0
+                    if iw:
+                        ser.read(iw)
+            except Exception:
+                pass
+            
+            ser.write(b"M400\n")
+            ser.flush()
+            
+            # Wait for "ok" response
+            deadline = time.monotonic() + timeout
+            buf = bytearray()
+            while time.monotonic() < deadline:
+                iw = getattr(ser, 'in_waiting', 0) or 0
+                if iw:
+                    chunk = ser.read(min(iw, 256))
+                    if chunk:
+                        buf += chunk
+                        if b"ok" in buf.lower():
+                            return True
+                else:
+                    time.sleep(0.01)
+        return False
+    except Exception as e:
+        app.logger.warning(f"_wait_for_motion_complete error: {e}")
+        return False
+
+
+def _check_devices_connected():
+    """
+    Check if both motion platform and camera are connected.
+    Returns (motion_platform, camera, error_response, status_code).
+    If error_response is not None, return it directly from the endpoint.
+    """
+    motion_platform = globals.motion_platform
+    if not motion_platform or not getattr(motion_platform, 'is_open', False):
+        return None, None, jsonify({
+            'status': 'error',
+            'message': 'Motion platform not connected',
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True
+        }), 503
+        
+    camera = globals.camera
+    if not camera or not camera.IsOpen():
+        return None, None, jsonify({
+            'status': 'error',
+            'message': 'Camera not connected',
+            'code': ErrorCode.CAMERA_DISCONNECTED,
+            'popup': True
+        }), 503
+    
+    return motion_platform, camera, None, None
+
+
+def _capture_image_with_light(light_type: str, measurement_folder: str, measurement_name: str, tablet_index: int) -> str:
+    """
+    Turn on specified light, apply camera settings, capture and save image.
+    Returns the saved file path.
+    
+    Args:
+        light_type: 'dome' or 'bar'
+        measurement_folder: Directory to save image
+        measurement_name: Name prefix for the image
+        tablet_index: Tablet number for filename
+    """
+    if light_type == 'dome':
+        _turn_on_dome_light()
+    else:
+        _turn_on_bar_light()
+    
+    _apply_camera_settings_for_light(light_type)
+    time.sleep(0.3)  # Let light and camera settings stabilize
+    
+    date_str = datetime.now().strftime("%Y%m%d")
+    filename = f"{date_str}_{measurement_name}_{light_type}_{tablet_index:03d}"
+    
+    return _capture_and_save_image(measurement_folder, filename)
+
+
+@app.route('/api/auto_measurement/step', methods=['POST'])
+def auto_measurement_step():
+    """
+    Process a single tablet in the auto-measurement sequence.
+    This endpoint is called repeatedly by the frontend for each tablet.
+    """
     try:
         data = request.get_json() or {}
-
-        # ---- read and validate indices ----
-        idx_list = data.get('indices')
-        if not idx_list:
-            return jsonify({
-                'status': 'error',
-                'message': 'No indices provided'
-            }), 400
-
-        try:
-            # convert to ints and deduplicate, then sort for deterministic order
-            indices = sorted(set(int(i) for i in idx_list))
-        except (TypeError, ValueError):
-            return jsonify({
-                'status': 'error',
-                'message': 'Indices must be integers'
-            }), 400
-
-        grid_size = int(data.get('grid_size', GRID_SIZE_DEFAULT))
-
-        # bounds check: 1 .. grid_size^2
-        max_index = grid_size * grid_size
-        if any(i < 1 or i > max_index for i in indices):
-            return jsonify({
-                'status': 'error',
-                'message': 'One or more indices are out of bounds'
-            }), 400
-
-        autofocus = bool(data.get('autofocus', False))
+        
+        # Required parameters
+        tablet_index = data.get('tablet_index')
+        x_pos = data.get('x')
+        y_pos = data.get('y')
+        z_pos = data.get('z', 20.0)
+        measurement_folder = data.get('measurement_folder')
+        measurement_name = data.get('measurement_name')
+        
+        autofocus_enabled = bool(data.get('autofocus', False))
         lamp_top = bool(data.get('lamp_top', False))
         lamp_side = bool(data.get('lamp_side', False))
-
-        origin_x = float(data.get('origin_x', ORIGIN_X_DEFAULT))
-        origin_y = float(data.get('origin_y', ORIGIN_Y_DEFAULT))
-        spacing = float(data.get('spacing', SPACING_DEFAULT))
-
-        # ---- map indices to positions ----
-        # Numbering is bottom-left = 1, increasing to the right,
-        # then next row up, etc. So:
-        #   zero_based = idx - 1
-        #   row_from_bottom = zero_based // grid_size
-        #   col = zero_based % grid_size
-        # and coordinates:
-        #   x = origin_x + col * spacing
-        #   y = origin_y + row_from_bottom * spacing
-        positions = []
-        for idx in indices:
-            zero_based = idx - 1
-            row_from_bottom = zero_based // grid_size
-            col = zero_based % grid_size
-            x = origin_x + col * spacing
-            y = origin_y + row_from_bottom * spacing
-            positions.append({'index': idx, 'x': x, 'y': y})
-
-        # Optionally: set lights here based on lamp_top / lamp_side
-        # TODO: implement your own G-code light control if needed
-
-        # ---- iterate through selected tablets ----
-        for pos in positions:
-            resp, status = _move_toolhead_absolute_impl(
-                x_pos=pos['x'],
-                y_pos=pos['y'],
-                z_pos=None
-            )
-            if status != 200:
-                # Abort on first failure
+        is_first_tablet = bool(data.get('is_first_tablet', False))
+        
+        if tablet_index is None or x_pos is None or y_pos is None:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required parameters (tablet_index, x, y)'
+            }), 400
+            
+        if not measurement_folder or not measurement_name:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing measurement_folder or measurement_name'
+            }), 400
+        
+        if not lamp_top and not lamp_side:
+            return jsonify({
+                'status': 'error',
+                'message': 'At least one light must be selected'
+            }), 400
+        
+        # Check devices
+        motion_platform, camera, err_response, err_status = _check_devices_connected()
+        if err_response:
+            return err_response, err_status
+        
+        # Ensure folder exists
+        try:
+            os.makedirs(measurement_folder, exist_ok=True)
+        except Exception as e:
+            return jsonify({
+                'status': 'error',
+                'message': f'Could not create measurement folder: {e}'
+            }), 400
+        
+        saved_images = []
+        
+        # 1. Move to tablet position
+        resp, status = _move_toolhead_absolute_impl(
+            x_pos=float(x_pos),
+            y_pos=float(y_pos),
+            z_pos=float(z_pos)
+        )
+        if status != 200:
+            _turn_off_all_lights()
+            return jsonify({
+                'status': 'error',
+                'message': f"Move failed for tablet {tablet_index}",
+                'move_response': resp
+            }), status
+        
+        # 2. Wait for motion to complete
+        _wait_for_motion_complete(motion_platform, timeout=30.0)
+        time.sleep(0.3)  # Additional settle time
+        
+        # 3. If autofocus is enabled, run it
+        if autofocus_enabled:
+            _turn_on_dome_light()
+            _apply_camera_settings_for_light('dome')
+            time.sleep(0.2)
+            
+            try:
+                if is_first_tablet:
+                    # First tablet: use coarse autofocus for full scan
+                    af_result = autofocus_main.autofocus_coarse(motion_platform)
+                else:
+                    # Subsequent tablets: use fine_only for faster focusing around previous best Z
+                    af_result = autofocus_main.autofocus_fine_only(motion_platform)
+                
+                if af_result.get('status') != 'OK':
+                    app.logger.warning(f"Autofocus failed for tablet {tablet_index}: {af_result}")
+            except Exception as e:
+                app.logger.warning(f"Autofocus error for tablet {tablet_index}: {e}")
+            
+            _wait_for_motion_complete(motion_platform, timeout=30.0)
+            time.sleep(0.2)
+        
+        # 4. Capture images with selected lights
+        if lamp_top:
+            try:
+                saved_path = _capture_image_with_light('dome', measurement_folder, measurement_name, tablet_index)
+                saved_images.append(saved_path)
+                app.logger.info(f"Saved dome image: {saved_path}")
+            except Exception as e:
+                app.logger.error(f"Failed to capture dome image for tablet {tablet_index}: {e}")
+                _turn_off_all_lights()
                 return jsonify({
                     'status': 'error',
-                    'message': f"Move failed for tablet {pos['index']}",
-                    'move_response': resp
-                }), status
-
-            # TODO later:
-            # - autofocus routine if autofocus is True
-            # - capture using Basler
-            # - save image
-
+                    'message': f'Failed to capture dome image for tablet {tablet_index}: {e}'
+                }), 500
+        
+        if lamp_side:
+            try:
+                saved_path = _capture_image_with_light('bar', measurement_folder, measurement_name, tablet_index)
+                saved_images.append(saved_path)
+                app.logger.info(f"Saved bar image: {saved_path}")
+            except Exception as e:
+                app.logger.error(f"Failed to capture bar image for tablet {tablet_index}: {e}")
+                _turn_off_all_lights()
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Failed to capture bar image for tablet {tablet_index}: {e}'
+                }), 500
+        
+        # Turn off lights after this tablet
+        _turn_off_all_lights()
+        
         return jsonify({
             'status': 'success',
-            'message': f'Finished auto measurement for {len(indices)} tablets',
-            'indices': indices,
-            'positions': positions
+            'tablet_index': tablet_index,
+            'saved_images': saved_images
         }), 200
-
-    except KeyError as ke:
-        return jsonify({'status': 'error', 'message': f'Missing key: {ke}'}), 400
+        
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        _turn_off_all_lights()
+        app.logger.exception(f"auto_measurement_step failed: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 
 

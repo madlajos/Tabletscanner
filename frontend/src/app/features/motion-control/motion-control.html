@@ -1,11 +1,11 @@
-<div class="control-panel">
+<div class="control-panel" [class.locked]="measurementActive">
   <div class="position-display">
     <div class="position">
       <div class="position-container">
         <div class="coord-input-wrapper">
           <span class="coord-prefix">X</span>
           <input id="x-position" class="coord-input" type="text" inputmode="decimal" [(ngModel)]="xPosition"
-            [disabled]="motorOffState || !isConnected || !xHomed" [attr.placeholder]="xHomed ? '' : '?'"
+            [disabled]="motorOffState || !isConnected || !xHomed || measurementActive" [attr.placeholder]="xHomed ? '' : '?'"
             (focus)="onFocus('x')" (blur)="onBlur('x')" (keyup.enter)="submitOnEnter('x')" />
         </div>
       </div>
@@ -16,7 +16,7 @@
         <div class="coord-input-wrapper">
           <span class="coord-prefix">Y</span>
           <input id="y-position" class="coord-input" type="text" inputmode="decimal" [(ngModel)]="yPosition"
-            [disabled]="motorOffState || !isConnected || !yHomed" [attr.placeholder]="yHomed ? '' : '?'"
+            [disabled]="motorOffState || !isConnected || !yHomed || measurementActive" [attr.placeholder]="yHomed ? '' : '?'"
             (focus)="onFocus('y')" (blur)="onBlur('y')" (keyup.enter)="submitOnEnter('y')" />
         </div>
       </div>
@@ -27,7 +27,7 @@
         <div class="coord-input-wrapper">
           <span class="coord-prefix">Z</span>
           <input id="z-position" class="coord-input" type="text" inputmode="decimal" [(ngModel)]="zPosition"
-            [disabled]="motorOffState || !isConnected || !zHomed" [attr.placeholder]="zHomed ? '' : '?'"
+            [disabled]="motorOffState || !isConnected || !zHomed || measurementActive" [attr.placeholder]="zHomed ? '' : '?'"
             (focus)="onFocus('z')" (blur)="onBlur('z')" (keyup.enter)="submitOnEnter('z')" />
         </div>
       </div>
@@ -40,7 +40,7 @@
       <!-- -X -->
       <button class="direction-button rotate-up" 
         (click)="moveToolHeadRelative('x', -movementAmount)"
-        [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
+        [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/arrow.svg" alt="Move X-" class="direction-icon" />
       </button>
 
@@ -48,14 +48,14 @@
         <!-- +Y -->
         <button class="direction-button rotate-right" 
           (click)="moveToolHeadRelative('y', movementAmount)"
-          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
+          [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Y+" class="direction-icon" />
         </button>
         <div class="gap"></div>
         <!-- -Y -->
         <button class="direction-button rotate-left" 
           (click)="moveToolHeadRelative('y', -movementAmount)"
-          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
+          [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Y-" class="direction-icon" />
         </button>
       </div>
@@ -63,7 +63,7 @@
       <!-- +X -->
       <button class="direction-button rotate-down" 
         (click)="moveToolHeadRelative('x', movementAmount)"
-        [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
+        [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/arrow.svg" alt="Move X+" class="direction-icon" />
       </button>
 
@@ -71,14 +71,14 @@
         <!-- +Z -->
         <button class="direction-button rotate-right" 
           (click)="moveToolHeadRelative('z', movementAmount)"
-          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
+          [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Z+" class="direction-icon" />
         </button>
         <div class="gap"></div>
         <!-- -Z -->
         <button class="direction-button rotate-left" 
           (click)="moveToolHeadRelative('z', -movementAmount)"
-          [disabled]="motorOffState || !isConnected || !(xHomed && yHomed && zHomed)">
+          [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
           <img src="assets/SVG/arrow.svg" alt="Move Z-" class="direction-icon" />
         </button>
       </div>
@@ -90,21 +90,21 @@
         (click)="homeAllAxesInOrder()" 
         [class.homing]="isHoming"
         [class.homed]="xHomed && yHomed && zHomed"
-        [disabled]="isHoming || !isConnected">
+        [disabled]="isHoming || !isConnected || measurementActive">
         <img src="assets/SVG/home.svg" alt="Home" class="home-icon" />
       </button>
 
       <!-- First tablet position -->
       <button class="home-button" 
         (click)="moveToolHeadAbsolute(3, 7, 20)"
-        [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
+        [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/first_tablet_pos.svg" alt="First tablet position" class="home-icon" />
       </button>
 
       <!-- Service position -->
       <button class="home-button"
         (click)="moveToolHeadAbsolute(86, 20, 0)"
-        [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
+        [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/service_pos.svg" alt="Service position" class="home-icon" />
       </button>
 
@@ -113,32 +113,32 @@
         (click)="autoFocusCoarse()" 
         [class.autofocusing]="isAutofocusing"
         [class.autofocused]="autofocusDone"
-        [disabled]="isAutofocusing || !isConnected || !(xHomed && yHomed && zHomed)">
+        [disabled]="isAutofocusing || !isConnected || measurementActive || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/auto_focus.svg" alt="Autofocus" class="home-icon" />
       </button>
     </div>
   </div>
 
   <div class="movement-amount-buttons">
-    <button [class.active]="movementAmount === 0.1" (click)="setMovementAmount(0.1)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">0.1</button>
-    <button [class.active]="movementAmount === 1" (click)="setMovementAmount(1)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">1</button>
-    <button [class.active]="movementAmount === 10" (click)="setMovementAmount(10)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">10</button>
+    <button [class.active]="movementAmount === 0.1" (click)="setMovementAmount(0.1)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">0.1</button>
+    <button [class.active]="movementAmount === 1" (click)="setMovementAmount(1)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">1</button>
+    <button [class.active]="movementAmount === 10" (click)="setMovementAmount(10)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">10</button>
     <!-- Tablet step: selects 18.3 mm as movementAmount -->
-    <button class="tablet-step-button" [class.active]="movementAmount === 18.3" (click)="setMovementAmount(18.3)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
+    <button class="tablet-step-button" [class.active]="movementAmount === 18.3" (click)="setMovementAmount(18.3)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
       <img src="assets/SVG/tablet.svg" alt="Tablet step 18.3 mm" class="tablet-icon" />
     </button>
-    <button [class.active]="movementAmount === 25" (click)="setMovementAmount(25)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">25</button>
-    <button [class.active]="movementAmount === 50" (click)="setMovementAmount(50)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">50</button>
-    <button [class.active]="movementAmount === 100" (click)="setMovementAmount(100)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">100</button>
+    <button [class.active]="movementAmount === 25" (click)="setMovementAmount(25)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">25</button>
+    <button [class.active]="movementAmount === 50" (click)="setMovementAmount(50)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">50</button>
+    <button [class.active]="movementAmount === 100" (click)="setMovementAmount(100)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">100</button>
   </div>
 
   <div class="lamp-buttons">
-    <button class="lamp-button" [class.active]="ringLightOn" (click)="toggleDomeLight()" [disabled]="!isConnected">
+    <button class="lamp-button" [class.active]="ringLightOn" (click)="toggleDomeLight()" [disabled]="!isConnected || measurementActive">
       <img [src]="ringLightOn ? 'assets/SVG/ringlight_on.svg' : 'assets/SVG/ringlight_off.svg'" alt="Ring light"
         class="lamp-icon" />
     </button>
 
-    <button class="lamp-button" [class.active]="barLightOn" (click)="toggleBarLight()" [disabled]="!isConnected">
+    <button class="lamp-button" [class.active]="barLightOn" (click)="toggleBarLight()" [disabled]="!isConnected || measurementActive">
       <img [src]="barLightOn ? 'assets/SVG/barlight_on.svg' : 'assets/SVG/barlight_off.svg'" alt="Bar light"
         class="lamp-icon" />
     </button>

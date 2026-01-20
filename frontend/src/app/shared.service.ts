@@ -1,7 +1,8 @@
 import { Injectable } from '@angular/core';
-import { BehaviorSubject, interval, of } from 'rxjs';
+import { BehaviorSubject, Subject, interval, of } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { map, switchMap, tap, catchError  } from 'rxjs/operators';
+import { BASE_URL } from './api-config';
 
 //Older interface to store MeasurementResults, which are displayed on the control panel
 export interface MeasurementResult {
@@ -21,13 +22,18 @@ export interface MeasurementRecord {
   result: string;
 }
 
+// Interface for saved images from auto-measurement
+export interface SavedImageInfo {
+  path: string;
+  tabletIndex: number;
+  lightType: 'dome' | 'bar';
+}
+
 
 @Injectable({
   providedIn: 'root'
 })
 export class SharedService {
-  private readonly BASE_URL = 'http://localhost:5000/api';
-
   private measurementResultsSubject = new BehaviorSubject<MeasurementResult[]>([
     { label: 'Eldugult', value: 0 },
     { label: 'Részleges', value: 0 },
@@ -37,8 +43,21 @@ export class SharedService {
   private measurementActiveSubject = new BehaviorSubject<boolean>(false);
   measurementActive$ = this.measurementActiveSubject.asObservable();
 
+  // Subject for emitting newly saved images (auto-measurement adds images here)
+  private newSavedImageSubject = new Subject<SavedImageInfo>();
+  newSavedImage$ = this.newSavedImageSubject.asObservable();
+
   setMeasurementActive(active: boolean): void {
     this.measurementActiveSubject.next(active);
+  }
+
+  getMeasurementActive(): boolean {
+    return this.measurementActiveSubject.value;
+  }
+
+  // Emit a newly saved image to notify gallery components
+  emitSavedImage(imageInfo: SavedImageInfo): void {
+    this.newSavedImageSubject.next(imageInfo);
   }
 
   private measurementHistorySubject = new BehaviorSubject<MeasurementRecord[]>([]);
@@ -53,9 +72,27 @@ export class SharedService {
   private cameraStreamStatus = new BehaviorSubject<boolean>(false);
   cameraStreamStatus$ = this.cameraStreamStatus.asObservable();
 
+  private motionPlatformConnectionStatus = new BehaviorSubject<boolean>(false);
+  motionPlatformConnectionStatus$ = this.motionPlatformConnectionStatus.asObservable();
+
   private lightSettingsSubject = new BehaviorSubject<'dome' | 'bar' | null>(null);
   lightSettings$ = this.lightSettingsSubject.asObservable();
+  private motionHomingStatus = new BehaviorSubject<boolean>(false);
+  motionHomingStatus$ = this.motionHomingStatus.asObservable();
+  private motionPositionSubject = new BehaviorSubject<{ x: number | null; y: number | null; z: number | null } | null>(null);
+  motionPosition$ = this.motionPositionSubject.asObservable();
 
+  setMotionHoming(isHoming: boolean): void {
+    this.motionHomingStatus.next(isHoming);
+  }
+
+  getMotionHoming(): boolean {
+    return this.motionHomingStatus.value;
+  }
+
+  setMotionPosition(position: { x: number | null; y: number | null; z: number | null } | null): void {
+    this.motionPositionSubject.next(position);
+  }
   isCameraConnected$ = this.cameraConnectionStatus.asObservable().pipe();
   isCameraStreaming$ = this.cameraStreamStatus.asObservable().pipe();
 
@@ -97,6 +134,15 @@ export class SharedService {
     return this.cameraStreamStatus.value;
   }
 
+  setMotionPlatformConnectionStatus(status: boolean): void {
+    this.motionPlatformConnectionStatus.next(!!status);
+    console.log(`Updated motion platform connection status to: ${status}`);
+  }
+
+  getMotionPlatformConnectionStatus(): boolean {
+    return this.motionPlatformConnectionStatus.value;
+  }
+
   toggleStream(): void {
     const isStreaming = this.getCameraStreamStatus();
     
@@ -123,7 +169,7 @@ export class SharedService {
   
     console.log(`Starting camera stream...`);
   
-    this.http.get(`${this.BASE_URL}/start-video-stream`).subscribe(
+    this.http.get(`${BASE_URL}/start-video-stream`).subscribe(
       () => {
         console.log(`Camera stream started.`);
         this.setCameraStreamStatus(true);
@@ -138,7 +184,7 @@ export class SharedService {
   
   stopStream(): void {
     console.log(`Stopping camera stream...`);
-    this.http.post(`${this.BASE_URL}/stop-video-stream`, {}).subscribe(
+    this.http.post(`${BASE_URL}/stop-video-stream`, {}).subscribe(
       () => {
         console.log(`Camera camera stream stopped.`);
         this.setCameraStreamStatus(false);
@@ -161,7 +207,7 @@ export class SharedService {
   }
 
   connectCamera(): void {
-    this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe(
+    this.http.post(`${BASE_URL}/connect-camera`, {}).subscribe(
       () => {
         this.setCameraConnectionStatus(true);
         console.log(`Camera connected.`);
@@ -176,7 +222,7 @@ export class SharedService {
     // Stop stream before disconnecting
     this.stopStream();
   
-    this.http.post(`${this.BASE_URL}/disconnect-camera`, {}).subscribe(
+    this.http.post(`${BASE_URL}/disconnect-camera`, {}).subscribe(
       () => {
         this.setCameraConnectionStatus(false);
         this.setCameraStreamStatus(false);  // Reset stream status

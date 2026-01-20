@@ -5,6 +5,7 @@ import { HttpClient } from '@angular/common/http';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { timeout, catchError  } from 'rxjs/operators';
 import { interval, Subscription, of } from 'rxjs';
+import { BASE_URL } from '../../api-config';
 
 @Component({
   selector: 'app-measurement-results-popup',
@@ -20,9 +21,6 @@ export class MeasurementResultsPopupComponent {
   @Input() operatorId!: string;
   @Input() ngLimit!: number;
   @Output() closePopup = new EventEmitter<void>();
-
-  // Declare BASE_URL for API calls.
-  BASE_URL: string = 'http://localhost:5000/api';
 
   constructor(private sharedService: SharedService, private http: HttpClient, private errorNotificationService: ErrorNotificationService) {}
 

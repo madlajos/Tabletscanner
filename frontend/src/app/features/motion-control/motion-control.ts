@@ -7,6 +7,7 @@ import { FormsModule } from '@angular/forms';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SharedService } from '../../shared.service';
 import { firstValueFrom } from 'rxjs';
+import { BASE_URL } from '../../api-config';
 
 
 @Component({
@@ -18,8 +19,6 @@ import { firstValueFrom } from 'rxjs';
   styleUrls: ['./motion-control.scss'], // fixed key (plural)
 })
 export class MotionControl implements OnInit, OnDestroy {
-  private readonly BASE_URL = 'http://localhost:5000/api';
-
   movementAmount: number = 1;
 
   motorOffState: boolean = false;
@@ -43,7 +42,12 @@ export class MotionControl implements OnInit, OnDestroy {
   connectionPolling: Subscription | undefined;
   positionPolling: Subscription | undefined;
   reconnectionPolling: Subscription | undefined;
+  private measurementActiveSub?: Subscription;
+  private motionPositionSub?: Subscription;
   isConnected: boolean = false;
+
+  // Flag to lock controls during auto-measurement
+  measurementActive: boolean = false;
 
   isEditingX: boolean = false;
   isEditingY: boolean = false;
@@ -70,12 +74,42 @@ export class MotionControl implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.startConnectionPolling();
+    
+    // Subscribe to measurement active state for UI lockdown
+    this.measurementActiveSub = this.sharedService.measurementActive$.subscribe(
+      (active) => {
+        this.measurementActive = active;
+      }
+    );
+
+    // Subscribe to immediate motion position updates (e.g., after homing)
+    this.motionPositionSub = this.sharedService.motionPosition$.subscribe((pos) => {
+      if (!pos) return;
+      const round3 = (v: number | null) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : '?');
+      if (pos.x !== null) { this.xPosition = round3(pos.x) as number | string; this.xHomed = true; }
+      if (pos.y !== null) { this.yPosition = round3(pos.y) as number | string; this.yHomed = true; }
+      if (pos.z !== null) { this.zPosition = round3(pos.z) as number | string; this.zHomed = true; }
+    });
+
+    // Subscribe to motion homing status (from auto-measurement or manual home)
+    this.sharedService.motionHomingStatus$.subscribe(
+      (isHoming) => {
+        this.isHoming = isHoming;
+      }
+    );
   }
 
   ngOnDestroy(): void {
     this.stopConnectionPolling();
     this.stopReconnectionPolling();
     this.stopPositionPolling();
+    this.measurementActiveSub?.unsubscribe();
+    this.motionPositionSub?.unsubscribe();
+  }
+
+  // Check if controls should be disabled
+  get controlsDisabled(): boolean {
+    return !this.isConnected || this.measurementActive || this.isHoming || this.isAutofocusing;
   }
 
   // ---------- Polling ----------
@@ -101,7 +135,7 @@ export class MotionControl implements OnInit, OnDestroy {
     if (!(this.isConnected && !this.motorOffState)) return;
 
     this.http
-      .get<{ x?: number | null; y?: number | null; z?: number | null }>(`${this.BASE_URL}/get_motion_platform_position`)
+      .get<{ x?: number | null; y?: number | null; z?: number | null }>(`${BASE_URL}/get_motion_platform_position`)
       .subscribe({
         next: (position) => {
           const hasNum = (v: any) => typeof v === 'number' && Number.isFinite(v);
@@ -152,7 +186,7 @@ export class MotionControl implements OnInit, OnDestroy {
       .pipe(
         switchMap(() =>
           this.http
-            .get<{ connected: boolean }>(`${this.BASE_URL}/status/serial/motionplatform`)
+            .get<{ connected: boolean }>(`${BASE_URL}/status/serial/motionplatform`)
             .pipe(
               timeout(5000),
               catchError((err) => {
@@ -166,6 +200,7 @@ export class MotionControl implements OnInit, OnDestroy {
         next: (response) => {
           const wasConnected = this.isConnected;
           this.isConnected = response.connected;
+          this.sharedService.setMotionPlatformConnectionStatus(response.connected);
 
           if (!this.isConnected && !this.reconnectionPolling) {
             console.warn('Motion platform disconnected – starting reconnection polling.');
@@ -187,6 +222,7 @@ export class MotionControl implements OnInit, OnDestroy {
         error: (error) => {
           console.error('Unexpected polling error!', error);
           this.isConnected = false;
+          this.sharedService.setMotionPlatformConnectionStatus(false);
           this.stopPositionPolling();
         },
       });
@@ -215,7 +251,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
   tryReconnectMotionPlatform(): void {
     this.http
-      .post<{ message: string }>(`${this.BASE_URL}/connect-to-motionplatform`, {})
+      .post<{ message: string }>(`${BASE_URL}/connect-to-motionplatform`, {})
       .pipe(
         timeout(3000),
         catchError((err) => {
@@ -248,11 +284,11 @@ export class MotionControl implements OnInit, OnDestroy {
     if (!this.barLightOn) {
       // Turning bar on: if dome is on, turn it off first
       if (this.ringLightOn) {
-        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
+        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
           next: () => {
             this.ringLightOn = false;
             // Now turn bar on
-            this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
+            this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
               next: () => {
                 this.barLightOn = true;
                 this.applyCameraSettingsForLight('bar');
@@ -268,7 +304,7 @@ export class MotionControl implements OnInit, OnDestroy {
         });
       } else {
         // Dome is off, just turn bar on
-        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
+        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
           next: () => {
             this.barLightOn = true;
             this.applyCameraSettingsForLight('bar');
@@ -280,7 +316,7 @@ export class MotionControl implements OnInit, OnDestroy {
       }
     } else {
       // Turning bar off
-      this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
+      this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
         next: () => {
           this.barLightOn = false;
         },
@@ -296,11 +332,11 @@ export class MotionControl implements OnInit, OnDestroy {
     if (!this.ringLightOn) {
       // Turning dome on: if bar is on, turn it off first
       if (this.barLightOn) {
-        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
+        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
           next: () => {
             this.barLightOn = false;
             // Now turn dome on
-            this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
+            this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
               next: () => {
                 this.ringLightOn = true;
                 this.applyCameraSettingsForLight('dome');
@@ -316,7 +352,7 @@ export class MotionControl implements OnInit, OnDestroy {
         });
       } else {
         // Bar is off, just turn dome on
-        this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
+        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
           next: () => {
             this.ringLightOn = true;
             this.applyCameraSettingsForLight('dome');
@@ -328,7 +364,7 @@ export class MotionControl implements OnInit, OnDestroy {
       }
     } else {
       // Turning dome off
-      this.http.post(`${this.BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
+      this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
         next: () => {
           this.ringLightOn = false;
         },
@@ -403,7 +439,7 @@ export class MotionControl implements OnInit, OnDestroy {
     // Z: only clamp if you also maintain zMin/zMax in the UI; otherwise leave as-is.
 
     const payload = { axis, value };
-    this.http.post(`${this.BASE_URL}/move_toolhead_relative`, payload).subscribe({
+    this.http.post(`${BASE_URL}/move_toolhead_relative`, payload).subscribe({
       next: (response: any) => { /* optionally toast if value was clamped */ },
     });
   }
@@ -479,7 +515,7 @@ export class MotionControl implements OnInit, OnDestroy {
       return;
     }
 
-    this.http.post(`${this.BASE_URL}/move_toolhead_absolute`, payload).subscribe({
+    this.http.post(`${BASE_URL}/move_toolhead_absolute`, payload).subscribe({
       next: (response) => {
         if (clampedX || clampedY || clampedZ) {
           console.warn(
@@ -507,7 +543,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.isHoming = true;
     this.stopPositionPolling();
 
-    this.http.post(`${this.BASE_URL}/home_toolhead`, payload)
+    this.http.post(`${BASE_URL}/home_toolhead`, payload)
       .pipe(
         timeout(this.HOMING_TIMEOUT_MS), // G28 can take seconds
         finalize(() => {
@@ -546,7 +582,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.stopPositionPolling();
 
     const homeAxis = (axis: 'x' | 'y' | 'z') =>
-      firstValueFrom(this.http.post(`${this.BASE_URL}/home_toolhead`, { axes: [axis] }));
+      firstValueFrom(this.http.post(`${BASE_URL}/home_toolhead`, { axes: [axis] }));
 
     try {
       // ---------------- Z ----------------
@@ -588,7 +624,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
   motorOff(): void {
     // If your backend uses a different endpoint, adjust here (e.g. /motors_off or /disable_steppers)
-    this.http.post(`${this.BASE_URL}/disable_steppers`, {}).subscribe({
+    this.http.post(`${BASE_URL}/disable_steppers`, {}).subscribe({
       next: () => {
         console.log('Motors have been turned off.');
         this.motorOffState = true;
@@ -604,7 +640,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.isAutofocusing = true;
     this.autofocusDone = false;
     
-    this.http.post(`${this.BASE_URL}/autofocus_coarse`, {}).subscribe({
+    this.http.post(`${BASE_URL}/autofocus_coarse`, {}).subscribe({
       next: (resp) => {
         console.log('Autofocus response:', resp);
         this.isAutofocusing = false;

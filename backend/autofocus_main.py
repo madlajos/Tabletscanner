@@ -24,28 +24,7 @@ def safe_float_str(x, nd=3) -> str:
     return f"{float(x):.{nd}f}".replace(".", "p").replace("-", "m")
 
 def wait_motion_done(motion_platform):
-    """Send M400 and wait for board to acknowledge completion."""
-    try:
-        with porthandler.motion_lock:
-            motion_platform.write(b"M400\n")
-            motion_platform.flush()
-            
-            # Wait for "ok" response from board
-            deadline = time.monotonic() + 30.0  # 30 second timeout
-            buf = bytearray()
-            while time.monotonic() < deadline:
-                iw = getattr(motion_platform, 'in_waiting', 0) or 0
-                if iw:
-                    chunk = motion_platform.read(min(iw, 256))
-                    if chunk:
-                        buf += chunk
-                        if b"ok" in buf.lower():
-                            break
-                else:
-                    time.sleep(0.01)
-    except Exception as e:
-        import logging
-        logging.warning(f"wait_motion_done error: {e}")
+    porthandler.write(motion_platform, "M400")
 
 def clamp(v, vmin, vmax):
     return max(vmin, min(vmax, v))
@@ -151,7 +130,7 @@ def acquire_frame(timeout_ms=2000):
     return frame_bgr
 
 
-def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=0):
+def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=1):
     dz = float(target_z) - float(current_z)
     print("Menj " + str(target_z) + " pozira")
     if abs(dz) > 1e-9:
@@ -416,8 +395,213 @@ def autofocus_coarse(
 
     final_z, final_s = max(fine2_points, key=lambda p: p[1])
     print("Final_z: " + str(final_z))
-
+    globals.last_best_z = float(final_z)
     if move_to_best:
         current_z = move_to_virtual_z(motion_platform, current_z, final_z)
 
     return {"status": "OK", "z_rel": float(final_z), "score": float(final_s)}
+
+def autofocus_fine_only(
+    motion_platform,
+
+    # ha None, akkor globals.last_best_z-t használja
+    start_z=None,
+
+    z_min=0.0,
+    z_max=25.0,
+
+    frame_scale=0.35,
+    roi_square_scale=0.8,
+
+    fine1_offsets=(-1.0, -0.5, 0.0, +0.5, +1.0),
+    fine2_step=0.1,
+    fine2_halfspan=0.5,
+
+    n_frames=1,
+    grab_timeout_ms=2000,
+
+    move_to_best=True,
+    debug=True,
+
+    # ✅ Fine1 "domb" érzékenység
+    fine1_peak_prominence_ratio=0.05,
+
+    # ✅ Fallback: ha nincs peak fine1-ben, fusson a teljes coarse+fine
+    fallback_to_coarse=True,
+
+    # (opcionális) coarse paraméterek, ha át akarod adni:
+    edge_ring_width=5,
+    coarse_step=2.0,
+    drop_ratio=0.92,
+    bad_needed=2,
+    min_points=4,
+    coarse_peak_prominence_ratio=0.05,
+):
+    debug_buffer = [] if debug else None
+
+    # ✅ start_z feloldás: paraméter > globals
+    if start_z is None:
+        start_z = globals.last_best_z
+
+    if start_z is None:
+        raise RuntimeError("autofocus_fine_only: nincs start_z és globals.last_best_z is None")
+
+    start_z = float(start_z)
+    start_z = clamp(start_z, float(z_min), float(z_max))
+
+    # induljunk a start_z-re
+    current_z = 0.0
+    current_z = move_to_virtual_z(motion_platform, current_z, start_z)
+
+    # --- ROI detektálás 1x ---
+    first_frame = acquire_frame(timeout_ms=grab_timeout_ms)
+
+    if frame_scale is not None and float(frame_scale) != 1.0:
+        first_frame = cv2.resize(
+            first_frame, None,
+            fx=float(frame_scale), fy=float(frame_scale),
+            interpolation=cv2.INTER_AREA
+        )
+
+    if debug and debug_buffer is not None:
+        debug_buffer.append({
+            "stage": "roi_detect",
+            "z": float(current_z),
+            "idx": 0,
+            "frame": first_frame.copy(),
+        })
+
+    roi = detect_largest_object_square_roi(
+        first_frame,
+        square_scale=roi_square_scale,
+        debug_scale=0.3,
+        show_debug=False
+    )
+    if roi is None:
+        roi = None
+
+    # -----------------------------------------------------------------
+    # 1) FINE 1 (start_z körül)
+    # -----------------------------------------------------------------
+    fine1_targets = sorted(set(
+        clamp(start_z + float(off), float(z_min), float(z_max))
+        for off in fine1_offsets
+    ))
+    print("Fine1_targets_z:", fine1_targets)
+
+    fine1_points = []
+    for zf in fine1_targets:
+        current_z, sf = measure_score(
+            motion_platform, current_z, zf,
+            roi=roi,
+            n_frames=n_frames,
+            timeout_ms=grab_timeout_ms,
+            debug=debug,
+            debug_buffer=debug_buffer,
+            stage="fine1",
+            frame_scale=frame_scale,
+            score_fn=None
+        )
+        fine1_points.append((zf, sf))
+
+    best1_z, best1_s = max(fine1_points, key=lambda p: p[1])
+    print("Fine1 best z:", best1_z)
+
+    # ✅ FINE1 "DOMB" ellenőrzés (z szerint rendezett)
+    fine1_points_sorted = sorted(fine1_points, key=lambda p: p[0])
+    fine1_scores_in_order = [s for _, s in fine1_points_sorted]
+
+    ok_peak = has_peak_shape(
+        fine1_scores_in_order,
+        prominence_ratio=float(fine1_peak_prominence_ratio),
+        eps=1e-12
+    )
+
+    if not ok_peak:
+        print("[NO PEAK FIND] Fine1 görbe nem domb alakú -> fallback COARSE+FINE")
+
+        # (opcionális) mentsük ki a fine-only debug képeket is
+        if debug:
+            dump_debug_buffer_to_error(debug_buffer, "AF_NO_PEAK_FINE1_FALLBACK")
+
+        # mentsük el, ami most a legjobb volt
+        globals.last_best_z = float(best1_z)
+
+        if fallback_to_coarse:
+            # ✅ fusson a teljes coarse+fine
+            return autofocus_coarse(
+                motion_platform,
+                z_min=float(z_min),
+                z_max=float(z_max),
+                frame_scale=float(frame_scale),
+                edge_ring_width=int(edge_ring_width),
+
+                coarse_step=float(coarse_step),
+                drop_ratio=float(drop_ratio),
+                bad_needed=int(bad_needed),
+                min_points=int(min_points),
+
+                fine1_offsets=fine1_offsets,
+                fine2_step=float(fine2_step),
+                fine2_halfspan=float(fine2_halfspan),
+
+                n_frames=int(n_frames),
+                roi_square_scale=float(roi_square_scale),
+                grab_timeout_ms=int(grab_timeout_ms),
+
+                move_to_best=bool(move_to_best),
+                debug=bool(debug),
+
+                coarse_peak_prominence_ratio=float(coarse_peak_prominence_ratio),
+            )
+
+        # ha valamiért nem akarod fallback-ként coarse-t futtatni:
+        return {
+            "status": "ERROR",
+            "error_code": "AF_NO_PEAK_FINE1",
+            "z_rel": float(best1_z),
+            "score": float(best1_s),
+        }
+
+    # -----------------------------------------------------------------
+    # 2) FINE 2 (best1 körül)
+    # -----------------------------------------------------------------
+    halfspan = float(fine2_halfspan)
+    step2 = float(fine2_step)
+    if step2 <= 0:
+        raise ValueError("fine2_step legyen > 0.")
+
+    k = int(round(halfspan / step2))
+    offsets2 = [j * step2 for j in range(-k, k + 1)]
+
+    fine2_targets = sorted(set(
+        clamp(best1_z + off, float(z_min), float(z_max))
+        for off in offsets2
+    ))
+    print("Fine2 targets:", fine2_targets)
+
+    fine2_points = []
+    for zf in fine2_targets:
+        current_z, sf = measure_score(
+            motion_platform, current_z, zf,
+            roi=roi,
+            n_frames=n_frames,
+            timeout_ms=grab_timeout_ms,
+            debug=debug,
+            debug_buffer=debug_buffer,
+            stage="fine2",
+            frame_scale=frame_scale,
+            score_fn=None
+        )
+        fine2_points.append((zf, sf))
+
+    final_z, final_s = max(fine2_points, key=lambda p: p[1])
+    print("Final_z:", final_z)
+
+    globals.last_best_z = float(final_z)
+
+    if move_to_best:
+        move_to_virtual_z(motion_platform, current_z, final_z)
+
+    return {"status": "OK", "z_rel": float(final_z), "score": float(final_s)}
+

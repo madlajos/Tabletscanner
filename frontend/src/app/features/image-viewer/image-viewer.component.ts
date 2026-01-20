@@ -14,7 +14,8 @@ import {
 import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { MatIconModule } from '@angular/material/icon';
-import { SharedService } from '../../shared.service';
+import { SharedService, SavedImageInfo } from '../../shared.service';
+import { BASE_URL } from '../../api-config';
 
 interface SavedImage {
   path: string;   // full-size image path on disk (used for openImage)
@@ -34,12 +35,11 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
 
   isStreaming = false;
   private streamSub?: Subscription;
+  private savedImageSub?: Subscription;
 
   // Thumbnails of recently saved images
   savedImages: SavedImage[] = [];
   private readonly MAX_GALLERY_ITEMS = 8;  // smaller list = less work
-
-  private readonly BASE_URL = 'http://localhost:5000/api';
 
   // Zoom and pan state
   zoomLevel = 1.0;
@@ -87,10 +87,34 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
       container.addEventListener('mouseleave', () => this.onMouseUp());
       container.addEventListener('dblclick', () => this.resetZoomAndPan());
     }
+
+    // Subscribe to saved images from auto-measurement
+    this.savedImageSub = this.sharedService.newSavedImage$.subscribe(
+      (imageInfo: SavedImageInfo) => {
+        this.addImageToGallery(imageInfo.path);
+      }
+    );
+  }
+
+  /**
+   * Add an image to the gallery given its file path.
+   * Used by both manual capture and auto-measurement.
+   */
+  private addImageToGallery(imagePath: string): void {
+    const img: SavedImage = {
+      path: imagePath,
+      url: `${BASE_URL}/get_thumbnail?path=${encodeURIComponent(imagePath)}`
+    };
+
+    this.savedImages.unshift(img);
+    if (this.savedImages.length > this.MAX_GALLERY_ITEMS) {
+      this.savedImages.pop();
+    }
   }
 
   ngOnDestroy(): void {
     this.streamSub?.unsubscribe();
+    this.savedImageSub?.unsubscribe();
   }
 
   updateStreamDisplay(): void {
@@ -100,7 +124,7 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
-    const streamUrl = `${this.BASE_URL}/start-video-stream?scale=0.25&ts=${Date.now()}`;
+    const streamUrl = `${BASE_URL}/start-video-stream?scale=0.25&ts=${Date.now()}`;
     let img = container.querySelector('img');
 
     if (this.isStreaming) {
@@ -134,7 +158,7 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
     }
 
     // Fetch current "other_settings" from backend so we can embed metadata
-    this.http.get<{ other_settings: any }>(`${this.BASE_URL}/get-other-settings?category=other_settings`)
+    this.http.get<{ other_settings: any }>(`${BASE_URL}/get-other-settings?category=other_settings`)
       .subscribe({
         next: (resp) => {
           const metadata = resp?.other_settings || {};
@@ -144,23 +168,13 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
             path?: string;
             error?: string;
           }>(
-            `${this.BASE_URL}/save_raw_image`,
+            `${BASE_URL}/save_raw_image`,
             { target_folder: targetDir, metadata }
           ).subscribe({
             next: (res) => {
               if (res?.path) {
                 console.log(`Image saved to: ${res.path}`);
-
-                const img: SavedImage = {
-                  path: res.path,
-                  // use dynamic thumbnail endpoint; no thumb file on disk
-                  url: `${this.BASE_URL}/get_thumbnail?path=${encodeURIComponent(res.path)}`
-                };
-
-                this.savedImages.unshift(img);
-                if (this.savedImages.length > this.MAX_GALLERY_ITEMS) {
-                  this.savedImages.pop();
-                }
+                this.addImageToGallery(res.path);
               } else if (res?.message) {
                 console.log(`Save image response: ${res.message}`);
               } else {
@@ -175,7 +189,7 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
         error: (err) => {
           console.warn('Could not fetch other_settings; saving without metadata.', err);
           // fallback: save without metadata
-          this.http.post(`${this.BASE_URL}/save_raw_image`, { target_folder: targetDir }).subscribe({
+          this.http.post(`${BASE_URL}/save_raw_image`, { target_folder: targetDir }).subscribe({
             next: () => console.log('Saved image without metadata'),
             error: (e) => console.error('Failed to save image.', e)
           });
@@ -186,7 +200,7 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
 
   openImage(img: SavedImage): void {
     this.http.post(
-      `${this.BASE_URL}/open_image`,
+      `${BASE_URL}/open_image`,
       { path: img.path }
     ).subscribe({
       next: () => {

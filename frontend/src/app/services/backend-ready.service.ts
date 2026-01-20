@@ -2,11 +2,10 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { interval, of } from 'rxjs';
 import { switchMap, catchError } from 'rxjs/operators';
+import { BASE_URL } from '../api-config';
 
 @Injectable({ providedIn: 'root' })
 export class BackendReadyService {
-
-  private readonly BASE_URL = 'http://localhost:5000/api';
 
   constructor(private http: HttpClient) { }
 
@@ -18,7 +17,7 @@ export class BackendReadyService {
     return new Promise<void>((resolve, reject) => {
       const pollingSub = interval(1000).pipe(
         switchMap(() =>
-          this.http.get<{ ready: boolean }>(`${this.BASE_URL}/health`)
+          this.http.get<{ ready: boolean }>(`${BASE_URL}/health`)
             .pipe(
               catchError(err => {
                 // Log error, but continue polling by returning ready: false.

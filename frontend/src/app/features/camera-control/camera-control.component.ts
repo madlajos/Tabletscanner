@@ -7,6 +7,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from '../../services/settings-updates.service';
+import { BASE_URL } from '../../api-config';
 
 
 // TODO: Temporary placement; Relocate this to filesaver feature
@@ -74,8 +75,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   private readonly CAMERA_ERR_CODE = "E1111";
 
-  private readonly BASE_URL = 'http://localhost:5000/api';
-
   private settingsLoaded: boolean = false;
 
   measurementActive: boolean = false;
@@ -126,7 +125,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     });
 
     // TODO: Refactor to set current 'other' settings
-    this.http.get<{ other_settings: any }>(`${this.BASE_URL}/get-other-settings?category=other_settings`)
+    this.http.get<{ other_settings: any }>(`${BASE_URL}/get-other-settings?category=other_settings`)
       .subscribe({
         next: res => {
           if (res.other_settings) {
@@ -163,7 +162,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   // Backend calls
   checkCameraStatus(): void {
     this.http
-      .get<{ connected: boolean; streaming: boolean }>(`${this.BASE_URL}/status/camera`)
+      .get<{ connected: boolean; streaming: boolean }>(`${BASE_URL}/status/camera`)
       .subscribe({
         next: (response) => {
           // Always sync connection state
@@ -218,7 +217,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   // TODO: Refactor to load current 'other' settings
   loadOtherSettings(): void {
-    this.http.get<{ size_limits: SizeLimits }>(`${this.BASE_URL}/get-other-settings?category=size_limits`)
+    this.http.get<{ size_limits: SizeLimits }>(`${BASE_URL}/get-other-settings?category=size_limits`)
       .subscribe({
         next: response => {
           if (response && response.size_limits) {
@@ -232,7 +231,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         }
       });
 
-    this.http.get<{ save_settings: SaveSettings }>(`${this.BASE_URL}/get-other-settings?category=save_settings`)
+    this.http.get<{ save_settings: SaveSettings }>(`${BASE_URL}/get-other-settings?category=save_settings`)
       .subscribe({
         next: response => {
           if (response && response.save_settings) {
@@ -254,7 +253,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       value = Boolean(value);
     }
     // Send update to backend
-    this.http.post(`${this.BASE_URL}/update-other-settings`, {
+    this.http.post(`${BASE_URL}/update-other-settings`, {
       category: 'other_settings',
       setting_name: setting,
       setting_value: value
@@ -286,7 +285,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       }
     } else {
       // Fallback: (could implement a backend route similar to select-folder)
-      this.http.get<{ file: string }>(`${this.BASE_URL}/select-file`).subscribe({
+      this.http.get<{ file: string }>(`${BASE_URL}/select-file`).subscribe({
         next: resp => {
           if (resp.file) {
             this.otherSettings.camera_settings_file = resp.file;
@@ -311,7 +310,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         console.error('Folder selection error:', e);
       }
     } else {
-      this.http.get<{ folder: string }>(`${this.BASE_URL}/select-folder`).subscribe({
+      this.http.get<{ folder: string }>(`${BASE_URL}/select-folder`).subscribe({
         next: resp => {
           if (resp.folder) {
             this.otherSettings.save_location = resp.folder;
@@ -342,7 +341,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     if (this.reconnectPollSub && !this.reconnectPollSub.closed) return;
 
     this.reconnectPollSub = interval(intervalMs).subscribe(() => {
-      this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe({
+      this.http.post(`${BASE_URL}/connect-camera`, {}).subscribe({
         next: () => {
           // On success, stop reconnection and resume status polling
           this.stopReconnectionPolling();
@@ -363,7 +362,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   tryReconnectCamera(): void {
-    this.http.post(`${this.BASE_URL}/connect-camera`, {})
+    this.http.post(`${BASE_URL}/connect-camera`, {})
       .subscribe({
         next: (response: any) => {
           console.info(`Camera reconnected:`, response.message);
@@ -380,7 +379,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   checkCameraConnection(): void {
-    this.http.get(`${this.BASE_URL}/status/camera`).subscribe(
+    this.http.get(`${BASE_URL}/status/camera`).subscribe(
       (response: any) => {
         this.sharedService.setCameraConnectionStatus(response.connected);
       },
@@ -400,7 +399,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // user wants to connect -> allow auto-reconnect going forward
     this.autoReconnectEnabled = true;
 
-    this.http.post(`${this.BASE_URL}/connect-camera`, {}).subscribe({
+    this.http.post(`${BASE_URL}/connect-camera`, {}).subscribe({
       next: () => {
         // resume status polling; it'll flip the UI once /status is true
         this.startConnectionPolling();
@@ -417,7 +416,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   fetchCameraSettings(): void {
-    this.http.get(`${this.BASE_URL}/get-camera-settings`).subscribe(
+    this.http.get(`${BASE_URL}/get-camera-settings`).subscribe(
       (settings: any) => {
         this.cameraSettings = settings.camera_params;
         console.log(`Camera settings loaded:`, settings);
@@ -435,7 +434,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     this.stopConnectionPolling();
     this.stopReconnectionPolling();
 
-    this.http.post(`${this.BASE_URL}/disconnect-camera`, {}).subscribe({
+    this.http.post(`${BASE_URL}/disconnect-camera`, {}).subscribe({
       next: () => {
         // reflect immediately; don't call checkCameraStatus() here
         this.sharedService.setCameraConnectionStatus(false);
@@ -471,7 +470,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   stopVideoStream(): void {
-    this.http.post(`${this.BASE_URL}/stop-video-stream`, {}).subscribe(
+    this.http.post(`${BASE_URL}/stop-video-stream`, {}).subscribe(
       () => {
         this.sharedService.setCameraStreamStatus(false);
         console.log(`Camera stream stopped.`);
@@ -481,7 +480,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   loadCameraSettings(): void {
-    this.http.get<any>(`${this.BASE_URL}/get-camera-settings`)
+    this.http.get<any>(`${BASE_URL}/get-camera-settings`)
       .subscribe({
         next: (response: any) => {
           // Load main settings
@@ -522,7 +521,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       const lightSuffix = lightMatch[2];
       const lightName = lightSuffix.toLowerCase();
 
-      this.http.post(`${this.BASE_URL}/update-camera-settings-light`, {
+      this.http.post(`${BASE_URL}/update-camera-settings-light`, {
         light: lightName,
         setting_name: settingName,
         setting_value: value
@@ -543,7 +542,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       );
     } else {
       // Non-light-specific setting (deprecated path - kept for backwards compatibility)
-      this.http.post(`${this.BASE_URL}/update-camera-settings`, {
+      this.http.post(`${BASE_URL}/update-camera-settings`, {
         setting_name: setting,
         setting_value: value
       }).subscribe(
@@ -579,7 +578,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       if (value !== undefined) {
         console.log(`Applying light-specific setting ${setting.key}: ${value}`);
 
-        this.http.post(`${this.BASE_URL}/update-camera-settings-light`, {
+        this.http.post(`${BASE_URL}/update-camera-settings-light`, {
           light: lightName,
           setting_name: setting.name,
           setting_value: value
@@ -618,7 +617,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
     // 2. Persist to backend
     this.http.post<{ updated_value: SaveSettings[K] }>(
-      `${this.BASE_URL}/update-other-settings`,
+      `${BASE_URL}/update-other-settings`,
       {
         category: 'save_settings',
         setting_name: settingName,
@@ -652,7 +651,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       }
     } else {
       // Fallback for non-Electron: call backend to open a Tkinter dialog
-      this.http.get<{ folder: string }>(`${this.BASE_URL}/select-folder`).subscribe({
+      this.http.get<{ folder: string }>(`${BASE_URL}/select-folder`).subscribe({
         next: resp => {
           if (resp && resp.folder) {
             this.updateCsvDirectory(resp.folder);
@@ -671,7 +670,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // 1. Update the local model and UI
     this.saveSettings.csv_dir = folderPath;
     // 2. Persist the new setting to backend (settings.json)
-    this.http.post(`${this.BASE_URL}/update-other-settings`, {
+    this.http.post(`${BASE_URL}/update-other-settings`, {
       category: 'save_settings',
       setting_name: 'csv_dir',
       setting_value: folderPath

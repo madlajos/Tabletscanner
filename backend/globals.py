@@ -17,9 +17,10 @@ toolhead_x_pos = "?"
 toolhead_y_pos = "?"
 toolhead_z_pos = "?"
 toolhead_homed = False 
+last_best_z = None
 
 motion_limits = {
-    "x": (0.0, 200.0),
-    "y": (0.0, 200.0),
-    "z": (0.0, 200.0),
+    "x": (0.0, 175.0),
+    "y": (0.0, 175.0),
+    "z": (0.0, 25.0),
 }
