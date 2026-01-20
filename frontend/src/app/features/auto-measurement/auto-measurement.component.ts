@@ -372,8 +372,29 @@ export class AutoMeasurementComponent implements OnInit, OnDestroy {
     this.measurementActive = true;
     this.sharedService.setMeasurementActive(true);
 
-    // Home the platform first, then start processing tablets
-    this.homeMotionPlatformThenProceed(indices);
+    // Check if already homed, then home if needed or proceed directly
+    this.checkHomedThenProceed(indices);
+  }
+
+  private checkHomedThenProceed(indices: number[]): void {
+    this.http.get<{ x: boolean; y: boolean; z: boolean }>(`${BASE_URL}/check_axes_homed`)
+      .subscribe({
+        next: (homedStatus) => {
+          // If all axes are homed, skip homing and proceed directly
+          if (homedStatus.x && homedStatus.y && homedStatus.z) {
+            console.log('All axes already homed, skipping home');
+            this.processTabletQueue(indices, 0);
+          } else {
+            // Not all axes homed, perform homing
+            console.log('Axes not fully homed, performing home');
+            this.homeMotionPlatformThenProceed(indices);
+          }
+        },
+        error: (err) => {
+          console.warn('Could not check homed status, proceeding with home:', err);
+          this.homeMotionPlatformThenProceed(indices);
+        }
+      });
   }
 
   private homeMotionPlatformThenProceed(indices: number[]): void {
@@ -415,13 +436,21 @@ export class AutoMeasurementComponent implements OnInit, OnDestroy {
 
   stopMeasurement(): void {
     this.stopRequested = true;
-    this.successMessage = 'Mérés leállítása folyamatban...';
+
+    // Signal backend to abort autofocus immediately
+    this.http.post(`${BASE_URL}/abort-autofocus`, {}).subscribe({
+      next: () => console.log('Autofocus abort signal sent to backend'),
+      error: (err) => console.warn('Could not send abort signal:', err)
+    });
 
     // Cancel any active operations immediately
     this.cancelActiveOperations();
 
     // Clear homing flag so UI unlocks promptly
     this.sharedService.setMotionHoming(false);
+
+    // Finish measurement immediately so UI resets
+    this.finishMeasurement(false);
   }
 
   private cancelActiveOperations(): void {

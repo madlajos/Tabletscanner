@@ -1,4 +1,3 @@
-# autofocus_main.py
 import time
 import os
 from datetime import datetime
@@ -130,15 +129,12 @@ def acquire_frame(timeout_ms=2000):
     return frame_bgr
 
 
-def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=1):
+def move_to_virtual_z(motion_platform, current_z, target_z):
     dz = float(target_z) - float(current_z)
     print("Menj " + str(target_z) + " pozira")
     if abs(dz) > 1e-9:
         move_relative(motion_platform, z=dz)
         wait_motion_done(motion_platform)
-
-        if settle_s and settle_s > 0:
-            time.sleep(settle_s)
 
     return float(target_z)
 
@@ -276,7 +272,21 @@ def autofocus_coarse(
     z = float(z_max)
     i = 0
     step = abs(float(coarse_step))  # biztos pozitív
-    while z >= float(z_min):
+    while z >= float(z_min):        # Check for abort signal (measurement stopped)
+        if globals.autofocus_abort:
+            return {
+                "status": "ABORTED",
+                "z_rel": float(best_z) if best_z else float(z),
+                "score": float(best_score) if best_score != float("-inf") else 0.0,
+            }
+        # Check for abort signal
+        if globals.autofocus_abort:
+            return {
+                "status": "ABORTED",
+                "z_rel": float(best_z) if best_z else float(z),
+                "score": float(best_score) if best_score != float("-inf") else 0.0,
+            }
+
         current_z, s = measure_score(
             motion_platform, current_z, z,
             roi=None,  # ✅ coarse-hoz nem kell ROI
@@ -345,6 +355,19 @@ def autofocus_coarse(
 
     fine1_points = []
     for zf in fine1_targets:
+        # Check for abort signal (measurement stopped)
+        if globals.autofocus_abort:
+            if fine1_points:
+                best1_z, best1_s = max(fine1_points, key=lambda p: p[1])
+            else:
+                best1_z = best_z if best_z else 0.0
+                best1_s = 0.0
+            return {
+                "status": "ABORTED",
+                "z_rel": float(best1_z),
+                "score": float(best1_s),
+            }
+
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
             roi=roi,
@@ -380,6 +403,19 @@ def autofocus_coarse(
 
     fine2_points = []
     for zf in fine2_targets:
+        # Check for abort signal (measurement stopped)
+        if globals.autofocus_abort:
+            if fine2_points:
+                final_z, final_s = max(fine2_points, key=lambda p: p[1])
+            else:
+                final_z = best1_z if best1_z else 0.0
+                final_s = 0.0
+            return {
+                "status": "ABORTED",
+                "z_rel": float(final_z),
+                "score": float(final_s),
+            }
+
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
             roi=roi,
@@ -491,6 +527,19 @@ def autofocus_fine_only(
 
     fine1_points = []
     for zf in fine1_targets:
+        # Check for abort signal (measurement stopped)
+        if globals.autofocus_abort:
+            if fine1_points:
+                best1_z, best1_s = max(fine1_points, key=lambda p: p[1])
+            else:
+                best1_z = start_z
+                best1_s = 0.0
+            return {
+                "status": "ABORTED",
+                "z_rel": float(best1_z),
+                "score": float(best1_s),
+            }
+
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
             roi=roi,
@@ -582,6 +631,19 @@ def autofocus_fine_only(
 
     fine2_points = []
     for zf in fine2_targets:
+        # Check for abort signal (measurement stopped)
+        if globals.autofocus_abort:
+            if fine2_points:
+                final_z, final_s = max(fine2_points, key=lambda p: p[1])
+            else:
+                final_z = best1_z if best1_z else 0.0
+                final_s = 0.0
+            return {
+                "status": "ABORTED",
+                "z_rel": float(final_z),
+                "score": float(final_s),
+            }
+
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
             roi=roi,
@@ -604,4 +666,3 @@ def autofocus_fine_only(
         move_to_virtual_z(motion_platform, current_z, final_z)
 
     return {"status": "OK", "z_rel": float(final_z), "score": float(final_s)}
-

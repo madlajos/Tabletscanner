@@ -220,6 +220,23 @@ def get_motion_platform_position():
         return jsonify(globals.last_toolhead_pos), 200
 
 
+@app.route('/api/check_axes_homed', methods=['GET'])
+def check_axes_homed():
+    """Check if axes are already homed by attempting to query position."""
+    ser = porthandler.motion_platform or globals.motion_platform
+    if not ser or not getattr(ser, 'is_open', False):
+        return jsonify({'x': False, 'y': False, 'z': False}), 200
+
+    try:
+        with porthandler.motion_lock:
+            pos = motioncontrols.get_toolhead_position(ser, timeout=0.3)
+        # If we can get a valid position, axes are homed
+        homed = all(k in pos and isinstance(pos[k], (int, float)) for k in ('x','y','z'))
+        return jsonify({'x': homed, 'y': homed, 'z': homed}), 200
+    except Exception as e:
+        app.logger.debug(f"Could not query homed status: {e}")
+        return jsonify({'x': False, 'y': False, 'z': False}), 200
+
     
 @app.route('/api/home_toolhead', methods=['POST', 'OPTIONS'])
 def api_home_toolhead():
@@ -977,6 +994,11 @@ def auto_measurement_step():
     This endpoint is called repeatedly by the frontend for each tablet.
     """
     try:
+        # Reset abort flag for each new tablet (cleared on first tablet or if flag was set from previous stop)
+        if globals.autofocus_abort:
+            globals.autofocus_abort = False
+            app.logger.info("Autofocus abort flag cleared for new tablet")
+        
         data = request.get_json() or {}
         
         # Required parameters
@@ -1444,6 +1466,17 @@ def update_other_settings():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({"ready": True}), 200
+
+@app.route('/api/abort-autofocus', methods=['POST'])
+def abort_autofocus():
+    """Signal autofocus routines to abort immediately."""
+    try:
+        globals.autofocus_abort = True
+        app.logger.info("Autofocus abort flag set")
+        return jsonify({"status": "abort_signaled"}), 200
+    except Exception as e:
+        app.logger.exception("Error setting autofocus abort flag")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/select-file', methods=['GET'])
 def select_file():
