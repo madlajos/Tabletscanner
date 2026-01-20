@@ -96,13 +96,14 @@
 
       <!-- First tablet position -->
       <button class="home-button" 
-        (click)="moveToolHeadAbsolute()"
+        (click)="moveToolHeadAbsolute(3, 7, 20)"
         [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/first_tablet_pos.svg" alt="First tablet position" class="home-icon" />
       </button>
 
       <!-- Service position -->
       <button class="home-button"
+        (click)="moveToolHeadAbsolute(86, 20, 0)"
         [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/service_pos.svg" alt="Service position" class="home-icon" />
       </button>
@@ -122,9 +123,9 @@
     <button [class.active]="movementAmount === 0.1" (click)="setMovementAmount(0.1)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">0.1</button>
     <button [class.active]="movementAmount === 1" (click)="setMovementAmount(1)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">1</button>
     <button [class.active]="movementAmount === 10" (click)="setMovementAmount(10)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">10</button>
-    <!-- Tablet step: selects 12.5 mm as movementAmount -->
-    <button class="tablet-step-button" [class.active]="movementAmount === 12.5" (click)="setMovementAmount(12.5)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
-      <img src="assets/SVG/tablet.svg" alt="Tablet step 12.5 mm" class="tablet-icon" />
+    <!-- Tablet step: selects 18.3 mm as movementAmount -->
+    <button class="tablet-step-button" [class.active]="movementAmount === 18.3" (click)="setMovementAmount(18.3)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">
+      <img src="assets/SVG/tablet.svg" alt="Tablet step 18.3 mm" class="tablet-icon" />
     </button>
     <button [class.active]="movementAmount === 25" (click)="setMovementAmount(25)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">25</button>
     <button [class.active]="movementAmount === 50" (click)="setMovementAmount(50)" [disabled]="!isConnected || !(xHomed && yHomed && zHomed)">50</button>
