@@ -17,6 +17,7 @@ declare global {
       selectFolder: () => Promise<string>;
       selectFile: () => Promise<string>;
     };
+    showSaveFilePicker?: (options?: any) => Promise<any>;
   }
 }
 
@@ -56,7 +57,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     camera_settings_file: '',
     save_location: 'C:\\Users\\Public\\Pictures',  // default folder
     background_subtraction: false,
-    save_settings: false
+    save_settings: false,
+    settings_preset_name: ''
   };
 
   loadedFileName: string = '';
@@ -86,6 +88,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     private errorNotificationService: ErrorNotificationService,
     private settingsUpdatesService: SettingsUpdatesService
   ) { }
+
+  // Preset name (Beállítások row)
+  settingsPresetName: string = '';
 
   ngOnInit(): void {
     if (!this.settingsLoaded) {
@@ -137,6 +142,11 @@ export class CameraControlComponent implements OnInit, OnDestroy {
             // Apply save location to shared service for consistency
             if (this.otherSettings.save_location) {
               this.sharedService.setSaveDirectory(this.otherSettings.save_location);
+            }
+
+            // Restore preset display name if persisted
+            if (this.otherSettings.settings_preset_name) {
+              this.settingsPresetName = this.stripExtension(this.otherSettings.settings_preset_name);
             }
           }
         },
@@ -279,6 +289,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         if (filePath) {
           this.otherSettings.camera_settings_file = filePath;
           this.applyOtherSetting('camera_settings_file');
+          this.invalidatePreset();
         }
       } catch (e) {
         console.error('File selection error:', e);
@@ -290,6 +301,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
           if (resp.file) {
             this.otherSettings.camera_settings_file = resp.file;
             this.applyOtherSetting('camera_settings_file');
+            this.invalidatePreset();
           }
         },
         error: err => console.error('File dialog failed:', err)
@@ -689,5 +701,205 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   objectKeys(obj: any): string[] {
     return Object.keys(obj);
+  }
+
+  // Numeric input handling for camera settings
+  handleNumericBlur(settingKey: string, decimals: number): void {
+    let raw = this.cameraSettings[settingKey];
+    if (raw === undefined || raw === null || raw === '') {
+      return; // do not apply empty
+    }
+
+    // Parse as number
+    let num = Number(raw);
+    if (!isFinite(num)) {
+      // Revert to previous numeric value if invalid
+      return;
+    }
+
+    // Round to requested decimals
+    if (decimals <= 0) {
+      num = Math.round(num);
+    } else {
+      const factor = Math.pow(10, decimals);
+      num = Math.round(num * factor) / factor;
+    }
+
+    // Trim trailing zeros by storing as number (not string)
+    this.cameraSettings[settingKey] = num;
+
+    // Preset is now stale
+    this.invalidatePreset();
+
+    // Apply to backend
+    this.applySetting(settingKey);
+  }
+
+  invalidatePreset(): void {
+    this.settingsPresetName = '';
+  }
+
+  sanitizeFileName(name: string): string {
+    return (name || 'camera-settings-preset')
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'camera-settings-preset';
+  }
+
+  private stripExtension(filename: string): string {
+    if (!filename) return '';
+    const idx = filename.lastIndexOf('.');
+    if (idx <= 0) return filename;
+    return filename.substring(0, idx);
+  }
+
+  async saveSettingsPreset(): Promise<void> {
+    const payload: any = {
+      version: 1,
+      readonly: true,
+      write_protected: true,
+      saved_at: new Date().toISOString(),
+      camera_profile_path: this.otherSettings.camera_settings_file || '',
+      exposure_time_dome: Number(this.cameraSettings.ExposureTime_Dome),
+      exposure_time_bar: Number(this.cameraSettings.ExposureTime_Bar),
+      gain_dome: Number(this.cameraSettings.Gain_Dome),
+      gain_bar: Number(this.cameraSettings.Gain_Bar),
+      gamma_dome: Number(this.cameraSettings.Gamma_Dome),
+      gamma_bar: Number(this.cameraSettings.Gamma_Bar)
+    };
+
+    // Basic validation
+    const keysToCheck = [
+      'exposure_time_dome', 'exposure_time_bar',
+      'gain_dome', 'gain_bar',
+      'gamma_dome', 'gamma_bar'
+    ];
+    const invalid = keysToCheck.find(k => !isFinite(payload[k]));
+    if (invalid) {
+      console.error(`Cannot save preset, invalid value for ${invalid}`);
+      return;
+    }
+
+    const fileNameBase = this.sanitizeFileName(this.settingsPresetName || 'camera-settings-preset');
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const suggestedName = fileNameBase; // show textbox without extension
+    const downloadName = `${fileNameBase}.tss`;
+
+    try {
+      // Use native file save picker when available (Edge/Chrome/Win11) so user can choose path/name.
+      if (typeof window.showSaveFilePicker === 'function') {
+        const handle = await window.showSaveFilePicker({
+          suggestedName,
+          types: [
+            {
+              description: 'Tabletscanner Preset',
+              accept: { 'application/json': ['.tss'] }
+            }
+          ]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      }
+    } catch (err) {
+      console.error('Save file picker failed, falling back to download:', err);
+    }
+
+    // Fallback: browser download (user can still pick location via standard download prompt).
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = downloadName;
+    link.click();
+    URL.revokeObjectURL(link.href);
+
+    // Persist chosen preset name (without extension) to settings
+    this.settingsPresetName = fileNameBase;
+    this.otherSettings.settings_preset_name = fileNameBase;
+    this.applyOtherSetting('settings_preset_name');
+  }
+
+  async onPresetFileSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const preset = JSON.parse(text);
+      await this.applyPresetData(preset, file.name);
+    } catch (err) {
+      console.error('Failed to load preset:', err);
+    } finally {
+      input.value = '';
+    }
+  }
+
+  async applyPresetData(preset: any, fileName?: string): Promise<void> {
+    const requiredKeys = [
+      'exposure_time_dome', 'exposure_time_bar',
+      'gain_dome', 'gain_bar',
+      'gamma_dome', 'gamma_bar',
+      'camera_profile_path'
+    ];
+
+    for (const key of requiredKeys) {
+      if (!(key in preset)) {
+        throw new Error(`Preset missing key: ${key}`);
+      }
+    }
+
+    const numericKeys = [
+      'exposure_time_dome', 'exposure_time_bar',
+      'gain_dome', 'gain_bar',
+      'gamma_dome', 'gamma_bar'
+    ];
+    for (const nk of numericKeys) {
+      if (!isFinite(Number(preset[nk]))) {
+        throw new Error(`Invalid numeric value for ${nk}`);
+      }
+    }
+
+    const profilePath = String(preset.camera_profile_path || '').trim();
+    if (!profilePath) {
+      throw new Error('camera_profile_path is empty');
+    }
+
+    const exists = await this.verifyFileExists(profilePath);
+    if (!exists) {
+      throw new Error('Kamera Profil path not found');
+    }
+
+    // Apply values
+    this.cameraSettings.ExposureTime_Dome = Number(preset.exposure_time_dome);
+    this.cameraSettings.ExposureTime_Bar = Number(preset.exposure_time_bar);
+    this.cameraSettings.Gain_Dome = Number(preset.gain_dome);
+    this.cameraSettings.Gain_Bar = Number(preset.gain_bar);
+    this.cameraSettings.Gamma_Dome = Number(preset.gamma_dome);
+    this.cameraSettings.Gamma_Bar = Number(preset.gamma_bar);
+    this.otherSettings.camera_settings_file = profilePath;
+
+    this.settingsPresetName = fileName ? this.stripExtension(fileName) : '';
+    this.otherSettings.settings_preset_name = this.settingsPresetName;
+    this.applyOtherSetting('settings_preset_name');
+
+    // Persist to backend
+    const keysToApply = [
+      'ExposureTime_Dome', 'ExposureTime_Bar',
+      'Gain_Dome', 'Gain_Bar',
+      'Gamma_Dome', 'Gamma_Bar'
+    ];
+    keysToApply.forEach(k => this.applySetting(k));
+    this.applyOtherSetting('camera_settings_file');
+  }
+
+  verifyFileExists(path: string): Promise<boolean> {
+    return this.http.post<{ exists: boolean }>(`${BASE_URL}/check-file-exists`, { path })
+      .pipe(
+        timeout(2000),
+        catchError(() => of({ exists: false }))
+      )
+      .toPromise()
+      .then(res => !!res?.exists);
   }
 }

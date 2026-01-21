@@ -16,7 +16,7 @@
          [class.zoomed]="isZoomed()" 
          [style.cursor]="getCursorStyle()"></div>
 
-    <button class="capture-button" (click)="captureImage()" [disabled]="!sharedService.getCameraStreamStatus()"
+    <button class="capture-button" (click)="captureImage()" [disabled]="!sharedService.getCameraStreamStatus() || isCaptureCooldown"
       title="Save Snapshot">
       <mat-icon>photo_camera</mat-icon>
     </button>
@@ -26,18 +26,38 @@
 
 </div>
 
-  <div class="gallery-container" *ngIf="savedImages.length > 0">
-  <div class="gallery-scroll">
-    <div class="thumb"
-         *ngFor="let img of savedImages; trackBy: trackByPath"
-         (click)="openImage(img)"
-         title="{{ img.path }}">
-      <img
-        [src]="img.url"
-        alt="saved image thumbnail"
-        loading="lazy"
-        decoding="async"
-      />
+@if (savedImages.length > 0) {
+  <div class="gallery-container">
+    <div class="gallery-scroll">
+      @for (img of savedImages; track img.path) {
+        <div class="thumb"
+             (click)="openImage(img)"
+             (contextmenu)="onImageContextMenu($event, img)"
+             title="{{ img.path }}">
+          <img
+            [src]="img.url"
+            alt="saved image thumbnail"
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
+      }
     </div>
   </div>
-</div>
+}
+
+<!-- Custom context menu -->
+@if (contextMenuVisible) {
+  <div class="context-menu" 
+       [style.left.px]="contextMenuX"
+       [style.top.px]="contextMenuY">
+    <div class="context-menu-item" (click)="contextMenuOpen()">
+      <mat-icon>open_in_new</mat-icon>
+      <span>Megnyitás</span>
+    </div>
+    <div class="context-menu-item" (click)="contextMenuOpenFolder()">
+      <mat-icon>folder_open</mat-icon>
+      <span>Mappa megnyitása</span>
+    </div>
+  </div>
+}

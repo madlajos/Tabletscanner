@@ -7,8 +7,6 @@ import {
 } from '@angular/core';
 import {
   CommonModule,
-  NgIf,
-  NgForOf,
   NgClass
 } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
@@ -27,7 +25,7 @@ interface SavedImage {
   selector: 'app-image-viewer',
   templateUrl: './image-viewer.component.html',
   styleUrls: ['./image-viewer.component.css'],
-  imports: [CommonModule, NgIf, NgForOf, NgClass, MatIconModule]
+  imports: [CommonModule, NgClass, MatIconModule]
 })
 export class ImageViewerComponent implements AfterViewInit, OnDestroy {
   @ViewChild('videoContainer', { static: false })
@@ -46,9 +44,19 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
   panX = 0;
   panY = 0;
   private isDragging = false;
-  private dragStart = { x: 0, y: 0 };
+  private dragStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
   private lastClickTime = 0;
   private readonly DOUBLE_CLICK_THRESHOLD = 300; // ms
+
+  // Capture button cooldown
+  isCaptureCooldown = false;
+  private readonly CAPTURE_COOLDOWN_MS = 1000;
+
+  // Context menu state
+  contextMenuVisible = false;
+  contextMenuX = 0;
+  contextMenuY = 0;
+  contextMenuImage: SavedImage | null = null;
 
   constructor(
     public http: HttpClient,
@@ -56,6 +64,9 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
   ) { }
 
   ngAfterViewInit(): void {
+    // Hide context menu on any click outside
+    document.addEventListener('click', () => this.hideContextMenu());
+
     if (typeof (this.sharedService as any).getCameraStreamStatus === 'function') {
       this.isStreaming = (this.sharedService as any).getCameraStreamStatus();
       this.updateStreamDisplay();
@@ -148,6 +159,16 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   captureImage(): void {
+    if (this.isCaptureCooldown) {
+      return;
+    }
+
+    // Start cooldown
+    this.isCaptureCooldown = true;
+    setTimeout(() => {
+      this.isCaptureCooldown = false;
+    }, this.CAPTURE_COOLDOWN_MS);
+
     const targetDir = (this.sharedService as any).getSaveDirectory
       ? (this.sharedService as any).getSaveDirectory()
       : null;
@@ -212,6 +233,70 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
     });
   }
 
+  onImageContextMenu(event: MouseEvent, img: SavedImage): void {
+    event.preventDefault();
+    
+    // Estimated menu dimensions
+    const menuWidth = 180;
+    const menuHeight = 80;
+    
+    // Get viewport dimensions
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    // Calculate position, adjusting if menu would go off-screen
+    let menuX = event.clientX;
+    let menuY = event.clientY;
+    
+    // Adjust horizontal position if menu would overflow right edge
+    if (menuX + menuWidth > viewportWidth) {
+      menuX = viewportWidth - menuWidth - 5; // 5px padding from edge
+    }
+    
+    // Adjust vertical position if menu would overflow bottom edge
+    if (menuY + menuHeight > viewportHeight) {
+      menuY = viewportHeight - menuHeight - 5; // 5px padding from edge
+    }
+    
+    // Ensure menu doesn't go off left/top edges
+    menuX = Math.max(5, menuX);
+    menuY = Math.max(5, menuY);
+    
+    this.contextMenuVisible = true;
+    this.contextMenuX = menuX;
+    this.contextMenuY = menuY;
+    this.contextMenuImage = img;
+  }
+
+  hideContextMenu(): void {
+    this.contextMenuVisible = false;
+    this.contextMenuImage = null;
+  }
+
+  contextMenuOpen(): void {
+    if (this.contextMenuImage) {
+      this.openImage(this.contextMenuImage);
+    }
+    this.hideContextMenu();
+  }
+
+  contextMenuOpenFolder(): void {
+    if (this.contextMenuImage) {
+      this.http.post(
+        `${BASE_URL}/open_folder`,
+        { path: this.contextMenuImage.path }
+      ).subscribe({
+        next: () => {
+          console.log('Opened folder for:', this.contextMenuImage?.path);
+        },
+        error: (err) => {
+          console.error('Failed to open folder.', err);
+        }
+      });
+    }
+    this.hideContextMenu();
+  }
+
   // For *ngFor to avoid re-rendering everything on each change
   trackByPath(index: number, img: SavedImage): string {
     return img.path;
@@ -242,10 +327,16 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
     this.lastClickTime = now;
 
     // Start dragging only if zoomed in
-    if (this.zoomLevel > 1.0) {
+    if (this.zoomLevel > 1.0 && this.videoContainer) {
       event.preventDefault(); // Prevent browser's default drag behavior
+      const container = this.videoContainer.nativeElement;
       this.isDragging = true;
-      this.dragStart = { x: event.clientX, y: event.clientY };
+      this.dragStart = {
+        x: event.clientX,
+        y: event.clientY,
+        scrollLeft: container.scrollLeft,
+        scrollTop: container.scrollTop
+      };
     }
   }
 
@@ -259,23 +350,9 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
     const deltaX = event.clientX - this.dragStart.x;
     const deltaY = event.clientY - this.dragStart.y;
 
-    // Apply delta to current pan position
-    this.panX += deltaX;
-    this.panY += deltaY;
-
-    // Update drag start for next move
-    this.dragStart = { x: event.clientX, y: event.clientY };
-
-    // Clamp pan to prevent dragging beyond image boundaries
-    const containerWidth = container.clientWidth;
-    const containerHeight = container.clientHeight;
-    const maxPanX = (this.zoomLevel - 1) * containerWidth / 2;
-    const maxPanY = (this.zoomLevel - 1) * containerHeight / 2;
-
-    this.panX = Math.max(-maxPanX, Math.min(maxPanX, this.panX));
-    this.panY = Math.max(-maxPanY, Math.min(maxPanY, this.panY));
-
-    this.applyTransform();
+    // Scroll the container instead of translating the image
+    container.scrollLeft = this.dragStart.scrollLeft - deltaX;
+    container.scrollTop = this.dragStart.scrollTop - deltaY;
   }
 
   private onMouseUp(): void {
@@ -293,12 +370,19 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
     const container = this.videoContainer?.nativeElement;
     if (!container) return;
 
-    const img = container.querySelector('img');
+    const img = container.querySelector('img') as HTMLImageElement | null;
     if (img) {
-      const transform = `scale(${this.zoomLevel}) translate(${this.panX}px, ${this.panY}px)`;
-      (img as HTMLImageElement).style.transform = transform;
-      (img as HTMLImageElement).style.transformOrigin = 'center center';
-      (img as HTMLImageElement).style.transition = this.isDragging ? 'none' : 'transform 0.2s ease-out';
+      const scalePercent = this.zoomLevel * 100;
+      img.style.width = `${scalePercent}%`;
+      img.style.height = `${scalePercent}%`;
+      img.style.transform = 'none';
+      img.style.transition = this.isDragging ? 'none' : 'transform 0.1s ease-out';
+
+      // Reset scroll when returning to 1x
+      if (this.zoomLevel === 1.0) {
+        container.scrollLeft = 0;
+        container.scrollTop = 0;
+      }
     }
   }
 

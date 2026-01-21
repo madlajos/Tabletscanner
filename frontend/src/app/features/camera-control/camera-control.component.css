@@ -37,6 +37,23 @@
   text-align: center;
 }
 
+/* Ensure number inputs stay centered */
+.camera-settings-table input[type="number"] {
+  text-align: center;
+}
+
+/* Remove number spinner controls to keep centering clean */
+.camera-settings-table input[type="number"]::-webkit-inner-spin-button,
+.camera-settings-table input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.camera-settings-table input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 /* Ensure Buttons Are Aligned Horizontally */
 td {
   vertical-align: middle;
@@ -51,7 +68,7 @@ td {
 }
 
 /* Arrange Buttons Horizontally */
-td button {
+td button:not(.browse-button) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -66,18 +83,31 @@ td button {
 }
 
 /* Hover Effect */
-td button:hover {
+/* Generic hover, but avoid overriding connected/streaming state */
+td button:not(.browse-button):hover {
   background-color: #777;
 }
 
 /* Connected Button State */
 .connect-button.connected {
-  background-color: #224477;
+  background-color: #224477 !important;
+  color: #fff;
+  border-color: #224477;
+}
+
+.connect-button.connected:hover {
+  background-color: #2360b2 !important;
 }
 
 /* Streaming Button State */
 .stream-button.streaming {
-  background-color: #224477;
+  background-color: #224477 !important;
+  color: #fff;
+  border-color: #224477;
+}
+
+.stream-button.streaming:hover {
+  background-color: #2360b2 !important;
 }
 
 /* ─────────────────────────────────── */
@@ -103,25 +133,35 @@ td button:hover {
   font-size: 12px;
 }
 
+.user-settings-table td:first-child {
+  width: 25%;
+  text-align: left;
+}
+
+.user-settings-table td:nth-child(2),
+.user-settings-table td:nth-child(3) {
+  width: 37.5%;
+  text-align: left;
+}
+
+.user-settings-table td.checkbox-cell {
+  text-align: left;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+}
+
 /* Styling User Settings Inputs */
-.user-settings-table input {
-  width: 30%;
+.user-settings-table input,
+.user-settings-table select {
+  width: 60%;
   padding: 3px;
   font-size: 12px;
   border-radius: 3px;
   border: 1px solid #555;
   background-color: #333;
   color: #fff;
-}
-
-.user-settings-table th:nth-child(1),
-.user-settings-table td:nth-child(1) {
-  width: 60%;
-}
-
-.user-settings-table th:nth-child(2),
-.user-settings-table td:nth-child(2) {
-  width: 40%;
+  text-align: center;
 }
 
 /* ─────────────────────────────────── */
@@ -168,23 +208,71 @@ td button:hover {
 .csv-input-wrapper {
   display: flex;
   align-items: center;
-  gap: 6px;                 /* space between button & textbox */
+  gap: 14px;                 /* space between button & textbox */
+  width: 60%;               /* align group width with camera inputs above */
+  margin: 0 auto;           /* center in the colspan cell */
 }
 
-/* Shrink the button only here */
-.csv-dir-btn {
-  height: 26px;
-  width: 44px;          /* icon still visible but tight */
-  flex: none;               /* don’t grow/shrink */
+/* Match automatic measurement's browse button styling */
+.browse-button {
+  padding: 3px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background-color: #444;
+  color: #ddd;
+  cursor: pointer;
+  transition: background-color 0.2s ease-out;
+}
+
+.browse-button:hover:not(:disabled) {
+  background-color: #555;
+}
+
+.browse-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mono-icon {
+  color: #ddd;
+  font-size: 16px;
+  line-height: 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.icon-button {
+  padding: 3px 8px;
+  min-width: unset;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Let the textbox take ALL remaining space */
 .csv-input-wrapper input.dir-display {
-  flex: 1 1 0;              /* grow, may shrink */
+  flex: 1 1 auto;           /* grow to fill wrapper width */
   min-width: 0;             /* prevent flex overflow */
   width: auto;              /* override table’s 30% rule */
   text-align: left;
-  max-width: 180px;         /* shorten the Beállítás textbox */
+}
+
+/* Wider wrappers for Mentés helye and Beállítás rows */
+.wide-input-wrapper {
+  width: 100%;
+  margin: 0;               /* span full available width in the colspan cell */
+}
+
+.preset-wrapper {
+  max-width: 540px;
+}
+
+/* Keep camera setting inputs centered within their cells */
+.camera-settings-table td > input {
+  display: inline-block;
+  margin: 0 auto;
 }
 
 .camera-settings-table td.lamp-cell {
@@ -206,17 +294,7 @@ td button:hover {
   width: 37.5%;
 }
 
-.settings-button{
-  height: 24px;
-  width: 38px;
-}
-
-.settings-button mat-icon {
-  font-size: 18px;
-  width: 18px;
-  height: 18px;
-  line-height: 18px;
-}
+/* Remove old settings-button specific sizing; using browse-button instead */
 
 .camera-settings-table th,
 .camera-settings-table td,
@@ -275,8 +353,9 @@ td button:hover {
 
 /* Styled dropdown a User Settings táblában */
 .user-settings-table select.styled-input {
-  width: 100%;
-  padding: 3px 24px 3px 6px;  /* jobb oldalt több hely a nyíl miatt */
+  width: 70%;
+  max-width: 200px;          /* keep it from stretching too far */
+  padding: 3px 24px 3px 6px;
   font-size: 12px;
   border-radius: 3px;
   border: 1px solid #555;
@@ -285,7 +364,6 @@ td button:hover {
   box-sizing: border-box;
   cursor: pointer;
 
-  /* natív nyíl elrejtése, saját nyíl rajzolása */
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
@@ -307,4 +385,18 @@ td button:hover {
 .user-settings-table select.styled-input:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* Center checkbox horizontally in its cell */
+.user-settings-table input.styled-checkbox {
+  display: inline-block;
+  margin: 0;
+}
+
+.checkbox-wrapper {
+  width: 70%;
+  margin: 0;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
 }

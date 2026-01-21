@@ -1414,6 +1414,26 @@ def open_image():
 
     return jsonify({"success": True}), 200
 
+@app.route('/api/open_folder', methods=['POST'])
+def open_folder():
+    data = request.get_json() or {}
+    path = data.get('path')
+
+    if not path:
+        return jsonify({"error": "No path specified"}), 400
+
+    if not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        # Windows-only: open Explorer at the folder containing the file
+        folder = os.path.dirname(path)
+        os.startfile(folder)  # type: ignore[attr-defined]
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"success": True}), 200
+
 @app.route('/api/get-other-settings', methods=['GET'])
 def get_other_settings():
     category = request.args.get('category')
@@ -1461,6 +1481,21 @@ def update_other_settings():
     except Exception as e:
         app.logger.exception("Failed to update other settings")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/check-file-exists', methods=['POST'])
+def check_file_exists():
+    try:
+        data = request.get_json(silent=True) or {}
+        path = data.get('path')
+        if not path:
+            return jsonify({"exists": False, "error": "No path provided"}), 400
+
+        exists = os.path.isfile(path)
+        return jsonify({"exists": bool(exists)})
+    except Exception as e:
+        app.logger.exception("check_file_exists failed")
+        return jsonify({"exists": False, "error": str(e)}), 500
     
 
 @app.route('/api/health', methods=['GET'])
