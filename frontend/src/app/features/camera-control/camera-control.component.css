@@ -281,12 +281,18 @@ td button:not(.browse-button):hover {
   vertical-align: middle;   /* vertical center within the row */
 }
 
-.lamp-icon {
-  height: 32px;            /* tweak this until it almost fills the row */
-  width: auto;
+.dome-lamp-icon{
+  height: 46px;           
   vertical-align: middle;
-  margin-left: 22%;
+  margin-left: 16%;
 }
+
+.bar-lamp-icon{
+  height: 30px;           
+  vertical-align: middle;
+  margin-left: 10%;
+}
+
 
 .icon-cell {
   text-align: center;

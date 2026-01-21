@@ -164,6 +164,11 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
 }
 
+.toggle-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
 /* =======================
    Selection header: count + clear button
    ======================= */
@@ -433,4 +438,38 @@
   color: #f9a825;
   border-color: rgba(249, 168, 37, 0.65);
   box-shadow: 0 0 8px rgba(249, 168, 37, 0.32);
+}
+
+/* Context menu styling */
+.context-menu {
+  position: fixed;
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  min-width: 160px;
+  padding: 4px 0;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  user-select: none;
+}
+
+.context-menu-item:hover:not(.disabled) {
+  background-color: #3a3a3a;
+}
+
+.context-menu-item.disabled {
+  color: #666;
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none !important;
 }

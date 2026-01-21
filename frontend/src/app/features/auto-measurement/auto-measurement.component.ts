@@ -1,4 +1,4 @@
-import { Component, signal, OnInit, OnDestroy } from '@angular/core';
+import { Component, signal, OnInit, OnDestroy, AfterViewInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription, from } from 'rxjs';
@@ -25,7 +25,7 @@ interface TabletPosition {
   templateUrl: './auto-measurement.component.html',
   styleUrls: ['./auto-measurement.component.css']
 })
-export class AutoMeasurementComponent implements OnInit, OnDestroy {
+export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestroy {
 
   readonly gridSize = 10; // change to 9 later if needed
 
@@ -50,13 +50,14 @@ export class AutoMeasurementComponent implements OnInit, OnDestroy {
   autofocus = false;
   lampTop = false;
   lampSide = false;
+  backgroundSubtraction = false;
 
   // Save location and measurement name
   saveLocation = '';
   measurementName = '';
 
   // First tablet position and spacing (from settings)
-  firstTabletX = 3.0;
+  firstTabletX = 6.0;
   firstTabletY = 7.0;
   firstTabletZ = 20.0;
   tabletSpacing = 18.3;
@@ -94,6 +95,14 @@ export class AutoMeasurementComponent implements OnInit, OnDestroy {
   successMessage: string | null = null;
   validationMessage: string | null = null;
 
+  // Context menu state for tablet grid
+  tabletContextMenuVisible = false;
+  tabletContextMenuX = 0;
+  tabletContextMenuY = 0;
+  tabletContextMenuId: number | null = null;
+  tabletHomed = false;
+  private homedSub?: Subscription;
+
   constructor(
     private autoService: AutoMeasurementService,
     private sharedService: SharedService,
@@ -109,13 +118,19 @@ export class AutoMeasurementComponent implements OnInit, OnDestroy {
       this.motionConnected = status;
     });
 
+    // Subscribe to homed state from SharedService (published by motion-control component)
+    this.homedSub = this.sharedService.motionHomed$.subscribe(homed => {
+      this.tabletHomed = homed;
+      console.log('Auto-measurement received homed state:', homed);
+    });
+
     // Load saved settings from backend
     this.autoService.getSettings().subscribe({
       next: (res) => {
         if (res.auto_measurement_settings) {
           const settings = res.auto_measurement_settings;
           this.saveLocation = settings.save_location || '';
-          this.firstTabletX = settings.first_tablet_x ?? 3.0;
+          this.firstTabletX = settings.first_tablet_x ?? 6.0;
           this.firstTabletY = settings.first_tablet_y ?? 7.0;
           this.firstTabletZ = settings.first_tablet_z ?? 20.0;
           this.tabletSpacing = settings.tablet_spacing ?? 18.3;
@@ -127,9 +142,15 @@ export class AutoMeasurementComponent implements OnInit, OnDestroy {
     });
   }
 
+  ngAfterViewInit(): void {
+    // Hide context menu when clicking outside
+    document.addEventListener('click', () => this.hideTabletContextMenu());
+  }
+
   ngOnDestroy(): void {
     this.cameraSub?.unsubscribe();
     this.motionSub?.unsubscribe();
+    this.homedSub?.unsubscribe();
     
     // Ensure measurement is marked inactive on destroy
     if (this.measurementActive) {
@@ -190,6 +211,118 @@ export class AutoMeasurementComponent implements OnInit, OnDestroy {
     const hasLightSelected = this.lampTop || this.lampSide;
 
     return hasSelected && connected && hasSaveLocation && hasMeasurementName && hasLightSelected;
+  }
+
+  // ===== Tablet context menu =====
+
+  onTabletContextMenu(event: MouseEvent, id: number): void {
+    // Prevent context menu if measurement is active
+    if (this.measurementActive) {
+      event.preventDefault();
+      return;
+    }
+
+    event.preventDefault();
+
+    // Estimated menu dimensions
+    const menuWidth = 180;
+    const menuHeight = 80;
+
+    // Get viewport dimensions
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Calculate position, adjusting if menu would go off-screen
+    let menuX = event.clientX;
+    let menuY = event.clientY;
+
+    // Adjust horizontal position if menu would overflow right edge
+    if (menuX + menuWidth > viewportWidth) {
+      menuX = viewportWidth - menuWidth - 5;
+    }
+
+    // Adjust vertical position if menu would overflow bottom edge
+    if (menuY + menuHeight > viewportHeight) {
+      menuY = viewportHeight - menuHeight - 5;
+    }
+
+    // Ensure menu doesn't go off left/top edges
+    menuX = Math.max(5, menuX);
+    menuY = Math.max(5, menuY);
+
+    this.tabletContextMenuVisible = true;
+    this.tabletContextMenuX = menuX;
+    this.tabletContextMenuY = menuY;
+    this.tabletContextMenuId = id;
+  }
+
+  hideTabletContextMenu(): void {
+    this.tabletContextMenuVisible = false;
+    this.tabletContextMenuId = null;
+  }
+
+  selectTablet(): void {
+    if (this.tabletContextMenuId !== null) {
+      this.onDotClick(this.tabletContextMenuId);
+    }
+    this.hideTabletContextMenu();
+  }
+
+  moveToTablet(): void {
+    if (this.tabletContextMenuId === null || !this.tabletHomed) {
+      console.warn('moveToTablet blocked: tabletHomed =', this.tabletHomed);
+      return;
+    }
+
+    const pos = this.getTabletPosition(this.tabletContextMenuId);
+    if (pos) {
+      this.http.post(`${BASE_URL}/move_toolhead_absolute`, {
+        x: pos.x,
+        y: pos.y,
+        z: this.firstTabletZ
+      }).subscribe({
+        next: () => {
+          console.log(`Moved to tablet ${this.tabletContextMenuId}`);
+          this.hideTabletContextMenu();
+        },
+        error: (err) => {
+          console.error('Failed to move toolhead:', err);
+        }
+      });
+    }
+  }
+
+  private getTabletPosition(tabletId: number): { x: number; y: number } | null {
+    // Tablet IDs: 1-10 = bottom row, 11-20 = next row up, etc.
+    // For gridSize=10: tablet 1 is at (row=0, col=0), tablet 2 at (row=0, col=1), etc.
+    
+    const tabletIndex = tabletId - 1; // Convert 1-based to 0-based
+    if (tabletIndex < 0 || tabletIndex >= this.gridSize * this.gridSize) {
+      return null;
+    }
+
+    // Calculate row from bottom and column from left
+    const rowFromBottom = Math.floor(tabletIndex / this.gridSize);
+    const col = tabletIndex % this.gridSize;
+
+    // Calculate position
+    const x = this.firstTabletX + col * this.tabletSpacing;
+    const y = this.firstTabletY + rowFromBottom * this.tabletSpacing;
+
+    return { x, y };
+  }
+
+  /**
+   * Convert tablet ID to label format (A1, B1, C1, etc.)
+   * Columns are letters (A, B, C...), rows are numbers (1, 2, 3...)
+   * ID 1 = A1, ID 2 = B1, ID 10 = J1, ID 11 = A2, etc. (for 10x10 grid)
+   */
+  getTabletLabel(id: number): string {
+    const index = id - 1; // Convert to 0-based index
+    const col = index % this.gridSize; // Column determines letter
+    const row = Math.floor(index / this.gridSize) + 1; // Row determines number (1-based)
+    const letter = String.fromCharCode(65 + col); // 65 = 'A'
+    return letter + row;
   }
 
   // ===== Folder selection =====

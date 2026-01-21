@@ -56,7 +56,7 @@
       [disabled]="measurementActive"
     >
       <img src="assets/SVG/ringlight_off.svg" alt="Dome light" />
-      <span class="toggle-label">Felső világítás</span>
+      <span class="toggle-label">Dóm fény</span>
     </button>
 
     <button
@@ -67,7 +67,18 @@
       [disabled]="measurementActive"
     >
       <img src="assets/SVG/barlight_off.svg" alt="Bar light" />
-      <span class="toggle-label">Súrló világítás</span>
+      <span class="toggle-label">Súrló  fény</span>
+    </button>
+
+    <button
+      type="button"
+      class="toggle-button"
+      [class.active]="backgroundSubtraction"
+      (click)="backgroundSubtraction = !backgroundSubtraction"
+      [disabled]="measurementActive"
+    >
+      <img src="assets/SVG/SVG/bkgrndsub.svg" alt="Background subtraction" />
+      <span class="toggle-label">Háttérlevonás</span>
     </button>
   </div>
 
@@ -89,7 +100,7 @@
   </div>
 
   <!-- DOT GRID -->
-  <div class="tablet-grid" (mouseleave)="onGridMouseLeave()">
+  <div class="tablet-grid" (mouseleave)="onGridMouseLeave()" (click)="hideTabletContextMenu()">
     <div
       *ngFor="let id of tablets"
       class="tablet-dot"
@@ -98,12 +109,33 @@
       [class.in-progress]="isDotInProgress(id)"
       [class.pending]="getDotState(id) === 'pending' && measurementActive"
       (click)="onDotClick(id)"
+      (contextmenu)="onTabletContextMenu($event, id)"
       (mouseenter)="onDotMouseEnter(id)"
       [title]="'Tabletta ' + id"
     >
-      <span class="tablet-number">{{ id }}</span>
+      <span class="tablet-number">{{ getTabletLabel(id) }}</span>
     </div>
   </div>
+
+  <!-- Tablet context menu -->
+  @if (tabletContextMenuVisible) {
+    <div class="context-menu tablet-context-menu" 
+         [style.left.px]="tabletContextMenuX"
+         [style.top.px]="tabletContextMenuY"
+         (mouseleave)="hideTabletContextMenu()">
+      <div class="context-menu-item" (click)="selectTablet()">
+        <span>Kiválaszt</span>
+      </div>
+      <div class="context-menu-item" 
+           [class.disabled]="!tabletHomed"
+           [title]="tabletHomed ? '' : 'Mozgásplatform nincs homing-olva'"
+           (click)="tabletHomed && moveToTablet()"
+           (mousedown)="$event.preventDefault()"
+           (mouseup)="$event.preventDefault()">
+        <span>Mozgás ide</span>
+      </div>
+    </div>
+  }
 
   <!-- START / STOP BUTTON FULL WIDTH -->
   <button

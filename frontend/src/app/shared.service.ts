@@ -82,6 +82,18 @@ export class SharedService {
   private motionPositionSubject = new BehaviorSubject<{ x: number | null; y: number | null; z: number | null } | null>(null);
   motionPosition$ = this.motionPositionSubject.asObservable();
 
+  // Track whether all axes are homed (xHomed && yHomed && zHomed)
+  private motionHomedSubject = new BehaviorSubject<boolean>(false);
+  motionHomed$ = this.motionHomedSubject.asObservable();
+
+  setMotionHomed(homed: boolean): void {
+    this.motionHomedSubject.next(homed);
+  }
+
+  getMotionHomed(): boolean {
+    return this.motionHomedSubject.value;
+  }
+
   setMotionHoming(isHoming: boolean): void {
     this.motionHomingStatus.next(isHoming);
   }

@@ -55,6 +55,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
   ringLightOn: boolean = false;
   barLightOn: boolean = false;
+  lightBusy = false;
 
 
   isHoming = false;
@@ -89,6 +90,8 @@ export class MotionControl implements OnInit, OnDestroy {
       if (pos.x !== null) { this.xPosition = round3(pos.x) as number | string; this.xHomed = true; }
       if (pos.y !== null) { this.yPosition = round3(pos.y) as number | string; this.yHomed = true; }
       if (pos.z !== null) { this.zPosition = round3(pos.z) as number | string; this.zHomed = true; }
+      // Publish homed state to SharedService
+      this.updateSharedHomedState();
     });
 
     // Subscribe to motion homing status (from auto-measurement or manual home)
@@ -204,6 +207,9 @@ export class MotionControl implements OnInit, OnDestroy {
 
           if (!this.isConnected && !this.reconnectionPolling) {
             console.warn('Motion platform disconnected – starting reconnection polling.');
+            // Reset homed state on disconnect
+            this.xHomed = this.yHomed = this.zHomed = false;
+            this.updateSharedHomedState();
             this.errorNotificationService.addError({
               code: 'E1201',
               message: this.errorNotificationService.getMessage('E1201'),
@@ -280,98 +286,56 @@ export class MotionControl implements OnInit, OnDestroy {
 
   // ---------- Helpers ----------
 
-  toggleBarLight(): void {
-    if (!this.barLightOn) {
-      // Turning bar on: if dome is on, turn it off first
-      if (this.ringLightOn) {
-        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
-          next: () => {
-            this.ringLightOn = false;
-            // Now turn bar on
-            this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
-              next: () => {
-                this.barLightOn = true;
-                this.applyCameraSettingsForLight('bar');
-              },
-              error: (err) => {
-                console.error('Failed to turn on bar light', err);
-              }
-            });
-          },
-          error: (err) => {
-            console.error('Failed to turn off dome light', err);
-          }
-        });
-      } else {
-        // Dome is off, just turn bar on
-        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S255' }).subscribe({
-          next: () => {
-            this.barLightOn = true;
-            this.applyCameraSettingsForLight('bar');
-          },
-          error: (err) => {
-            console.error('Failed to turn on bar light', err);
-          }
-        });
-      }
-    } else {
-      // Turning bar off
-      this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
-        next: () => {
-          this.barLightOn = false;
-        },
-        error: (err) => {
-          console.error('Failed to turn off bar light', err);
+  async toggleBarLight(): Promise<void> {
+    if (this.lightBusy) return;
+    this.lightBusy = true;
+    try {
+      if (!this.barLightOn) {
+        // Turning bar on: ensure dome is off first
+        if (this.ringLightOn) {
+          await this.sendGcode('M106 P0 S255');
+          this.ringLightOn = false;
         }
-      });
+        await this.sendGcode('M106 P1 S255');
+        this.barLightOn = true;
+        this.ringLightOn = false;
+        this.applyCameraSettingsForLight('bar');
+      } else {
+        // Turning bar off
+        await this.sendGcode('M106 P1 S0');
+        this.barLightOn = false;
+      }
+    } catch (err) {
+      console.error('Failed to toggle bar light', err);
+    } finally {
+      this.lightBusy = false;
     }
   }
 
 
-  toggleDomeLight(): void {
-    if (!this.ringLightOn) {
-      // Turning dome on: if bar is on, turn it off first
-      if (this.barLightOn) {
-        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P1 S0' }).subscribe({
-          next: () => {
-            this.barLightOn = false;
-            // Now turn dome on
-            this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
-              next: () => {
-                this.ringLightOn = true;
-                this.applyCameraSettingsForLight('dome');
-              },
-              error: (err) => {
-                console.error('Failed to turn on dome light', err);
-              }
-            });
-          },
-          error: (err) => {
-            console.error('Failed to turn off bar light', err);
-          }
-        });
-      } else {
-        // Bar is off, just turn dome on
-        this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S0' }).subscribe({
-          next: () => {
-            this.ringLightOn = true;
-            this.applyCameraSettingsForLight('dome');
-          },
-          error: (err) => {
-            console.error('Failed to turn on dome light', err);
-          }
-        });
-      }
-    } else {
-      // Turning dome off
-      this.http.post(`${BASE_URL}/send_gcode`, { command: 'M106 P0 S255' }).subscribe({
-        next: () => {
-          this.ringLightOn = false;
-        },
-        error: (err) => {
-          console.error('Failed to turn off dome light', err);
+  async toggleDomeLight(): Promise<void> {
+    if (this.lightBusy) return;
+    this.lightBusy = true;
+    try {
+      if (!this.ringLightOn) {
+        // Turning dome on: ensure bar is off first
+        if (this.barLightOn) {
+          await this.sendGcode('M106 P1 S0');
+          this.barLightOn = false;
         }
-      });
+        await this.sendGcode('M106 P0 S0');
+        this.ringLightOn = true;
+        this.barLightOn = false;
+        this.applyCameraSettingsForLight('dome');
+      } else {
+        // Turning dome off
+        await this.sendGcode('M106 P0 S255');
+        this.ringLightOn = false;
+      }
+    } catch (err) {
+      console.error('Failed to toggle dome light', err);
+    } finally {
+      this.lightBusy = false;
     }
   }
 
@@ -389,6 +353,13 @@ export class MotionControl implements OnInit, OnDestroy {
     if (v === undefined || v === '?') return undefined;
     const n = typeof v === 'number' ? v : Number(v);
     return Number.isFinite(n) ? n : undefined;
+  }
+
+  /**
+   * Small helper to send a single G-code command sequentially.
+   */
+  private async sendGcode(command: string): Promise<void> {
+    await firstValueFrom(this.http.post(`${BASE_URL}/send_gcode`, { command }));
   }
 
   submitOnEnter(axis: 'x' | 'y' | 'z') {
@@ -565,6 +536,8 @@ export class MotionControl implements OnInit, OnDestroy {
             this.xPosition = 0; this.yPosition = 0; this.zPosition = 0;
             this.xHomed = this.yHomed = this.zHomed = true;
           }
+          // Publish homed state to SharedService
+          this.updateSharedHomedState();
         },
         error: (error) => {
           console.error(`Failed to home Motion platform ${ax ? ax.toUpperCase() : 'ALL'}!`, error);
@@ -589,16 +562,19 @@ export class MotionControl implements OnInit, OnDestroy {
       await homeAxis('z');
       this.zHomed = true;
       this.zPosition = 0;
+      this.updateSharedHomedState();
 
       // ---------------- Y ----------------
       await homeAxis('y');
       this.yHomed = true;
       this.yPosition = 0;
+      this.updateSharedHomedState();
 
       // ---------------- X ----------------
       await homeAxis('x');
       this.xHomed = true;
       this.xPosition = 0;
+      this.updateSharedHomedState();
 
     } catch (err) {
       console.error("Homing error:", err);
@@ -692,5 +668,13 @@ export class MotionControl implements OnInit, OnDestroy {
   applyCameraSettingsForLight(light: 'dome' | 'bar'): void {
     // Emit an event to notify the camera control component to apply the corresponding settings
     this.sharedService.applyCameraSettingsForLight(light);
+  }
+
+  /**
+   * Publishes the current homed state to SharedService so other components can react.
+   */
+  private updateSharedHomedState(): void {
+    const allHomed = this.xHomed && this.yHomed && this.zHomed;
+    this.sharedService.setMotionHomed(allHomed);
   }
 }

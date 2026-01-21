@@ -50,7 +50,8 @@
 @if (contextMenuVisible) {
   <div class="context-menu" 
        [style.left.px]="contextMenuX"
-       [style.top.px]="contextMenuY">
+       [style.top.px]="contextMenuY"
+       (mouseleave)="hideContextMenu()">
     <div class="context-menu-item" (click)="contextMenuOpen()">
       <mat-icon>open_in_new</mat-icon>
       <span>Megnyitás</span>
