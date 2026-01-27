@@ -185,3 +185,4 @@ def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, sho
         cv2.destroyAllWindows()
 
     return square_roi
+

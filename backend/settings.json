@@ -1,20 +1,20 @@
 {
     "camera_params_dome": {
-        "ExposureTime": 800.0,
-        "Gain": 1.0,
+        "ExposureTime": 600.0,
+        "Gain": 0.0,
         "Gamma": 1.0
     },
     "camera_params_bar": {
-        "ExposureTime": 50000.0,
-        "Gain": 1.0,
-        "Gamma": 0.6
+        "ExposureTime": 30000.0,
+        "Gain": 0.0,
+        "Gamma": 1.0
     },
     "other_settings": {
         "objective": "100x",
         "save_location": "D:/",
         "background_subtraction": false,
         "save_settings": false,
-        "camera_settings_file": "C:/Users/madla/OneDrive/Desktop/a2A4508-20ucBAS_40697387.pfs",
+        "camera_settings_file": "D:/source/Tabletscanner/backend/a2A4508-20ucBAS_40697387.pfs",
         "spacer_rings": "1",
         "settings_preset_name": "test111"
     },

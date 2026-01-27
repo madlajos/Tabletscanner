@@ -1048,11 +1048,10 @@ def auto_measurement_step():
         
         saved_images = []
         
-        # 1. Move to tablet position
+        # 1. Move to tablet position (X and Y only, Z is controlled by autofocus or manual setting)
         resp, status = _move_toolhead_absolute_impl(
             x_pos=float(x_pos),
-            y_pos=float(y_pos),
-            z_pos=float(z_pos)
+            y_pos=float(y_pos)
         )
         if status != 200:
             _turn_off_all_lights()

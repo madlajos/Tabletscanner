@@ -16,7 +16,7 @@ export interface TabletStepRequest {
   tablet_index: number;
   x: number;
   y: number;
-  z: number;
+  z?: number;  // Optional: Z is controlled by autofocus or manual setting during automated measurement
   measurement_folder: string;
   measurement_name: string;
   autofocus: boolean;

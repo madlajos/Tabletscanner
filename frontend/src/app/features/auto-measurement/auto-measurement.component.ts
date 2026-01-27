@@ -278,8 +278,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     if (pos) {
       this.http.post(`${BASE_URL}/move_toolhead_absolute`, {
         x: pos.x,
-        y: pos.y,
-        z: this.firstTabletZ
+        y: pos.y
       }).subscribe({
         next: () => {
           console.log(`Moved to tablet ${this.tabletContextMenuId}`);
@@ -552,11 +551,17 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       next: (position) => {
         console.log('Motion platform homed successfully (Z→Y→X). Position:', position);
         this.validationMessage = null;
+        
+        // Update motion position and homed state via SharedService
         this.sharedService.setMotionPosition({
           x: position?.x ?? null,
           y: position?.y ?? null,
           z: position?.z ?? null
         });
+        
+        // Explicitly set homed state to true after successful homing
+        this.sharedService.setMotionHomed(true);
+        
         this.processTabletQueue(indices, 0);
       },
       error: (err) => {
@@ -621,7 +626,6 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       tablet_index: tabletId,
       x: position.x,
       y: position.y,
-      z: this.firstTabletZ,
       measurement_folder: this.measurementFolder,
       measurement_name: this.measurementName.trim(),
       autofocus: this.autofocus,

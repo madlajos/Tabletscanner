@@ -1,10 +1,11 @@
+# autofocus_main.py
 import time
 import os
 from datetime import datetime
 import cv2
-
+import numpy as np
 import globals
-from motioncontrols import move_relative
+from motioncontrols import move_relative, get_toolhead_position
 
 from autofocus_back import process_frame, detect_largest_object_square_roi, edge_definition_score
 from cameracontrol import converter
@@ -14,6 +15,89 @@ import porthandler
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
+def final_out_of_frame_check(
+    motion_platform,
+    current_z,
+    target_z,
+    frame_scale,
+    grab_timeout_ms,
+    debug,
+    debug_buffer,
+    margin_px=2,
+    min_area_ratio=0.001
+):
+    """
+    Elmegy target_z-re, lő egy frame-et, és ellenőrzi hogy a legnagyobb Otsu objektum
+    érinti-e a képszélt. Ha igen -> (False, error_payload_dict). Ha ok -> (True, None)
+    """
+    # menjünk a végső Z-re, hogy valósan azt ellenőrizzük, amit visszaadunk
+    current_z = move_to_virtual_z(motion_platform, current_z, float(target_z))
+
+    frame = acquire_frame(timeout_ms=grab_timeout_ms)
+
+    if frame_scale is not None and float(frame_scale) != 1.0:
+        frame = cv2.resize(frame, None, fx=float(frame_scale), fy=float(frame_scale),
+                           interpolation=cv2.INTER_AREA)
+
+    if debug and debug_buffer is not None:
+        debug_buffer.append({
+            "stage": "final_check",
+            "z": float(target_z),
+            "idx": 0,
+            "frame": frame.copy(),
+        })
+
+    # 1x Otsu + bbox (ugyanazzal a logikával mint nálatok)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    H, W = gray.shape[:2]
+
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
+    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
+    if fg < bg:
+        bw = 255 - bw
+
+    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        # nincs objektum -> nálatok ez inkább hiba lehet, de itt "nem lóg ki"
+        return True, None
+
+    c = max(contours, key=cv2.contourArea)
+    area = float(cv2.contourArea(c))
+    if area < (float(min_area_ratio) * H * W):
+        return True, None  # túl kicsi -> zaj, ne dobjunk hibát
+
+    x, y, w, h = cv2.boundingRect(c)
+
+    touches = (
+        x <= margin_px or
+        y <= margin_px or
+        (x + w) >= (W - 1 - margin_px) or
+        (y + h) >= (H - 1 - margin_px)
+    )
+
+    if not touches:
+        return True, None
+
+    error_code = "AF_OBJECT_OUT_OF_FRAME_FINAL"
+    error_dir = dump_debug_buffer_to_error(debug_buffer, error_code) if debug else None
+
+    payload = {
+        "status": "ERROR",
+        "error_code": error_code,
+        "error_dir": error_dir,
+        "z_rel": float(target_z),
+        "score": 0.0,
+        "info": {
+            "bbox": (int(x), int(y), int(w), int(h)),
+            "area": area,
+            "H": int(H),
+            "W": int(W),
+            "margin_px": int(margin_px),
+        }
+    }
+    return False, payload
+
 def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
@@ -68,7 +152,7 @@ def dump_debug_buffer_to_error(debug_buffer, error_code: str) -> str:
 
 def has_peak_shape(scores, prominence_ratio=0.05, eps=1e-12) -> bool:
     """
-    "Domb" alak ellenőrzés a coarse scan ÖSSZES pontjára:
+    "Peak" alak ellenőrzés a coarse scan ÖSSZES pontjára:
 
     True, ha:
       - van legalább 3 pont
@@ -129,9 +213,9 @@ def acquire_frame(timeout_ms=2000):
     return frame_bgr
 
 
-def move_to_virtual_z(motion_platform, current_z, target_z):
+def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=1):
     dz = float(target_z) - float(current_z)
-    print("Menj " + str(target_z) + " pozira")
+    print("Menj " + str(target_z) + " pozícióra")
     if abs(dz) > 1e-9:
         move_relative(motion_platform, z=dz)
         wait_motion_done(motion_platform)
@@ -151,7 +235,7 @@ def measure_score(
     n_frames=1, timeout_ms=2000,
     debug=False, debug_buffer=None, stage="unk",
     frame_scale=1.0,
-    score_fn=None,   # ✅ ha megadod, ezt használja (pl. edge score)
+    score_fn=None,   # ha megadod, ezt használja (pl. edge score)
 ):
     current_z = move_to_virtual_z(motion_platform, current_z, target_z)
 
@@ -161,7 +245,7 @@ def measure_score(
     for i in range(n):
         frame = acquire_frame(timeout_ms=timeout_ms)
 
-        # ✅ downscale (gyorsítás + stabilabb)
+        # downscale (gyorsítás + stabilabb)
         if frame_scale is not None and float(frame_scale) != 1.0:
             frame = cv2.resize(frame, None, fx=float(frame_scale), fy=float(frame_scale), interpolation=cv2.INTER_AREA)
 
@@ -193,8 +277,8 @@ def autofocus_coarse(
     motion_platform,
     z_min=0.0,
     z_max=25.0,
-    frame_scale=0.35,   # ✅ még kisebb kép (pl. 0.5 helyett 0.35 vagy 0.3)
-    edge_ring_width=5,  # ✅ perem-sáv vastagság
+    frame_scale=0.35,   # még kisebb kép (pl. 0.5 helyett 0.35 vagy 0.3)
+    edge_ring_width=5,  # perem-sáv vastagság
     # Coarse scan
     coarse_step=2.0,
     drop_ratio=0.92,
@@ -219,7 +303,7 @@ def autofocus_coarse(
     # Debug
     debug=True,
 
-    # ✅ ÚJ: "domb" érzékenység
+    #  ÚJ: "peak" érzékenység
     coarse_peak_prominence_ratio=0.05,
 ):
     """
@@ -233,13 +317,13 @@ def autofocus_coarse(
     debug_buffer = [] if debug else None
 
     current_z = 0.0
-    # ✅ induljunk a legmagasabb pozícióról
+    # induljunk a legmagasabb pozícióról
     current_z = move_to_virtual_z(motion_platform, current_z, float(z_max))
 
     # --- ROI detektálás 1x ---
     first_frame = acquire_frame(timeout_ms=grab_timeout_ms)
 
-    # ✅ ugyanaz a downscale az ROI detekthez is
+    # ugyanaz a downscale az ROI detekthez is
     if frame_scale is not None and float(frame_scale) != 1.0:
         first_frame = cv2.resize(first_frame, None, fx=float(frame_scale), fy=float(frame_scale),
                                  interpolation=cv2.INTER_AREA)
@@ -272,21 +356,20 @@ def autofocus_coarse(
     z = float(z_max)
     i = 0
     step = abs(float(coarse_step))  # biztos pozitív
-    while z >= float(z_min):        # Check for abort signal (measurement stopped)
+    while z >= float(z_min):
+        # if globals.autofocus_abort:
+        #     return {
+        #         "status": "ABORTED",
+        #         "z_rel": float(best_z) if best_z else float(z),
+        #         "score": float(best_score) if best_score != float("-inf") else 0.0,
+        #     }
+            # Check for abort signal
         if globals.autofocus_abort:
             return {
                 "status": "ABORTED",
                 "z_rel": float(best_z) if best_z else float(z),
                 "score": float(best_score) if best_score != float("-inf") else 0.0,
             }
-        # Check for abort signal
-        if globals.autofocus_abort:
-            return {
-                "status": "ABORTED",
-                "z_rel": float(best_z) if best_z else float(z),
-                "score": float(best_score) if best_score != float("-inf") else 0.0,
-            }
-
         current_z, s = measure_score(
             motion_platform, current_z, z,
             roi=None,  # ✅ coarse-hoz nem kell ROI
@@ -305,7 +388,7 @@ def autofocus_coarse(
             best_z = z
             bad_count = 0
 
-        # ✅ Early-stop lefelé:
+        # Early-stop lefelé:
         # akkor "best után vagyunk", ha z < best_z (mert z csökken)
         if (i + 1) >= int(min_points) and (best_z is not None) and (z < best_z):
             if s < best_score * float(drop_ratio):
@@ -322,7 +405,7 @@ def autofocus_coarse(
         raise RuntimeError("Coarse scan nem adott best_z-t.")
     print("Best z: " + str(best_z))
 
-    # ✅ A COARSE összes pontját vizsgáljuk: "domb" van-e?
+    # A COARSE összes pontját vizsgáljuk: "peak" van-e?
     coarse_scores_in_order = [s for _, s in coarse_points]
     ok_peak = has_peak_shape(
         coarse_scores_in_order,
@@ -415,7 +498,6 @@ def autofocus_coarse(
                 "z_rel": float(final_z),
                 "score": float(final_s),
             }
-
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
             roi=roi,
@@ -432,6 +514,23 @@ def autofocus_coarse(
     final_z, final_s = max(fine2_points, key=lambda p: p[1])
     print("Final_z: " + str(final_z))
     globals.last_best_z = float(final_z)
+
+    # ✅ VÉGSO KILÓGÁS CHECK (return előtt)
+    ok, err_payload = final_out_of_frame_check(
+        motion_platform=motion_platform,
+        current_z=current_z,
+        target_z=final_z,
+        frame_scale=frame_scale,
+        grab_timeout_ms=grab_timeout_ms,
+        debug=debug,
+        debug_buffer=debug_buffer,
+        margin_px=2,
+        min_area_ratio=0.001
+    )
+    if not ok:
+        return err_payload
+
+    # ha ok, és kell mozogni -> már amúgy is a final_z-n vagyunk, de hagyjuk konzisztensen:
     if move_to_best:
         current_z = move_to_virtual_z(motion_platform, current_z, final_z)
 
@@ -459,7 +558,7 @@ def autofocus_fine_only(
     move_to_best=True,
     debug=True,
 
-    # ✅ Fine1 "domb" érzékenység
+    # Fine1 "domb" érzékenység
     fine1_peak_prominence_ratio=0.05,
 
     # ✅ Fallback: ha nincs peak fine1-ben, fusson a teljes coarse+fine
@@ -475,7 +574,7 @@ def autofocus_fine_only(
 ):
     debug_buffer = [] if debug else None
 
-    # ✅ start_z feloldás: paraméter > globals
+    # start_z feloldás: paraméter > globals
     if start_z is None:
         start_z = globals.last_best_z
 
@@ -486,8 +585,15 @@ def autofocus_fine_only(
     start_z = clamp(start_z, float(z_min), float(z_max))
 
     # induljunk a start_z-re
-    current_z = 0.0
-    current_z = move_to_virtual_z(motion_platform, current_z, start_z)
+    # induljunk a JELENLEGI valós Z-ről (M114), és ne mozduljunk az elején
+    try:
+        pos = get_toolhead_position(motion_platform, timeout=0.4)
+        current_z = float(pos["z"])
+        print(f"[FINE_ONLY] Start from M114 Z={current_z:.3f} (target start_z={start_z:.3f})")
+    except Exception as e:
+        # ha busy / nem olvasható, akkor fallback (utolsó ismert / 0)
+        current_z = float(getattr(globals, "current_virtual_z", 0.0))
+        print(f"[FINE_ONLY] M114 failed ({e}) -> fallback current_z={current_z:.3f}")
 
     # --- ROI detektálás 1x ---
     first_frame = acquire_frame(timeout_ms=grab_timeout_ms)
@@ -539,7 +645,6 @@ def autofocus_fine_only(
                 "z_rel": float(best1_z),
                 "score": float(best1_s),
             }
-
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
             roi=roi,
@@ -556,7 +661,7 @@ def autofocus_fine_only(
     best1_z, best1_s = max(fine1_points, key=lambda p: p[1])
     print("Fine1 best z:", best1_z)
 
-    # ✅ FINE1 "DOMB" ellenőrzés (z szerint rendezett)
+    # FINE1 "Peak" ellenőrzés (z szerint rendezett)
     fine1_points_sorted = sorted(fine1_points, key=lambda p: p[0])
     fine1_scores_in_order = [s for _, s in fine1_points_sorted]
 
@@ -577,7 +682,7 @@ def autofocus_fine_only(
         globals.last_best_z = float(best1_z)
 
         if fallback_to_coarse:
-            # ✅ fusson a teljes coarse+fine
+            # fusson a teljes coarse+fine
             return autofocus_coarse(
                 motion_platform,
                 z_min=float(z_min),
@@ -643,7 +748,6 @@ def autofocus_fine_only(
                 "z_rel": float(final_z),
                 "score": float(final_s),
             }
-
         current_z, sf = measure_score(
             motion_platform, current_z, zf,
             roi=roi,
@@ -661,6 +765,21 @@ def autofocus_fine_only(
     print("Final_z:", final_z)
 
     globals.last_best_z = float(final_z)
+
+    # ✅ VÉGSO KILÓGÁS CHECK (return előtt)
+    ok, err_payload = final_out_of_frame_check(
+        motion_platform=motion_platform,
+        current_z=current_z,
+        target_z=final_z,
+        frame_scale=frame_scale,
+        grab_timeout_ms=grab_timeout_ms,
+        debug=debug,
+        debug_buffer=debug_buffer,
+        margin_px=2,
+        min_area_ratio=0.001
+    )
+    if not ok:
+        return err_payload
 
     if move_to_best:
         move_to_virtual_z(motion_platform, current_z, final_z)
