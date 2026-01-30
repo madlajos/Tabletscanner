@@ -1352,7 +1352,9 @@ def save_raw_image_endpoint():
                 'objective': metadata.get('objective'),
                 # support both possible keys used in templates
                 'spacer_rings': metadata.get('spacer_rings'),
-                'camera_settings_file': metadata.get('camera_settings_file')
+                'camera_settings_file': metadata.get('camera_settings_file'),
+                'exposure_time': metadata.get('exposure_time'),
+                'gamma': metadata.get('gamma')
             }
             # remove None entries
             meta_fields = {k: v for k, v in meta_fields.items() if v is not None}

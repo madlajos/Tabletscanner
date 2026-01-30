@@ -39,6 +39,7 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
 
   saveLocationValid = false;
   private saveDirectory = '';
+  private currentLight: 'dome' | 'bar' | null = null;
 
   // Thumbnails of recently saved images
   savedImages: SavedImage[] = [];
@@ -78,6 +79,14 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
     } else {
       this.saveDirectory = (this.sharedService.getSaveDirectory() || '').trim();
       this.validateSaveDirectory();
+    }
+
+    // Subscribe to active light changes
+    const lightSettings$ = (this.sharedService as any).lightSettings$;
+    if (lightSettings$?.subscribe) {
+      lightSettings$.subscribe((light: 'dome' | 'bar' | null) => {
+        this.currentLight = light;
+      });
     }
   }
 
@@ -220,34 +229,61 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
-    // Fetch current "other_settings" from backend so we can embed metadata
+    // Fetch current "other_settings" and camera settings from backend so we can embed metadata
     this.http.get<{ other_settings: any }>(`${BASE_URL}/get-other-settings?category=other_settings`)
       .subscribe({
         next: (resp) => {
           const metadata = resp?.other_settings || {};
 
-          this.http.post<{
-            message?: string;
-            path?: string;
-            error?: string;
-          }>(
-            `${BASE_URL}/save_raw_image`,
-            { target_folder: targetDir, metadata }
-          ).subscribe({
-            next: (res) => {
-              if (res?.path) {
-                console.log(`Image saved to: ${res.path}`);
-                this.addImageToGallery(res.path);
-              } else if (res?.message) {
-                console.log(`Save image response: ${res.message}`);
-              } else {
-                console.log('Save image request completed with no path.');
+          // Also fetch camera settings to include in metadata
+          this.http.get<any>(`${BASE_URL}/get-camera-settings`)
+            .subscribe({
+              next: (camResp) => {
+                // Add only the currently active light's camera settings to metadata
+                const activeLight = this.currentLight || 'dome'; // default to dome if not set
+                const category = `camera_params_${activeLight}`;
+                if (camResp?.[category]) {
+                  metadata[`exposure_time`] = camResp[category]['ExposureTime'];
+                  metadata[`gamma`] = camResp[category]['Gamma'];
+                }
+
+                this.http.post<{
+                  message?: string;
+                  path?: string;
+                  error?: string;
+                }>(
+                  `${BASE_URL}/save_raw_image`,
+                  { target_folder: targetDir, metadata }
+                ).subscribe({
+                  next: (res) => {
+                    if (res?.path) {
+                      console.log(`Image saved to: ${res.path}`);
+                      this.addImageToGallery(res.path);
+                    } else if (res?.message) {
+                      console.log(`Save image response: ${res.message}`);
+                    } else {
+                      console.log('Save image request completed with no path.');
+                    }
+                  },
+                  error: (err) => {
+                    console.error('Failed to save image.', err);
+                  }
+                });
+              },
+              error: (err) => {
+                console.warn('Could not fetch camera settings; saving with other_settings only.', err);
+                // Fallback: save with only other_settings
+                this.http.post<{ path?: string; message?: string }>(`${BASE_URL}/save_raw_image`, { target_folder: targetDir, metadata }).subscribe({
+                  next: (res) => {
+                    if (res?.path) {
+                      console.log(`Image saved to: ${res.path}`);
+                      this.addImageToGallery(res.path);
+                    }
+                  },
+                  error: (e) => console.error('Failed to save image.', e)
+                });
               }
-            },
-            error: (err) => {
-              console.error('Failed to save image.', err);
-            }
-          });
+            });
         },
         error: (err) => {
           console.warn('Could not fetch other_settings; saving without metadata.', err);
