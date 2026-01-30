@@ -42,7 +42,7 @@ export class ErrorNotificationService {
   
 
   addError(error: AppError): void {
-    if (error.code && error.code.startsWith("E2")) {
+    if (error.code && (error.code.startsWith("E2") || error.code.startsWith("E13"))) {
       error.popupStyle = 'center';
       error.abortMeasurement = true;
     }

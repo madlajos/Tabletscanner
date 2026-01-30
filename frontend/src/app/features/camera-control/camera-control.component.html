@@ -106,22 +106,6 @@
         </tr>
 
         <tr>
-          <td>Erősítés</td>
-          <td>
-            <input type="number" inputmode="decimal" step="0.001" min="0"
-              [(ngModel)]="cameraSettings.Gain_Dome"
-              (blur)="handleNumericBlur('Gain_Dome', 3)"
-              [disabled]="!isConnected || measurementActive">
-          </td>
-          <td>
-            <input type="number" inputmode="decimal" step="0.001" min="0"
-              [(ngModel)]="cameraSettings.Gain_Bar"
-              (blur)="handleNumericBlur('Gain_Bar', 3)"
-              [disabled]="!isConnected || measurementActive">
-          </td>
-        </tr>
-
-        <tr>
           <td>Gamma</td>
           <td>
             <input type="number" inputmode="decimal" step="0.0001" min="0"

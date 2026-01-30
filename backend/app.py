@@ -6,7 +6,8 @@ import time
 import globals
 from pypylon import pylon
 from cameracontrol import (apply_camera_settings, 
-                           validate_and_set_camera_param, get_camera_properties, stream_video)
+                           validate_and_set_camera_param, get_camera_properties, stream_video,
+                           load_camera_profile)
 import porthandler
 import motioncontrols
 import os
@@ -593,6 +594,56 @@ def update_camera_settings_light():
     except Exception as e:
         app.logger.exception("Failed to update light-specific camera settings")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/load-camera-profile', methods=['POST'])
+def api_load_camera_profile():
+    """Load a .pfs (Pylon Feature Set) profile onto the camera."""
+    try:
+        data = request.get_json() or {}
+        pfs_path = data.get('path', '').strip()
+        
+        if not pfs_path:
+            return jsonify({
+                'error': 'Nincs megadva kamera profil fájl',
+                'code': 'E1311',
+                'popup': True
+            }), 400
+        
+        # Always persist the profile path, even if the camera is not connected yet.
+        settings_data = get_settings()
+        if 'other_settings' not in settings_data:
+            settings_data['other_settings'] = {}
+        settings_data['other_settings']['camera_settings_file'] = pfs_path
+        save_settings()
+
+        camera = globals.camera
+        if not camera or not camera.IsOpen():
+            return jsonify({
+                'success': True,
+                'path': pfs_path,
+                'applied': False,
+                'reason': 'camera_not_connected'
+            }), 200
+        
+        result = load_camera_profile(camera, pfs_path)
+        
+        if 'error' in result:
+            return jsonify({
+                'error': result['error'],
+                'code': result.get('code', 'E1311'),
+                'popup': True
+            }), 400
+        
+        return jsonify({'success': True, 'path': pfs_path, 'applied': True}), 200
+        
+    except Exception as e:
+        app.logger.exception("Failed to load camera profile")
+        return jsonify({
+            'error': f'Kamera profil betöltése sikertelen: {str(e)}',
+            'code': 'E1311',
+            'popup': True
+        }), 500
     
     
 def _clamp_axis(axis: str, target: float):
@@ -1647,6 +1698,20 @@ def connect_camera_internal():
         globals.camera_properties = camera_properties 
         settings_data = get_settings()
         apply_camera_settings(globals.camera, camera_properties, settings_data)
+        
+        # Load .pfs camera profile if configured
+        pfs_path = settings_data.get('other_settings', {}).get('camera_settings_file', '')
+        if pfs_path and os.path.isfile(pfs_path):
+            try:
+                pfs_result = load_camera_profile(globals.camera, pfs_path)
+                if 'error' in pfs_result:
+                    app.logger.warning(f"Failed to load .pfs profile: {pfs_result['error']}")
+                else:
+                    app.logger.info(f"Camera profile loaded on connect: {pfs_path}")
+            except Exception as pfs_e:
+                app.logger.warning(f"Error loading .pfs profile on connect: {pfs_e}")
+        elif pfs_path:
+            app.logger.warning(f"Configured .pfs file not found: {pfs_path}")
         
     except Exception as e:
         app.logger.warning(f"get_camera_properties failed: {e}")

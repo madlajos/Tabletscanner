@@ -26,6 +26,61 @@ converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
 opencv_display_format = 'BGR8'
 
 
+def load_camera_profile(camera, pfs_path: str) -> dict:
+    """
+    Load a .pfs (Pylon Feature Set) file onto the camera.
+    
+    Args:
+        camera: Basler InstantCamera object (must be open)
+        pfs_path: Path to the .pfs file
+        
+    Returns:
+        dict: {"success": True} or {"error": "message", "code": "E1311"}
+    """
+    if not camera or not camera.IsOpen():
+        return {
+            "error": "Kamera nincs csatlakoztatva",
+            "code": "E1311"
+        }
+    
+    if not pfs_path:
+        return {
+            "error": "Nincs megadva kamera profil fájl",
+            "code": "E1311"
+        }
+    
+    if not os.path.isfile(pfs_path):
+        return {
+            "error": f"Kamera profil fájl nem található: {pfs_path}",
+            "code": "E1311"
+        }
+    
+    try:
+        # Stop grabbing if active (required for some settings)
+        was_grabbing = camera.IsGrabbing()
+        if was_grabbing:
+            camera.StopGrabbing()
+            app.logger.info("Stopped grabbing to load .pfs profile")
+        
+        # Load the .pfs file
+        pylon.FeaturePersistence.Load(pfs_path, camera.GetNodeMap(), True)
+        app.logger.info(f"Camera profile loaded successfully: {pfs_path}")
+        
+        # Restart grabbing if it was active
+        if was_grabbing:
+            camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            app.logger.info("Restarted grabbing after loading .pfs profile")
+        
+        return {"success": True}
+        
+    except Exception as e:
+        app.logger.error(f"Failed to load camera profile {pfs_path}: {e}")
+        return {
+            "error": f"Kamera profil betöltése sikertelen: {str(e)}",
+            "code": "E1311"
+        }
+
+
 def grab_and_convert_frame(camera, timeout_ms=5000):
     """
     Unified frame grab and conversion function.
@@ -154,9 +209,13 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
                 )
 
             except Exception as e:
-                app.logger.error(f"Error in video stream loop: {e}")
+                app.logger.debug(f"Error in video stream loop: {e}")
                 if "Device has been removed" in str(e):
                     break
+                # For temporary issues like camera not grabbing (during settings changes),
+                # just skip this frame and continue
+                if "Camera not grabbing" not in str(e):
+                    app.logger.warning(f"Video stream error: {e}")
                 continue
 
     finally:
@@ -207,9 +266,6 @@ def setup_camera(camera: pylon.InstantCamera, camera_params: dict):
 
         camera.ExposureTime.SetValue(round(camera_params['ExposureTime']))
         app.logger.info(f"Set ExposureTime to {round(camera_params['ExposureTime'])}")
-
-        camera.Gain.SetValue(round(camera_params['Gain']))
-        app.logger.info(f"Set Gain to {round(camera_params['Gain'])}")
 
     except Exception as e:
         app.logger.error(f"Error setting camera parameters: {e}")
@@ -320,13 +376,6 @@ class Handler:
 def get_camera_properties(camera: pylon.InstantCamera) -> dict:
     properties = {}
 
-    if hasattr(camera, 'GainSelector'):
-        try:
-            camera.GainSelector.SetValue("All")
-            app.logger.info("GainSelector set to 'All'")
-        except Exception as e:
-            app.logger.warning(f"Could not set GainSelector to 'All': {e}")
-
     def safe_get(prop_name, accessor):
         try:
             properties[prop_name] = accessor()
@@ -362,12 +411,6 @@ def get_camera_properties(camera: pylon.InstantCamera) -> dict:
         'min': camera.ExposureTime.GetMin(),
         'max': camera.ExposureTime.GetMax(),
         'inc': camera.ExposureTime.GetInc()
-    })
-
-    safe_get('Gain', lambda: {
-        'min': camera.Gain.GetMin(),
-        'max': camera.Gain.GetMax(),
-        'inc': 0.01
     })
 
     if hasattr(camera, 'Gamma'):
@@ -486,8 +529,6 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
         elif param_name == 'FrameRate':
             camera.AcquisitionFrameRateEnable.SetValue(True)
             camera.AcquisitionFrameRate.SetValue(valid_value)
-        elif param_name == 'Gain':
-            camera.Gain.SetValue(valid_value)
         elif param_name == 'Gamma':
             camera.Gamma.SetValue(valid_value)
 

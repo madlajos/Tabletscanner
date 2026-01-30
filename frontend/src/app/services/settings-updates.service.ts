@@ -19,7 +19,6 @@ export interface CameraSettings {
   OffsetX: number;
   OffsetY: number;
   ExposureTime: number;
-  Gain: number;
   Gamma: number;
   FrameRate: number;
   [key: string]: number;
@@ -31,7 +30,6 @@ const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   OffsetX: 0,
   OffsetY: 0,
   ExposureTime: 20000,
-  Gain: 0,
   Gamma: 1,
   FrameRate: 10
 };

@@ -3,6 +3,8 @@
   "E1121": "Oldalsó kamera csatlakozási hiba",
   "E1201": "Asztalvezérlő csatlakozási hiba",
   "E1301": "Vonalkódolvasó csatlakozási hiba",
+  "E1311": "Kamera profil (.pfs) betöltése sikertelen",
+  "E1312": "Beállítás fájl (.tss) betöltése sikertelen",
   "E1401": "Adatbázis csatlakozási hiba",
   "GENERIC": "Váratlan hiba lépett fel"
 }

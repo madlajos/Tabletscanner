@@ -290,6 +290,10 @@ export class CameraControlComponent implements OnInit, OnDestroy {
           this.otherSettings.camera_settings_file = filePath;
           this.applyOtherSetting('camera_settings_file');
           this.invalidatePreset();
+          // Load the profile onto the camera
+          if (this.isConnected) {
+            await this.loadCameraProfile(filePath);
+          }
         }
       } catch (e) {
         console.error('File selection error:', e);
@@ -297,11 +301,15 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     } else {
       // Fallback: (could implement a backend route similar to select-folder)
       this.http.get<{ file: string }>(`${BASE_URL}/select-file`).subscribe({
-        next: resp => {
+        next: async resp => {
           if (resp.file) {
             this.otherSettings.camera_settings_file = resp.file;
             this.applyOtherSetting('camera_settings_file');
             this.invalidatePreset();
+            // Load the profile onto the camera
+            if (this.isConnected) {
+              await this.loadCameraProfile(resp.file);
+            }
           }
         },
         error: err => console.error('File dialog failed:', err)
@@ -524,8 +532,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     const value = this.cameraSettings[setting];
     console.log(`Applying setting ${setting}: ${value}`);
 
-    // Check if this is a light-specific setting (e.g., ExposureTime_Dome, Gain_Bar, Gamma_Dome)
-    const lightMatch = setting.match(/(ExposureTime|Gain|Gamma)_(Dome|Bar)/);
+    // Check if this is a light-specific setting (e.g., ExposureTime_Dome, Gamma_Dome)
+    const lightMatch = setting.match(/(ExposureTime|Gamma)_(Dome|Bar)/);
     
     if (lightMatch) {
       // Light-specific setting
@@ -577,11 +585,10 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   applyLightSpecificSettings(lightSuffix: 'Dome' | 'Bar'): void {
-    // Apply the light-specific settings (e.g., ExposureTime_Dome, Gain_Dome, Gamma_Dome)
+    // Apply the light-specific settings (e.g., ExposureTime_Dome, Gamma_Dome)
     const lightName = lightSuffix.toLowerCase();
     const settings = [
       { key: `ExposureTime_${lightSuffix}`, name: 'ExposureTime' },
-      { key: `Gain_${lightSuffix}`, name: 'Gain' },
       { key: `Gamma_${lightSuffix}`, name: 'Gamma' }
     ];
 
@@ -755,15 +762,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   async saveSettingsPreset(): Promise<void> {
     const payload: any = {
-      version: 1,
-      readonly: true,
-      write_protected: true,
-      saved_at: new Date().toISOString(),
       camera_profile_path: this.otherSettings.camera_settings_file || '',
       exposure_time_dome: Number(this.cameraSettings.ExposureTime_Dome),
       exposure_time_bar: Number(this.cameraSettings.ExposureTime_Bar),
-      gain_dome: Number(this.cameraSettings.Gain_Dome),
-      gain_bar: Number(this.cameraSettings.Gain_Bar),
       gamma_dome: Number(this.cameraSettings.Gamma_Dome),
       gamma_bar: Number(this.cameraSettings.Gamma_Bar)
     };
@@ -771,7 +772,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // Basic validation
     const keysToCheck = [
       'exposure_time_dome', 'exposure_time_bar',
-      'gain_dome', 'gain_bar',
       'gamma_dome', 'gamma_bar'
     ];
     const invalid = keysToCheck.find(k => !isFinite(payload[k]));
@@ -800,6 +800,11 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
+
+        const pickedName = this.stripExtension(handle?.name || suggestedName);
+        this.settingsPresetName = pickedName;
+        this.otherSettings.settings_preset_name = pickedName;
+        this.applyOtherSetting('settings_preset_name');
         return;
       }
     } catch (err) {
@@ -828,8 +833,13 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       const text = await file.text();
       const preset = JSON.parse(text);
       await this.applyPresetData(preset, file.name);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load preset:', err);
+      this.errorNotificationService.addError({
+        code: 'E1312',
+        message: '',
+        popupStyle: 'center'
+      });
     } finally {
       input.value = '';
     }
@@ -838,7 +848,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   async applyPresetData(preset: any, fileName?: string): Promise<void> {
     const requiredKeys = [
       'exposure_time_dome', 'exposure_time_bar',
-      'gain_dome', 'gain_bar',
       'gamma_dome', 'gamma_bar',
       'camera_profile_path'
     ];
@@ -851,7 +860,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
     const numericKeys = [
       'exposure_time_dome', 'exposure_time_bar',
-      'gain_dome', 'gain_bar',
       'gamma_dome', 'gamma_bar'
     ];
     for (const nk of numericKeys) {
@@ -873,8 +881,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // Apply values
     this.cameraSettings.ExposureTime_Dome = Number(preset.exposure_time_dome);
     this.cameraSettings.ExposureTime_Bar = Number(preset.exposure_time_bar);
-    this.cameraSettings.Gain_Dome = Number(preset.gain_dome);
-    this.cameraSettings.Gain_Bar = Number(preset.gain_bar);
     this.cameraSettings.Gamma_Dome = Number(preset.gamma_dome);
     this.cameraSettings.Gamma_Bar = Number(preset.gamma_bar);
     this.otherSettings.camera_settings_file = profilePath;
@@ -886,11 +892,39 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // Persist to backend
     const keysToApply = [
       'ExposureTime_Dome', 'ExposureTime_Bar',
-      'Gain_Dome', 'Gain_Bar',
       'Gamma_Dome', 'Gamma_Bar'
     ];
     keysToApply.forEach(k => this.applySetting(k));
     this.applyOtherSetting('camera_settings_file');
+
+    // Load .pfs profile onto camera
+    await this.loadCameraProfile(profilePath);
+  }
+
+  async loadCameraProfile(profilePath: string): Promise<void> {
+    if (!profilePath) return;
+    if (!this.isConnected) {
+      return;
+    }
+    try {
+      const resp = await this.http.post<any>(`${BASE_URL}/load-camera-profile`, { path: profilePath }).toPromise();
+      if (resp?.error) {
+        this.errorNotificationService.addError({
+          code: resp.code || 'E1311',
+          message: '',
+          popupStyle: 'center'
+        });
+      } else {
+        console.log('Camera profile loaded successfully:', profilePath);
+      }
+    } catch (err: any) {
+      console.error('Failed to load camera profile:', err);
+      this.errorNotificationService.addError({
+        code: 'E1311',
+        message: '',
+        popupStyle: 'center'
+      });
+    }
   }
 
   verifyFileExists(path: string): Promise<boolean> {
