@@ -1484,6 +1484,25 @@ def open_folder():
 
     return jsonify({"success": True}), 200
 
+
+@app.route('/api/delete-image', methods=['POST'])
+def delete_image():
+    data = request.get_json() or {}
+    path = data.get('path')
+
+    if not path:
+        return jsonify({"error": "No path specified"}), 400
+
+    if not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        os.remove(path)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"success": True}), 200
+
 @app.route('/api/get-other-settings', methods=['GET'])
 def get_other_settings():
     category = request.args.get('category')

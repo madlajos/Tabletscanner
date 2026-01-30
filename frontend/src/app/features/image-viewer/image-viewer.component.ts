@@ -262,17 +262,39 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
 
 
   openImage(img: SavedImage): void {
-    this.http.post(
-      `${BASE_URL}/open_image`,
-      { path: img.path }
-    ).subscribe({
-      next: () => {
-        console.log('Opened image:', img.path);
-      },
-      error: (err) => {
-        console.error('Failed to open image.', err);
+    this.verifyFileExists(img.path).then((exists: boolean) => {
+      if (!exists) {
+        console.warn('Image no longer exists. Removing from gallery:', img.path);
+        this.removeImageFromGallery(img.path);
+        return;
       }
+
+      this.http.post(
+        `${BASE_URL}/open_image`,
+        { path: img.path }
+      ).subscribe({
+        next: () => {
+          console.log('Opened image:', img.path);
+        },
+        error: (err) => {
+          console.error('Failed to open image.', err);
+        }
+      });
     });
+  }
+
+  private removeImageFromGallery(imagePath: string): void {
+    this.savedImages = this.savedImages.filter(img => img.path !== imagePath);
+    if (this.contextMenuImage?.path === imagePath) {
+      this.hideContextMenu();
+    }
+  }
+
+  private verifyFileExists(path: string): Promise<boolean> {
+    return this.http.post<{ exists: boolean }>(`${BASE_URL}/check-file-exists`, { path })
+      .toPromise()
+      .then(res => !!res?.exists)
+      .catch(() => false);
   }
 
   onImageContextMenu(event: MouseEvent, img: SavedImage): void {
@@ -280,7 +302,7 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
     
     // Estimated menu dimensions
     const menuWidth = 180;
-    const menuHeight = 80;
+    const menuHeight = 120;
     
     // Get viewport dimensions
     const viewportWidth = window.innerWidth;
@@ -304,10 +326,18 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
     menuX = Math.max(5, menuX);
     menuY = Math.max(5, menuY);
     
-    this.contextMenuVisible = true;
-    this.contextMenuX = menuX;
-    this.contextMenuY = menuY;
-    this.contextMenuImage = img;
+    this.verifyFileExists(img.path).then((exists: boolean) => {
+      if (!exists) {
+        console.warn('Image no longer exists. Removing from gallery:', img.path);
+        this.removeImageFromGallery(img.path);
+        return;
+      }
+
+      this.contextMenuVisible = true;
+      this.contextMenuX = menuX;
+      this.contextMenuY = menuY;
+      this.contextMenuImage = img;
+    });
   }
 
   hideContextMenu(): void {
@@ -324,18 +354,62 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
 
   contextMenuOpenFolder(): void {
     if (this.contextMenuImage) {
-      this.http.post(
-        `${BASE_URL}/open_folder`,
-        { path: this.contextMenuImage.path }
-      ).subscribe({
-        next: () => {
-          console.log('Opened folder for:', this.contextMenuImage?.path);
-        },
-        error: (err) => {
-          console.error('Failed to open folder.', err);
+      const path = this.contextMenuImage.path;
+      this.verifyFileExists(path).then((exists: boolean) => {
+        if (!exists) {
+          console.warn('Image no longer exists. Removing from gallery:', path);
+          this.removeImageFromGallery(path);
+          return;
         }
+
+        this.http.post(
+          `${BASE_URL}/open_folder`,
+          { path }
+        ).subscribe({
+          next: () => {
+            console.log('Opened folder for:', path);
+          },
+          error: (err) => {
+            console.error('Failed to open folder.', err);
+          }
+        });
       });
     }
+    this.hideContextMenu();
+  }
+
+  contextMenuDelete(): void {
+    const img = this.contextMenuImage;
+    if (!img) {
+      this.hideContextMenu();
+      return;
+    }
+
+    const path = img.path;
+    const confirmed = window.confirm('Biztosan törli a képet?');
+    if (!confirmed) {
+      this.hideContextMenu();
+      return;
+    }
+
+    this.verifyFileExists(path).then((exists: boolean) => {
+      if (!exists) {
+        console.warn('Image no longer exists. Removing from gallery:', path);
+        this.removeImageFromGallery(path);
+        return;
+      }
+
+      this.http.post(`${BASE_URL}/delete-image`, { path }).subscribe({
+        next: () => {
+          console.log('Deleted image:', path);
+          this.removeImageFromGallery(path);
+        },
+        error: (err) => {
+          console.error('Failed to delete image.', err);
+        }
+      });
+    });
+
     this.hideContextMenu();
   }
 

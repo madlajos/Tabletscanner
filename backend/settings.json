@@ -10,12 +10,12 @@
         "Gamma": 1.0
     },
     "other_settings": {
-        "objective": "50x",
-        "save_location": "",
-        "background_subtraction": false,
+        "objective": "100x",
+        "save_location": "D:/",
+        "background_subtraction": true,
         "save_settings": false,
         "camera_settings_file": "C:/Users/madla/OneDrive/Desktop/vilagos.pfs",
-        "spacer_rings": "1",
+        "spacer_rings": "0",
         "settings_preset_name": "test3"
     },
     "auto_measurement_settings": {
