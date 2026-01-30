@@ -697,9 +697,27 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       this.successMessage = `Mérés leállítva. ${this.completedTablets.size} tabletta mérése kész.`;
     } else if (success) {
       this.successMessage = `Mérés sikeresen befejezve. ${this.completedTablets.size} tabletta mérése kész.`;
+      this.scheduleBedMoveToZero();
     }
     // Error message is set in processTabletQueue if there was an error
     
     this.stopRequested = false;
+  }
+
+  private scheduleBedMoveToZero(): void {
+    if (!this.motionConnected) {
+      return;
+    }
+
+    setTimeout(() => {
+      if (!this.motionConnected) {
+        return;
+      }
+
+      this.http.post(`${BASE_URL}/move_toolhead_absolute`, { z: 0 }).subscribe({
+        next: () => console.log('Auto-measurement complete: moved bed to Z=0.'),
+        error: (err) => console.warn('Failed to move bed to Z=0 after auto-measurement:', err)
+      });
+    }, 2000);
   }
 }
