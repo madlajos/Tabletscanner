@@ -109,6 +109,8 @@ export class SharedService {
   isCameraStreaming$ = this.cameraStreamStatus.asObservable().pipe();
 
   private saveDirectory: string = '';
+  private saveDirectorySubject = new BehaviorSubject<string>('');
+  saveDirectory$ = this.saveDirectorySubject.asObservable();
 
   constructor(private http: HttpClient) {}
 
@@ -120,6 +122,7 @@ export class SharedService {
 
   setSaveDirectory(directory: string): void {
     this.saveDirectory = directory;
+    this.saveDirectorySubject.next(directory || '');
     console.log(`Save directory set to: ${directory}`);
   }
 

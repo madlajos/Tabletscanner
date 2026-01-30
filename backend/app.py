@@ -1546,6 +1546,21 @@ def check_file_exists():
     except Exception as e:
         app.logger.exception("check_file_exists failed")
         return jsonify({"exists": False, "error": str(e)}), 500
+
+
+@app.route('/api/check-folder-exists', methods=['POST'])
+def check_folder_exists():
+    try:
+        data = request.get_json(silent=True) or {}
+        path = data.get('path')
+        if not path:
+            return jsonify({"exists": False, "error": "No path provided"}), 400
+
+        exists = os.path.isdir(path)
+        return jsonify({"exists": bool(exists)})
+    except Exception as e:
+        app.logger.exception("check_folder_exists failed")
+        return jsonify({"exists": False, "error": str(e)}), 500
     
 
 @app.route('/api/health', methods=['GET'])

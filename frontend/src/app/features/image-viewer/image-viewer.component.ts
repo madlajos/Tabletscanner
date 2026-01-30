@@ -3,7 +3,8 @@ import {
   ViewChild,
   ElementRef,
   AfterViewInit,
-  OnDestroy
+  OnDestroy,
+  OnInit
 } from '@angular/core';
 import {
   CommonModule,
@@ -27,13 +28,17 @@ interface SavedImage {
   styleUrls: ['./image-viewer.component.css'],
   imports: [CommonModule, NgClass, MatIconModule]
 })
-export class ImageViewerComponent implements AfterViewInit, OnDestroy {
+export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('videoContainer', { static: false })
   videoContainer!: ElementRef<HTMLDivElement>;
 
   isStreaming = false;
   private streamSub?: Subscription;
   private savedImageSub?: Subscription;
+  private saveDirSub?: Subscription;
+
+  saveLocationValid = false;
+  private saveDirectory = '';
 
   // Thumbnails of recently saved images
   savedImages: SavedImage[] = [];
@@ -62,6 +67,19 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
     public http: HttpClient,
     public sharedService: SharedService
   ) { }
+
+  ngOnInit(): void {
+    const saveDir$ = (this.sharedService as any).saveDirectory$;
+    if (saveDir$?.subscribe) {
+      this.saveDirSub = saveDir$.subscribe((dir: string) => {
+        this.saveDirectory = (dir || '').trim();
+        this.validateSaveDirectory();
+      });
+    } else {
+      this.saveDirectory = (this.sharedService.getSaveDirectory() || '').trim();
+      this.validateSaveDirectory();
+    }
+  }
 
   ngAfterViewInit(): void {
     // Hide context menu on any click outside
@@ -126,6 +144,25 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.streamSub?.unsubscribe();
     this.savedImageSub?.unsubscribe();
+    this.saveDirSub?.unsubscribe();
+  }
+
+  private validateSaveDirectory(): void {
+    if (!this.saveDirectory) {
+      this.saveLocationValid = false;
+      return;
+    }
+
+    this.http.post<{ exists: boolean }>(`${BASE_URL}/check-folder-exists`, {
+      path: this.saveDirectory
+    }).subscribe({
+      next: (res) => {
+        this.saveLocationValid = !!res?.exists;
+      },
+      error: () => {
+        this.saveLocationValid = false;
+      }
+    });
   }
 
   updateStreamDisplay(): void {
@@ -160,6 +197,11 @@ export class ImageViewerComponent implements AfterViewInit, OnDestroy {
 
   captureImage(): void {
     if (this.isCaptureCooldown) {
+      return;
+    }
+
+    if (!this.saveLocationValid) {
+      console.warn('Save location is invalid. Cannot capture image.');
       return;
     }
 

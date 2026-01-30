@@ -16,8 +16,8 @@
          [class.zoomed]="isZoomed()" 
          [style.cursor]="getCursorStyle()"></div>
 
-    <button class="capture-button" (click)="captureImage()" [disabled]="!sharedService.getCameraStreamStatus() || isCaptureCooldown"
-      title="Save Snapshot">
+    <button class="capture-button" (click)="captureImage()" [disabled]="!sharedService.getCameraStreamStatus() || isCaptureCooldown || !saveLocationValid"
+      title="Felvétel készítése">
       <mat-icon>photo_camera</mat-icon>
     </button>
   </div>
