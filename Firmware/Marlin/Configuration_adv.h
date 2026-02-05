@@ -34,6 +34,8 @@
  */
 #define CONFIGURATION_ADV_H_VERSION 02010300
 
+#define UNPROTECT_PINS
+
 // @section develop
 
 /**
@@ -586,8 +588,8 @@
   //#define CONTROLLER_FAN_USE_Z_ONLY       // With this option only the Z axis is considered
   //#define CONTROLLER_FAN_IGNORE_Z         // Ignore Z stepper. Useful when stepper timeout is disabled.
   #define CONTROLLERFAN_SPEED_MIN         0 // (0-255) Minimum speed. (If set below this value the fan is turned off.)
-  #define CONTROLLERFAN_SPEED_ACTIVE    255 // (0-255) Active speed, used when any motor is enabled
-  #define CONTROLLERFAN_SPEED_IDLE        0 // (0-255) Idle speed, used when motors are disabled
+  #define CONTROLLERFAN_SPEED_ACTIVE    200 // (0-255) Active speed, used when any motor is enabled
+  #define CONTROLLERFAN_SPEED_IDLE      200 // (0-255) Idle speed, used when motors are disabled
   #define CONTROLLERFAN_IDLE_TIME        60 // (seconds) Extra time to keep the fan running after disabling motors
 
   // Use TEMP_SENSOR_BOARD as a trigger for enabling the controller fan
@@ -660,7 +662,7 @@
  */
 #define FAST_PWM_FAN    // 1. Enable Fast PWM (Hardware Timers)
 #if ENABLED(FAST_PWM_FAN)
-  #define FAST_PWM_FAN_FREQUENCY 500  // 2. Set frequency to 500Hz
+  #define FAST_PWM_FAN_FREQUENCY 1000  // 2. Set frequency to 1000Hz
   //#define USE_OCR2A_AS_TOP
   #ifndef FAST_PWM_FAN_FREQUENCY
     #ifdef __AVR__
@@ -678,8 +680,7 @@
  * We want to invert ONLY FAN0 (Lamp 1), so we use a value of 1.
  */
 
-#define STARTUP_COMMANDS "M106 P0 S255"
-
+#define STARTUP_COMMANDS "M106 P0 S255\nM42 I1 P31 S255"
 /**
  * Assign more PWM fans for part cooling, synchronized with Fan 0
  */

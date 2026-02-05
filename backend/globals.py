@@ -23,5 +23,5 @@ autofocus_abort = False  # Flag to abort autofocus if measurement is stopped
 motion_limits = {
     "x": (0.0, 175.0),
     "y": (0.0, 175.0),
-    "z": (0.0, 25.0),
+    "z": (0.0, 30.0),
 }

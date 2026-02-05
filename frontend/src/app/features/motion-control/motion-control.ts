@@ -32,7 +32,7 @@ export class MotionControl implements OnInit, OnDestroy {
   yMin: number = 0;
   yMax: number = 175;
   zMin: number = 0;
-  zMax: number = 25;
+  zMax: number = 30;
 
   private originalOnFocus = { x: undefined as any, y: undefined as any, z: undefined as any };
   private skipNextBlurRevert = false;
