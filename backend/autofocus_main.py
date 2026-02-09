@@ -107,7 +107,7 @@ def safe_float_str(x, nd=3) -> str:
     return f"{float(x):.{nd}f}".replace(".", "p").replace("-", "m")
 
 def wait_motion_done(motion_platform):
-    porthandler.write(motion_platform, "M400")
+    porthandler.write_and_wait_motion(motion_platform, "M400", timeout=30.0)
 
 def clamp(v, vmin, vmax):
     return max(vmin, min(vmax, v))
@@ -185,7 +185,7 @@ def has_peak_shape(scores, prominence_ratio=0.05, eps=1e-12) -> bool:
 # ---------------------------------------------------------------------
 # Camera + motion
 # ---------------------------------------------------------------------
-def acquire_frame(timeout_ms=2000):
+def acquire_frame(timeout_ms=2000, retries=2):
     from pypylon import pylon
 
     cam = globals.camera
@@ -193,24 +193,42 @@ def acquire_frame(timeout_ms=2000):
         raise RuntimeError("Camera not ready")
 
     lock = globals.grab_lock
+    attempts = max(1, int(retries) + 1)
+    last_error = None
 
     with lock:
         if not cam.IsGrabbing():
-            raise RuntimeError("Camera is not grabbing. Stream must be running.")
+            try:
+                cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            except Exception as e:
+                raise RuntimeError(f"Camera is not grabbing and could not be started: {e}")
 
-        grab_result = cam.RetrieveResult(int(timeout_ms), pylon.TimeoutHandling_ThrowException)
-        try:
-            if not grab_result.GrabSucceeded():
-                raise RuntimeError("Grab failed")
+        for attempt in range(attempts):
+            grab_result = None
+            try:
+                grab_result = cam.RetrieveResult(int(timeout_ms), pylon.TimeoutHandling_ThrowException)
+                if not grab_result.GrabSucceeded():
+                    last_error = RuntimeError("Grab failed")
+                    continue
 
-            # Convert -> BGR8 for OpenCV
-            frame_bgr = converter.Convert(grab_result).GetArray()
-            frame_bgr = frame_bgr.copy()
+                # Convert -> BGR8 for OpenCV
+                frame_bgr = converter.Convert(grab_result).GetArray()
+                return frame_bgr.copy()
+            except Exception as e:
+                last_error = e
+            finally:
+                try:
+                    if grab_result is not None:
+                        grab_result.Release()
+                except Exception:
+                    pass
 
-        finally:
-            grab_result.Release()
+            if attempt < attempts - 1:
+                time.sleep(0.05)
 
-    return frame_bgr
+    if last_error:
+        raise RuntimeError(str(last_error))
+    raise RuntimeError("Grab failed")
 
 
 def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=1):
@@ -579,7 +597,33 @@ def autofocus_fine_only(
         start_z = globals.last_best_z
 
     if start_z is None:
-        raise RuntimeError("autofocus_fine_only: nincs start_z és globals.last_best_z is None")
+        # No previous best Z available — fall back to full coarse+fine autofocus
+        print("[FINE_ONLY] No start_z and globals.last_best_z is None -> falling back to autofocus_coarse")
+        return autofocus_coarse(
+            motion_platform,
+            z_min=float(z_min),
+            z_max=float(z_max),
+            frame_scale=float(frame_scale),
+            edge_ring_width=int(edge_ring_width),
+
+            coarse_step=float(coarse_step),
+            drop_ratio=float(drop_ratio),
+            bad_needed=int(bad_needed),
+            min_points=int(min_points),
+
+            fine1_offsets=fine1_offsets,
+            fine2_step=float(fine2_step),
+            fine2_halfspan=float(fine2_halfspan),
+
+            n_frames=int(n_frames),
+            roi_square_scale=float(roi_square_scale),
+            grab_timeout_ms=int(grab_timeout_ms),
+
+            move_to_best=bool(move_to_best),
+            debug=bool(debug),
+
+            coarse_peak_prominence_ratio=float(coarse_peak_prominence_ratio),
+        )
 
     start_z = float(start_z)
     start_z = clamp(start_z, float(z_min), float(z_max))

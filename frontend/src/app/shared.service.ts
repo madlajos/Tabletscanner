@@ -77,6 +77,11 @@ export class SharedService {
 
   private lightSettingsSubject = new BehaviorSubject<'dome' | 'bar' | null>(null);
   lightSettings$ = this.lightSettingsSubject.asObservable();
+  
+  // Track light state (on/off)
+  private lightsOffSubject = new Subject<void>();
+  lightsOff$ = this.lightsOffSubject.asObservable();
+  
   private motionHomingStatus = new BehaviorSubject<boolean>(false);
   motionHomingStatus$ = this.motionHomingStatus.asObservable();
   private motionPositionSubject = new BehaviorSubject<{ x: number | null; y: number | null; z: number | null } | null>(null);
@@ -174,6 +179,10 @@ export class SharedService {
 
   applyCameraSettingsForLight(light: 'dome' | 'bar'): void {
     this.lightSettingsSubject.next(light);
+  }
+
+  emitLightsOff(): void {
+    this.lightsOffSubject.next();
   }
   
   startStream(): void {

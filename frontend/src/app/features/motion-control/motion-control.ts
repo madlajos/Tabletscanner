@@ -44,6 +44,7 @@ export class MotionControl implements OnInit, OnDestroy {
   reconnectionPolling: Subscription | undefined;
   private measurementActiveSub?: Subscription;
   private motionPositionSub?: Subscription;
+  private lightsOffSub?: Subscription;
   isConnected: boolean = false;
 
   // Flag to lock controls during auto-measurement
@@ -100,6 +101,13 @@ export class MotionControl implements OnInit, OnDestroy {
         this.isHoming = isHoming;
       }
     );
+
+    // Subscribe to lights-off event (when auto-measurement is stopped)
+    this.lightsOffSub = this.sharedService.lightsOff$.subscribe(() => {
+      console.log('Lights off event received; updating UI state');
+      this.ringLightOn = false;
+      this.barLightOn = false;
+    });
   }
 
   ngOnDestroy(): void {
@@ -108,6 +116,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.stopPositionPolling();
     this.measurementActiveSub?.unsubscribe();
     this.motionPositionSub?.unsubscribe();
+    this.lightsOffSub?.unsubscribe();
   }
 
   // Check if controls should be disabled

@@ -30,6 +30,7 @@ import multiprocessing
 from cameracontrol import converter  # if not already imported
 import autofocus_main
 import traceback
+import bgr_main
 
 
 
@@ -871,28 +872,22 @@ def _turn_on_dome_light():
     """Turn on dome light (M106 P0 S0) and turn off bar light (M106 P1 S0)."""
     ser = globals.motion_platform
     if ser and ser.is_open:
-        porthandler.write(ser, "M106 P1 S0")   # bar off
-        time.sleep(0.05)
-        porthandler.write(ser, "M106 P0 S0")   # dome on (S0 = on for this inverted setup)
-        time.sleep(0.05)
+        porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)   # bar off
+        porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)   # dome on (S0 = on for this inverted setup)
 
 def _turn_on_bar_light():
     """Turn on bar light (M106 P1 S255) and turn off dome light (M106 P0 S255)."""
     ser = globals.motion_platform
     if ser and ser.is_open:
-        porthandler.write(ser, "M106 P0 S255")  # dome off
-        time.sleep(0.05)
-        porthandler.write(ser, "M106 P1 S255")  # bar on
-        time.sleep(0.05)
+        porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
+        porthandler.write_and_wait(ser, "M106 P1 S255", timeout=2.0)  # bar on
 
 def _turn_off_all_lights():
     """Turn off both lights."""
     ser = globals.motion_platform
     if ser and ser.is_open:
-        porthandler.write(ser, "M106 P0 S255")  # dome off
-        time.sleep(0.05)
-        porthandler.write(ser, "M106 P1 S0")    # bar off
-        time.sleep(0.05)
+        porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
+        porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)    # bar off
 
 def _apply_camera_settings_for_light(light: str):
     """Apply camera settings for specific light (dome or bar)."""
@@ -921,8 +916,14 @@ def _apply_camera_settings_for_light(light: str):
         except Exception as e:
             app.logger.warning(f"Could not apply {setting_name} for {light}: {e}")
 
-def _capture_and_save_image(target_folder: str, filename: str) -> str:
-    """Capture image from camera and save to target folder. Returns saved file path."""
+def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False) -> list:
+    """Capture image from camera and save to target folder.
+    
+    If background_subtraction is True, also saves a masked version.
+    
+    Returns:
+        list of saved file paths (original, and optionally masked)
+    """
     # Grab frame from camera
     frame_result = grab_camera_image()
     
@@ -946,41 +947,49 @@ def _capture_and_save_image(target_folder: str, filename: str) -> str:
     pil_img = Image.fromarray(img_rgb)
     pil_img.save(full_path, format='JPEG', quality=95)
     
-    return full_path
+    saved_paths = [full_path]
+    
+    # Background subtraction: save masked version alongside original
+    if background_subtraction:
+        try:
+            masked, hull, mask = bgr_main.largest_object_hull_otsu_mask(img_cv)
+            if masked is not None:
+                masked_path = os.path.join(target_folder, f"{filename}_masked.jpg")
+                bgr_main.save_bgr_image_keep_exif(
+                    image_bgr=masked,
+                    src_image_path=full_path,
+                    dst_image_path=masked_path
+                )
+                saved_paths.append(masked_path)
+                app.logger.info(f"Background-subtracted image saved: {masked_path}")
+            else:
+                app.logger.warning(f"Background subtraction found no object in {filename}")
+        except Exception as e:
+            app.logger.warning(f"Background subtraction failed for {filename}: {e}")
+    
+    return saved_paths
 
 
 def _wait_for_motion_complete(ser, timeout=30.0):
-    """Wait for motion to complete using M400 command."""
+    """Wait for motion to complete using M400 command via safe write_and_wait.
+    
+    M400 tells the board to finish all buffered moves before responding 'ok'.
+    This guarantees the toolhead has physically stopped.
+    
+    Args:
+        ser: serial port object
+        timeout: max seconds to wait (default 30s covers long moves)
+    
+    Returns:
+        True if motion completed, False on timeout.
+    
+    Raises:
+        OSError / PermissionError: if USB is disconnected (caller should handle)
+    """
     try:
-        with porthandler.motion_lock:
-            # Clear input buffer first
-            try:
-                if hasattr(ser, "reset_input_buffer"):
-                    ser.reset_input_buffer()
-                else:
-                    iw = getattr(ser, "in_waiting", 0) or 0
-                    if iw:
-                        ser.read(iw)
-            except Exception:
-                pass
-            
-            ser.write(b"M400\n")
-            ser.flush()
-            
-            # Wait for "ok" response
-            deadline = time.monotonic() + timeout
-            buf = bytearray()
-            while time.monotonic() < deadline:
-                iw = getattr(ser, 'in_waiting', 0) or 0
-                if iw:
-                    chunk = ser.read(min(iw, 256))
-                    if chunk:
-                        buf += chunk
-                        if b"ok" in buf.lower():
-                            return True
-                else:
-                    time.sleep(0.01)
-        return False
+        return porthandler.write_and_wait_motion(ser, "M400", timeout=timeout)
+    except (OSError, PermissionError):
+        raise  # let caller handle USB disconnect
     except Exception as e:
         app.logger.warning(f"_wait_for_motion_complete error: {e}")
         return False
@@ -1013,16 +1022,17 @@ def _check_devices_connected():
     return motion_platform, camera, None, None
 
 
-def _capture_image_with_light(light_type: str, measurement_folder: str, measurement_name: str, tablet_index: int) -> str:
+def _capture_image_with_light(light_type: str, measurement_folder: str, measurement_name: str, tablet_index: int, background_subtraction: bool = False) -> list:
     """
     Turn on specified light, apply camera settings, capture and save image.
-    Returns the saved file path.
+    Returns list of saved file paths (original + masked if background_subtraction is on).
     
     Args:
         light_type: 'dome' or 'bar'
         measurement_folder: Directory to save image
         measurement_name: Name prefix for the image
         tablet_index: Tablet number for filename
+        background_subtraction: If True, also save background-subtracted image
     """
     if light_type == 'dome':
         _turn_on_dome_light()
@@ -1035,7 +1045,7 @@ def _capture_image_with_light(light_type: str, measurement_folder: str, measurem
     date_str = datetime.now().strftime("%Y%m%d")
     filename = f"{date_str}_{measurement_name}_{light_type}_{tablet_index:03d}"
     
-    return _capture_and_save_image(measurement_folder, filename)
+    return _capture_and_save_image(measurement_folder, filename, background_subtraction=background_subtraction)
 
 
 @app.route('/api/auto_measurement/step', methods=['POST'])
@@ -1043,16 +1053,27 @@ def auto_measurement_step():
     """
     Process a single tablet in the auto-measurement sequence.
     This endpoint is called repeatedly by the frontend for each tablet.
+    
+    Sequence:
+      1. Validate parameters and check devices
+      2. Move to tablet X/Y → M400 wait → settle
+      3. Autofocus (if enabled): coarse for first tablet, fine for subsequent
+         → M400 wait → settle
+      4. Capture images with selected lights (dome / bar)
+      5. Turn off lights, return saved image paths
+    
+    Every serial command waits for board acknowledgement ('ok') before
+    proceeding to ensure the BTT SKR Mini E3 is never overwhelmed.
     """
     try:
-        # Reset abort flag for each new tablet (cleared on first tablet or if flag was set from previous stop)
+        # Reset abort flag for each new tablet
         if globals.autofocus_abort:
             globals.autofocus_abort = False
             app.logger.info("Autofocus abort flag cleared for new tablet")
         
         data = request.get_json() or {}
         
-        # Required parameters
+        # ---------- Parse & validate parameters ----------
         tablet_index = data.get('tablet_index')
         x_pos = data.get('x')
         y_pos = data.get('y')
@@ -1064,6 +1085,10 @@ def auto_measurement_step():
         lamp_top = bool(data.get('lamp_top', False))
         lamp_side = bool(data.get('lamp_side', False))
         is_first_tablet = bool(data.get('is_first_tablet', False))
+        
+        # Read background subtraction setting from settings.json
+        settings_data = get_settings()
+        background_subtraction = bool(settings_data.get('other_settings', {}).get('background_subtraction', False))
         
         if tablet_index is None or x_pos is None or y_pos is None:
             return jsonify({
@@ -1083,7 +1108,7 @@ def auto_measurement_step():
                 'message': 'At least one light must be selected'
             }), 400
         
-        # Check devices
+        # ---------- Check devices ----------
         motion_platform, camera, err_response, err_status = _check_devices_connected()
         if err_response:
             return err_response, err_status
@@ -1099,10 +1124,27 @@ def auto_measurement_step():
         
         saved_images = []
         
-        # 1. Move to tablet position (X and Y only, Z is controlled by autofocus or manual setting)
+        # =====================================================
+        # STEP 1: Move to tablet position
+        # =====================================================
+        # If autofocus is disabled but it's the first tablet, we still move to z_pos (will autofocus)
+        # If autofocus is disabled and not first tablet, we only move XY (keep Z constant)
+        if autofocus_enabled or is_first_tablet:
+            # Move X, Y, and Z
+            move_x = float(x_pos)
+            move_y = float(y_pos)
+            move_z = float(z_pos)
+        else:
+            # Move only X and Y; leave Z unchanged
+            move_x = float(x_pos)
+            move_y = float(y_pos)
+            move_z = None
+        
+        app.logger.info(f"Tablet {tablet_index}: Moving to X={move_x}, Y={move_y}, Z={move_z if move_z else 'unchanged'}")
         resp, status = _move_toolhead_absolute_impl(
-            x_pos=float(x_pos),
-            y_pos=float(y_pos)
+            x_pos=move_x,
+            y_pos=move_y,
+            z_pos=move_z
         )
         if status != 200:
             _turn_off_all_lights()
@@ -1112,40 +1154,85 @@ def auto_measurement_step():
                 'move_response': resp
             }), status
         
-        # 2. Wait for motion to complete
-        _wait_for_motion_complete(motion_platform, timeout=30.0)
-        time.sleep(0.3)  # Additional settle time
+        # =====================================================
+        # STEP 2: Wait for motion platform to CONFIRM completion
+        # =====================================================
+        try:
+            motion_ok = _wait_for_motion_complete(motion_platform, timeout=30.0)
+            if not motion_ok:
+                app.logger.warning(f"Tablet {tablet_index}: M400 timed out after move, proceeding cautiously")
+        except (OSError, PermissionError) as e:
+            return _handle_motion_usb_disconnect(motion_platform, f"move to tablet {tablet_index}")
         
-        # 3. If autofocus is enabled, run it
-        if autofocus_enabled:
+        # Settle time: wait for vibrations to stop so camera gets a still image
+        time.sleep(0.5)
+        
+        # =====================================================
+        # STEP 3: Autofocus
+        # =====================================================
+        # Run autofocus if:
+        #   - autofocus_enabled is True (user requested it), OR
+        #   - autofocus_enabled is False BUT is_first_tablet is True (find focal plane once, then keep Z constant)
+        should_autofocus = autofocus_enabled or is_first_tablet
+        
+        if should_autofocus:
+            app.logger.info(f"Tablet {tablet_index}: Starting autofocus ({'coarse' if is_first_tablet else 'fine'})")
+            
+            # Turn on dome light and apply dome camera settings for autofocus
             _turn_on_dome_light()
             _apply_camera_settings_for_light('dome')
-            time.sleep(0.2)
+            time.sleep(0.3)  # Let light and camera settings stabilize
             
             try:
                 if is_first_tablet:
-                    # First tablet: use coarse autofocus for full scan
+                    # First tablet: full coarse+fine scan to find the focal plane
                     af_result = autofocus_main.autofocus_coarse(motion_platform)
                 else:
-                    # Subsequent tablets: use fine_only for faster focusing around previous best Z
+                    # Subsequent tablets: fine-only around previous best Z
                     af_result = autofocus_main.autofocus_fine_only(motion_platform)
                 
-                if af_result.get('status') != 'OK':
-                    app.logger.warning(f"Autofocus failed for tablet {tablet_index}: {af_result}")
+                af_status = af_result.get('status', 'ERROR')
+                if af_status == 'OK':
+                    app.logger.info(f"Tablet {tablet_index}: Autofocus OK at Z={af_result.get('z_rel', '?')}")
+                elif af_status == 'ABORTED':
+                    app.logger.info(f"Tablet {tablet_index}: Autofocus aborted")
+                    _turn_off_all_lights()
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'Autofocus aborted for tablet {tablet_index}'
+                    }), 200  # Not a server error; user stopped it
+                else:
+                    app.logger.warning(f"Tablet {tablet_index}: Autofocus returned {af_status}: {af_result}")
+                    # Continue with image capture anyway — the focus may still be acceptable
+            except (OSError, PermissionError) as e:
+                return _handle_motion_usb_disconnect(motion_platform, f"autofocus tablet {tablet_index}")
             except Exception as e:
-                app.logger.warning(f"Autofocus error for tablet {tablet_index}: {e}")
+                app.logger.warning(f"Tablet {tablet_index}: Autofocus error: {e}")
+                # Continue — autofocus failure should not block the measurement
             
-            _wait_for_motion_complete(motion_platform, timeout=30.0)
-            time.sleep(0.2)
+            # Wait for autofocus motion to fully stop
+            try:
+                _wait_for_motion_complete(motion_platform, timeout=30.0)
+            except (OSError, PermissionError) as e:
+                return _handle_motion_usb_disconnect(motion_platform, f"post-autofocus tablet {tablet_index}")
+            
+            # Settle time after autofocus Z movements
+            time.sleep(0.5)
         
-        # 4. Capture images with selected lights
+        # =====================================================
+        # STEP 4: Capture images with selected lights
+        # =====================================================
         if lamp_top:
             try:
-                saved_path = _capture_image_with_light('dome', measurement_folder, measurement_name, tablet_index)
-                saved_images.append(saved_path)
-                app.logger.info(f"Saved dome image: {saved_path}")
+                app.logger.info(f"Tablet {tablet_index}: Capturing dome image")
+                saved_paths = _capture_image_with_light('dome', measurement_folder, measurement_name, tablet_index, background_subtraction=background_subtraction)
+                saved_images.extend(saved_paths)
+                app.logger.info(f"Tablet {tablet_index}: Saved dome image(s): {saved_paths}")
+            except (OSError, PermissionError) as e:
+                _turn_off_all_lights()
+                return _handle_motion_usb_disconnect(motion_platform, f"dome capture tablet {tablet_index}")
             except Exception as e:
-                app.logger.error(f"Failed to capture dome image for tablet {tablet_index}: {e}")
+                app.logger.error(f"Tablet {tablet_index}: Failed to capture dome image: {e}")
                 _turn_off_all_lights()
                 return jsonify({
                     'status': 'error',
@@ -1154,26 +1241,37 @@ def auto_measurement_step():
         
         if lamp_side:
             try:
-                saved_path = _capture_image_with_light('bar', measurement_folder, measurement_name, tablet_index)
-                saved_images.append(saved_path)
-                app.logger.info(f"Saved bar image: {saved_path}")
+                app.logger.info(f"Tablet {tablet_index}: Capturing bar image")
+                saved_paths = _capture_image_with_light('bar', measurement_folder, measurement_name, tablet_index, background_subtraction=background_subtraction)
+                saved_images.extend(saved_paths)
+                app.logger.info(f"Tablet {tablet_index}: Saved bar image(s): {saved_paths}")
+            except (OSError, PermissionError) as e:
+                _turn_off_all_lights()
+                return _handle_motion_usb_disconnect(motion_platform, f"bar capture tablet {tablet_index}")
             except Exception as e:
-                app.logger.error(f"Failed to capture bar image for tablet {tablet_index}: {e}")
+                app.logger.error(f"Tablet {tablet_index}: Failed to capture bar image: {e}")
                 _turn_off_all_lights()
                 return jsonify({
                     'status': 'error',
                     'message': f'Failed to capture bar image for tablet {tablet_index}: {e}'
                 }), 500
         
-        # Turn off lights after this tablet
+        # =====================================================
+        # STEP 5: Turn off lights after this tablet
+        # =====================================================
         _turn_off_all_lights()
         
+        app.logger.info(f"Tablet {tablet_index}: Measurement complete ({len(saved_images)} images)")
         return jsonify({
             'status': 'success',
             'tablet_index': tablet_index,
             'saved_images': saved_images
         }), 200
         
+    except (OSError, PermissionError) as e:
+        _turn_off_all_lights()
+        ser = globals.motion_platform
+        return _handle_motion_usb_disconnect(ser, f"auto_measurement tablet {data.get('tablet_index', '?')}")
     except Exception as e:
         _turn_off_all_lights()
         app.logger.exception(f"auto_measurement_step failed: {e}")
@@ -1263,17 +1361,21 @@ def grab_camera_image():
                 }), 400
 
             if not cam.IsGrabbing():
-                app.logger.error("Camera is not grabbing.")
-                return None, jsonify({
-                    "error": "Camera is not grabbing. Start the video stream first.",
-                    "code": ErrorCode.CAMERA_DISCONNECTED,
-                    "popup": True
-                }), 503
+                try:
+                    cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+                    app.logger.info("Camera was not grabbing; started grabbing for still capture.")
+                except Exception as e:
+                    app.logger.error(f"Camera is not grabbing and failed to start: {e}")
+                    return None, jsonify({
+                        "error": "Camera is not grabbing and could not be started.",
+                        "code": ErrorCode.CAMERA_DISCONNECTED,
+                        "popup": True
+                    }), 503
 
             # Use unified grab+convert function
             try:
                 from cameracontrol import grab_and_convert_frame
-                frame_bgr = grab_and_convert_frame(cam, timeout_ms=5000)
+                frame_bgr = grab_and_convert_frame(cam, timeout_ms=5000, retries=2)
                 app.logger.info("Image grabbed and converted to BGR successfully.")
                 globals.latest_image = frame_bgr
                 return frame_bgr, None, None
@@ -1380,11 +1482,34 @@ def save_raw_image_endpoint():
             "popup": True
         }), 500
 
-    # NOTE: no thumbnail file is written here anymore
-    return jsonify({
+    # Background subtraction: save masked version alongside original if enabled
+    masked_path = None
+    settings_data = get_settings()
+    bg_sub_enabled = bool(settings_data.get('other_settings', {}).get('background_subtraction', False))
+    if bg_sub_enabled:
+        try:
+            masked, hull, mask = bgr_main.largest_object_hull_otsu_mask(img_cv)
+            if masked is not None:
+                base, ext = os.path.splitext(full_path)
+                masked_path = f"{base}_masked{ext}"
+                bgr_main.save_bgr_image_keep_exif(
+                    image_bgr=masked,
+                    src_image_path=full_path,
+                    dst_image_path=masked_path
+                )
+                app.logger.info(f"Background-subtracted image saved: {masked_path}")
+            else:
+                app.logger.warning("Background subtraction found no object in saved image")
+        except Exception as e:
+            app.logger.warning(f"Background subtraction failed for saved image: {e}")
+
+    result = {
         "message": "Raw image saved",
         "path": full_path
-    }), 200
+    }
+    if masked_path:
+        result["masked_path"] = masked_path
+    return jsonify(result), 200
 
 
 @app.route('/api/get_thumbnail', methods=['GET'])
@@ -1597,6 +1722,17 @@ def abort_autofocus():
         return jsonify({"status": "abort_signaled"}), 200
     except Exception as e:
         app.logger.exception("Error setting autofocus abort flag")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/turn-off-all-lights', methods=['POST'])
+def turn_off_all_lights_endpoint():
+    """Turn off all lights (dome and bar) immediately. Used when measurement is stopped."""
+    try:
+        _turn_off_all_lights()
+        app.logger.info("All lights turned off via endpoint")
+        return jsonify({"status": "lights_off"}), 200
+    except Exception as e:
+        app.logger.exception("Error turning off lights")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/select-file', methods=['GET'])

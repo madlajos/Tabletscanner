@@ -150,13 +150,113 @@ def disconnect_serial_device(device_name):
         
 
 
+def drain_serial_buffer(ser, timeout=0.15):
+    """
+    Drain (discard) all pending bytes from the serial input buffer.
+    Returns the drained bytes for diagnostic purposes.
+    """
+    drained = bytearray()
+    try:
+        if hasattr(ser, "reset_input_buffer"):
+            # Read what's there first, then reset
+            iw = getattr(ser, "in_waiting", 0) or 0
+            if iw:
+                drained += ser.read(iw)
+            ser.reset_input_buffer()
+        else:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                iw = getattr(ser, "in_waiting", 0) or 0
+                if not iw:
+                    break
+                chunk = ser.read(min(iw, 512))
+                if chunk:
+                    drained += chunk
+    except Exception as e:
+        logging.debug(f"drain_serial_buffer error (ignored): {e}")
+    return bytes(drained)
+
+
+def write_and_wait(ser, command, timeout=5.0, expect=b"ok"):
+    """
+    Send a G-code command to the BTT SKR Mini E3 board and wait for the
+    expected response (default: 'ok').
+
+    This is the **safe** way to send commands: it acquires the motion_lock,
+    drains stale data, sends the command, and blocks until the board
+    acknowledges or the timeout expires.
+
+    Args:
+        ser:      serial.Serial object (motion_platform)
+        command:  G-code string, e.g. "M400" or "G1 X10"
+        timeout:  max seconds to wait for the expected response
+        expect:   bytes to look for in the reply (case-insensitive)
+
+    Returns:
+        (True, reply_bytes)  – if expected response was seen
+        (False, reply_bytes) – if timeout expired without seeing it
+
+    Raises:
+        OSError / PermissionError – if USB is disconnected (caller should handle)
+    """
+    if not ser or not getattr(ser, 'is_open', False):
+        raise OSError("Serial port not open")
+
+    cmd_bytes = (command.strip() + "\n").encode("ascii", "ignore")
+    expect_lower = expect.lower()
+
+    with motion_lock:
+        # 1. Drain any stale data so we don't confuse old replies with new ones
+        drain_serial_buffer(ser, timeout=0.1)
+
+        # 2. Send the command
+        ser.write(cmd_bytes)
+        ser.flush()
+
+        # 3. Wait for expected response
+        buf = bytearray()
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            iw = getattr(ser, "in_waiting", 0) or 0
+            if iw:
+                chunk = ser.read(min(iw, 512))
+                if chunk:
+                    buf += chunk
+                    if expect_lower in buf.lower():
+                        return True, bytes(buf)
+            else:
+                time.sleep(0.01)
+
+    logging.debug(f"write_and_wait timeout for '{command.strip()}': got {buf[:128]!r}")
+    return False, bytes(buf)
+
+
+def write_and_wait_motion(ser, command, timeout=30.0):
+    """
+    Convenience wrapper for motion commands (G0/G1/G28/M400) that need
+    longer timeouts. The BTT board sends 'echo:busy: processing' while
+    working on long moves and 'ok' when done.
+
+    Returns True if motion completed, False on timeout.
+    """
+    ok, _ = write_and_wait(ser, command, timeout=timeout, expect=b"ok")
+    return ok
+
+
 def write(device, data):
+    """
+    Low-level write: sends command without waiting for a reply.
+    Prefer write_and_wait() for any command where confirmation matters.
+    """
     if isinstance(data, tuple):
         command = "{},{}".format(*data)
     else:
         command = data + "\n"
 
     if isinstance(device, serial.Serial):
-        device.write(command.encode())
+        with motion_lock:
+            device.write(command.encode())
+            device.flush()
     else:
         print("Invalid device type")

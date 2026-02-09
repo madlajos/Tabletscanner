@@ -130,8 +130,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         if (res.auto_measurement_settings) {
           const settings = res.auto_measurement_settings;
           this.saveLocation = settings.save_location || '';
-          this.firstTabletX = settings.first_tablet_x ?? 6.0;
-          this.firstTabletY = settings.first_tablet_y ?? 7.0;
+          this.firstTabletX = settings.first_tablet_x ?? 2.9;
+          this.firstTabletY = settings.first_tablet_y ?? 10.6;
           this.firstTabletZ = settings.first_tablet_z ?? 20.0;
           this.tabletSpacing = settings.tablet_spacing ?? 18.3;
         }
@@ -509,24 +509,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   private checkHomedThenProceed(indices: number[]): void {
-    this.http.get<{ x: boolean; y: boolean; z: boolean }>(`${BASE_URL}/check_axes_homed`)
-      .subscribe({
-        next: (homedStatus) => {
-          // If all axes are homed, skip homing and proceed directly
-          if (homedStatus.x && homedStatus.y && homedStatus.z) {
-            console.log('All axes already homed, skipping home');
-            this.processTabletQueue(indices, 0);
-          } else {
-            // Not all axes homed, perform homing
-            console.log('Axes not fully homed, performing home');
-            this.homeMotionPlatformThenProceed(indices);
-          }
-        },
-        error: (err) => {
-          console.warn('Could not check homed status, proceeding with home:', err);
-          this.homeMotionPlatformThenProceed(indices);
-        }
-      });
+    // Always home at the start of auto measurement to ensure a known reference.
+    this.homeMotionPlatformThenProceed(indices);
   }
 
   private homeMotionPlatformThenProceed(indices: number[]): void {
@@ -579,6 +563,16 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.http.post(`${BASE_URL}/abort-autofocus`, {}).subscribe({
       next: () => console.log('Autofocus abort signal sent to backend'),
       error: (err) => console.warn('Could not send abort signal:', err)
+    });
+
+    // Turn off all lights
+    this.http.post(`${BASE_URL}/turn-off-all-lights`, {}).subscribe({
+      next: () => {
+        console.log('All lights turned off');
+        // Emit event to notify other UI components that lights are off
+        this.sharedService.emitLightsOff();
+      },
+      error: (err) => console.warn('Could not turn off lights:', err)
     });
 
     // Cancel any active operations immediately

@@ -81,7 +81,7 @@ def load_camera_profile(camera, pfs_path: str) -> dict:
         }
 
 
-def grab_and_convert_frame(camera, timeout_ms=5000):
+def grab_and_convert_frame(camera, timeout_ms=5000, retries=2):
     """
     Unified frame grab and conversion function.
     
@@ -102,25 +102,39 @@ def grab_and_convert_frame(camera, timeout_ms=5000):
         raise RuntimeError("Camera not open")
     
     if not camera.IsGrabbing():
-        raise RuntimeError("Camera not grabbing")
-    
-    try:
-        grab_result = camera.RetrieveResult(int(timeout_ms), pylon.TimeoutHandling_ThrowException)
-        if not grab_result.GrabSucceeded():
-            grab_result.Release()
-            raise RuntimeError("Frame grab unsuccessful")
-        
-        # Convert BayerGR10p (or raw Bayer) -> BGR8 for OpenCV
-        frame_bgr = converter.Convert(grab_result).GetArray()
-        
-        # Return a copy so the frame persists after release
-        return frame_bgr.copy()
-        
-    finally:
+        camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+
+    last_error = None
+    attempts = max(1, int(retries) + 1)
+
+    for attempt in range(attempts):
+        grab_result = None
         try:
-            grab_result.Release()
-        except Exception:
-            pass
+            grab_result = camera.RetrieveResult(int(timeout_ms), pylon.TimeoutHandling_ThrowException)
+            if not grab_result.GrabSucceeded():
+                last_error = RuntimeError("Frame grab unsuccessful")
+                continue
+
+            # Convert BayerGR10p (or raw Bayer) -> BGR8 for OpenCV
+            frame_bgr = converter.Convert(grab_result).GetArray()
+
+            # Return a copy so the frame persists after release
+            return frame_bgr.copy()
+        except Exception as e:
+            last_error = e
+        finally:
+            try:
+                if grab_result is not None:
+                    grab_result.Release()
+            except Exception:
+                pass
+
+        if attempt < attempts - 1:
+            time.sleep(0.05)
+
+    if last_error:
+        raise RuntimeError(str(last_error))
+    raise RuntimeError("Frame grab unsuccessful")
 
 
 def abort(reason: str, return_code: int = 1, usage: bool = False):
@@ -420,6 +434,13 @@ def get_camera_properties(camera: pylon.InstantCamera) -> dict:
             'inc': 0.01
         })
 
+    if hasattr(camera, 'Gain'):
+        safe_get('Gain', lambda: {
+            'min': camera.Gain.GetMin(),
+            'max': camera.Gain.GetMax(),
+            'inc': 0.01
+        })
+
     safe_get('FrameRate', lambda: {
         'min': camera.AcquisitionFrameRate.GetMin(),
         'max': camera.AcquisitionFrameRate.GetMax(),
@@ -531,6 +552,8 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
             camera.AcquisitionFrameRate.SetValue(valid_value)
         elif param_name == 'Gamma':
             camera.Gamma.SetValue(valid_value)
+        elif param_name == 'Gain':
+            camera.Gain.SetValue(valid_value)
 
         # Optional reversals
         camera.ReverseX.SetValue(True)
