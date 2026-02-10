@@ -81,6 +81,11 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   measurementActive: boolean = false;
   private measurementActiveSub!: Subscription;
+  private activeLightSub?: Subscription;
+  currentActiveLight: 'dome' | 'bar' | null = null;
+
+  // Track original values to detect actual changes
+  private originalValues: { [key: string]: any } = {};
 
 
   constructor(private http: HttpClient,
@@ -129,6 +134,12 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       }
     });
 
+    // Subscribe to active light changes for debugging and state tracking
+    this.activeLightSub = this.sharedService.activeLight$.subscribe(light => {
+      this.currentActiveLight = light;
+      console.log(`[CameraControl] Active light changed to: ${light || 'none'}`);
+    });
+
     // TODO: Refactor to set current 'other' settings
     this.http.get<{ other_settings: any }>(`${BASE_URL}/get-other-settings?category=other_settings`)
       .subscribe({
@@ -166,6 +177,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
     if (this.measurementActiveSub) {
       this.measurementActiveSub.unsubscribe();
+    }
+    if (this.activeLightSub) {
+      this.activeLightSub.unsubscribe();
     }
   }
 
@@ -541,13 +555,32 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       const lightSuffix = lightMatch[2];
       const lightName = lightSuffix.toLowerCase();
 
+      // Check which light is currently active
+      const activeLight = this.sharedService.getActiveLight();
+      
+      // Only apply to camera hardware if this setting matches the currently active light
+      const shouldApplyToCamera = activeLight === lightName;
+      
+      console.log(`[CameraControl] Modifying ${lightName} setting ${settingName}. Active light: ${activeLight || 'none'}. Will apply to camera: ${shouldApplyToCamera}`);
+      
+      if (!shouldApplyToCamera) {
+        console.log(`[CameraControl] ✓ Skipping camera hardware update for ${setting} - ${lightName} light is not active`);
+      } else {
+        console.log(`[CameraControl] → Applying ${setting} to camera hardware (${lightName} light is active)`);
+      }
+
       this.http.post(`${BASE_URL}/update-camera-settings-light`, {
         light: lightName,
         setting_name: settingName,
-        setting_value: value
+        setting_value: value,
+        apply_to_camera: shouldApplyToCamera
       }).subscribe(
         (response: any) => {
-          console.log(`Light-specific setting applied successfully:`, response);
+          if (shouldApplyToCamera) {
+            console.log(`Light-specific setting applied to camera successfully:`, response);
+          } else {
+            console.log(`Light-specific setting saved to settings.json only:`, response);
+          }
 
           const correctedValue = response?.updated_value;
 
@@ -710,6 +743,11 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     return Object.keys(obj);
   }
 
+  // Store original value when user focuses on input
+  handleNumericFocus(settingKey: string): void {
+    this.originalValues[settingKey] = this.cameraSettings[settingKey];
+  }
+
   // Numeric input handling for camera settings
   handleNumericBlur(settingKey: string, decimals: number): void {
     let raw = this.cameraSettings[settingKey];
@@ -735,11 +773,18 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // Trim trailing zeros by storing as number (not string)
     this.cameraSettings[settingKey] = num;
 
-    // Preset is now stale
-    this.invalidatePreset();
-
-    // Apply to backend
-    this.applySetting(settingKey);
+    // Only invalidate preset if value actually changed
+    const originalValue = this.originalValues[settingKey];
+    const valueChanged = originalValue !== num;
+    
+    if (valueChanged) {
+      console.log(`[CameraControl] Setting ${settingKey} changed from ${originalValue} to ${num} - invalidating preset`);
+      this.invalidatePreset();
+      // Apply to backend
+      this.applySetting(settingKey);
+    } else {
+      console.log(`[CameraControl] Setting ${settingKey} unchanged (${num}) - keeping preset name`);
+    }
   }
 
   invalidatePreset(): void {

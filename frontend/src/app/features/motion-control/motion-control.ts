@@ -308,11 +308,15 @@ export class MotionControl implements OnInit, OnDestroy {
         await this.sendGcode('M106 P1 S255');
         this.barLightOn = true;
         this.ringLightOn = false;
+        console.log('[MotionControl] Bar light turned ON - setting active light to bar');
+        this.sharedService.setActiveLight('bar');
         this.applyCameraSettingsForLight('bar');
       } else {
         // Turning bar off
         await this.sendGcode('M106 P1 S0');
         this.barLightOn = false;
+        console.log('[MotionControl] Bar light turned OFF - setting active light to null');
+        this.sharedService.setActiveLight(null);
       }
     } catch (err) {
       console.error('Failed to toggle bar light', err);
@@ -335,11 +339,15 @@ export class MotionControl implements OnInit, OnDestroy {
         await this.sendGcode('M106 P0 S0');
         this.ringLightOn = true;
         this.barLightOn = false;
+        console.log('[MotionControl] Dome light turned ON - setting active light to dome');
+        this.sharedService.setActiveLight('dome');
         this.applyCameraSettingsForLight('dome');
       } else {
         // Turning dome off
         await this.sendGcode('M106 P0 S255');
         this.ringLightOn = false;
+        console.log('[MotionControl] Dome light turned OFF - setting active light to null');
+        this.sharedService.setActiveLight(null);
       }
     } catch (err) {
       console.error('Failed to toggle dome light', err);

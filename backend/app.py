@@ -553,31 +553,39 @@ def update_camera_settings_light():
         light = data.get('light')  # 'dome' or 'bar'
         setting_name = data.get('setting_name')
         setting_value = data.get('setting_value')
+        apply_to_camera = data.get('apply_to_camera', True)  # Default to True for backwards compatibility
 
         if light not in ('dome', 'bar'):
             return jsonify({"error": "Invalid light. Must be 'dome' or 'bar'."}), 400
 
-        app.logger.info(f"Updating {light} camera setting: {setting_name} = {setting_value}")
+        app.logger.info(f"[CameraSettings] Updating {light} setting {setting_name}={setting_value}, apply_to_camera={apply_to_camera}")
 
-        # Fetch camera and current camera_properties
-        camera = globals.camera
-        camera_properties = globals.camera_properties
+        updated_value = setting_value  # Default to the input value
 
-        # Fallback: Refresh properties if missing
-        if not camera_properties or setting_name not in camera_properties:
-            app.logger.warning("camera_properties missing or incomplete; fetching fresh values...")
-            camera_properties = get_camera_properties(camera)
-            globals.camera_properties = camera_properties
+        # Only apply to camera hardware if apply_to_camera is True
+        if apply_to_camera:
+            # Fetch camera and current camera_properties
+            camera = globals.camera
+            camera_properties = globals.camera_properties
 
-        # Apply the setting to the camera
-        updated_value = validate_and_set_camera_param(
-            camera,
-            setting_name,
-            setting_value,
-            camera_properties
-        )
+            # Fallback: Refresh properties if missing
+            if not camera_properties or setting_name not in camera_properties:
+                app.logger.warning("camera_properties missing or incomplete; fetching fresh values...")
+                camera_properties = get_camera_properties(camera)
+                globals.camera_properties = camera_properties
 
-        # Persist the validated value in settings.json under the light-specific section
+            # Apply the setting to the camera
+            updated_value = validate_and_set_camera_param(
+                camera,
+                setting_name,
+                setting_value,
+                camera_properties
+            )
+            app.logger.info(f"[CameraSettings] \u2713 {light} {setting_name} applied to camera hardware: {updated_value}")
+        else:
+            app.logger.info(f"[CameraSettings] \u2713 {light} {setting_name} skipped camera hardware (only saved to settings.json)")
+
+        # Always persist the value in settings.json under the light-specific section
         settings_data = get_settings()
         category = f'camera_params_{light}'
         if category not in settings_data:
@@ -589,7 +597,8 @@ def update_camera_settings_light():
 
         return jsonify({
             "message": f"{light.capitalize()} camera {setting_name} updated and saved.",
-            "updated_value": updated_value
+            "updated_value": updated_value,
+            "applied_to_camera": apply_to_camera
         }), 200
 
     except Exception as e:
@@ -732,6 +741,9 @@ def move_toolhead_absolute():
 @app.route('/api/autofocus_coarse', methods=['POST'])
 def autofocus_coarse():
     try:
+        # Always clear abort flag so manual AF is not blocked by a previous auto-measurement stop
+        globals.autofocus_abort = False
+
         motion_platform = globals.motion_platform
         if not motion_platform or not getattr(motion_platform, 'is_open', False):
             return jsonify({

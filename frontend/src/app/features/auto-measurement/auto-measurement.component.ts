@@ -647,9 +647,12 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           // Mark tablet as completed
           this.completedTablets.add(tabletId);
           
-          // Emit saved images to gallery
+          // Emit saved images to gallery (exclude background-subtracted _masked images)
           if (resp.saved_images && resp.saved_images.length > 0) {
             for (const imagePath of resp.saved_images) {
+              if (imagePath.includes('_masked')) {
+                continue;
+              }
               const lightType = imagePath.includes('_dome_') ? 'dome' : 'bar';
               this.sharedService.emitSavedImage({
                 path: imagePath,

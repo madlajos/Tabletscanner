@@ -78,6 +78,10 @@ export class SharedService {
   private lightSettingsSubject = new BehaviorSubject<'dome' | 'bar' | null>(null);
   lightSettings$ = this.lightSettingsSubject.asObservable();
   
+  // Track which light is currently ON (null means both off)
+  private activeLightSubject = new BehaviorSubject<'dome' | 'bar' | null>(null);
+  activeLight$ = this.activeLightSubject.asObservable();
+  
   // Track light state (on/off)
   private lightsOffSubject = new Subject<void>();
   lightsOff$ = this.lightsOffSubject.asObservable();
@@ -181,8 +185,17 @@ export class SharedService {
     this.lightSettingsSubject.next(light);
   }
 
+  setActiveLight(light: 'dome' | 'bar' | null): void {
+    this.activeLightSubject.next(light);
+  }
+
+  getActiveLight(): 'dome' | 'bar' | null {
+    return this.activeLightSubject.value;
+  }
+
   emitLightsOff(): void {
     this.lightsOffSubject.next();
+    this.activeLightSubject.next(null);
   }
   
   startStream(): void {

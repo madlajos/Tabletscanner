@@ -236,6 +236,7 @@ def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=1):
     print("Menj " + str(target_z) + " pozícióra")
     if abs(dz) > 1e-9:
         move_relative(motion_platform, z=dz)
+        time.sleep(float(settle_s))
         wait_motion_done(motion_platform)
 
     return float(target_z)
@@ -294,7 +295,7 @@ def measure_score(
 def autofocus_coarse(
     motion_platform,
     z_min=0.0,
-    z_max=25.0,
+    z_max=30.0,
     frame_scale=0.35,   # még kisebb kép (pl. 0.5 helyett 0.35 vagy 0.3)
     edge_ring_width=5,  # perem-sáv vastagság
     # Coarse scan
@@ -561,7 +562,7 @@ def autofocus_fine_only(
     start_z=None,
 
     z_min=0.0,
-    z_max=25.0,
+    z_max=30.0,
 
     frame_scale=0.35,
     roi_square_scale=0.8,

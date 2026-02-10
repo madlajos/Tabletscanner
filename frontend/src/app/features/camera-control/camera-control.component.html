@@ -94,12 +94,14 @@
           <td>
             <input type="number" inputmode="numeric" step="1" min="0"
               [(ngModel)]="cameraSettings.ExposureTime_Dome"
+              (focus)="handleNumericFocus('ExposureTime_Dome')"
               (blur)="handleNumericBlur('ExposureTime_Dome', 0)"
               [disabled]="!isConnected || measurementActive">
           </td>
           <td>
             <input type="number" inputmode="numeric" step="1" min="0"
               [(ngModel)]="cameraSettings.ExposureTime_Bar"
+              (focus)="handleNumericFocus('ExposureTime_Bar')"
               (blur)="handleNumericBlur('ExposureTime_Bar', 0)"
               [disabled]="!isConnected || measurementActive">
           </td>
@@ -110,12 +112,14 @@
           <td>
             <input type="number" inputmode="decimal" step="0.0001" min="0"
               [(ngModel)]="cameraSettings.Gamma_Dome"
+              (focus)="handleNumericFocus('Gamma_Dome')"
               (blur)="handleNumericBlur('Gamma_Dome', 4)"
               [disabled]="!isConnected || measurementActive">
           </td>
           <td>
             <input type="number" inputmode="decimal" step="0.0001" min="0"
               [(ngModel)]="cameraSettings.Gamma_Bar"
+              (focus)="handleNumericFocus('Gamma_Bar')"
               (blur)="handleNumericBlur('Gamma_Bar', 4)"
               [disabled]="!isConnected || measurementActive">
           </td>

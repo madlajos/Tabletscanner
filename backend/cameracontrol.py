@@ -37,6 +37,9 @@ def load_camera_profile(camera, pfs_path: str) -> dict:
     Returns:
         dict: {"success": True} or {"error": "message", "code": "E1311"}
     """
+    import time
+    import globals
+    
     if not camera or not camera.IsOpen():
         return {
             "error": "Kamera nincs csatlakoztatva",
@@ -56,7 +59,15 @@ def load_camera_profile(camera, pfs_path: str) -> dict:
         }
     
     try:
-        # Stop grabbing if active (required for some settings)
+        # Stop video stream if running (critical to avoid state conflicts)
+        was_streaming = getattr(globals, "stream_running", False)
+        if was_streaming:
+            globals.stream_running = False
+            app.logger.info("Stopped video stream to load .pfs profile")
+            # Give stream loop time to exit gracefully
+            time.sleep(0.3)
+        
+        # Stop grabbing if active (required for profile loading)
         was_grabbing = camera.IsGrabbing()
         if was_grabbing:
             camera.StopGrabbing()
@@ -70,6 +81,11 @@ def load_camera_profile(camera, pfs_path: str) -> dict:
         if was_grabbing:
             camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
             app.logger.info("Restarted grabbing after loading .pfs profile")
+        
+        # Restart streaming if it was active
+        if was_streaming:
+            globals.stream_running = True
+            app.logger.info("Restarted video stream after loading .pfs profile")
         
         return {"success": True}
         
