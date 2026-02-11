@@ -115,6 +115,52 @@
   border-radius: 10px;
 }
 
+/* === Live-view toggle switch ======================================= */
+.live-toggle {
+  position: relative;
+  display: inline-block;
+  width: 28px;
+  height: 16px;
+  margin-left: 10px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.live-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.live-toggle-slider {
+  position: absolute;
+  inset: 0;
+  background-color: #555;
+  border-radius: 8px;
+  transition: background-color 0.25s;
+}
+
+.live-toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #ccc;
+  border-radius: 50%;
+  transition: transform 0.25s, background-color 0.25s;
+}
+
+.live-toggle input:checked + .live-toggle-slider {
+  background-color: rgb(42, 98, 140);
+}
+
+.live-toggle input:checked + .live-toggle-slider::before {
+  transform: translateX(12px);
+  background-color: #fff;
+}
+
 /* === Status Indicator (kept exactly as you had it) ================= */
 
 /* Status Indicator Circle */

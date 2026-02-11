@@ -58,6 +58,9 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
   isCaptureCooldown = false;
   private readonly CAPTURE_COOLDOWN_MS = 1000;
 
+  // Live view display toggle (stream keeps running, just hides the view)
+  liveViewVisible = true;
+
   // Context menu state
   contextMenuVisible = false;
   contextMenuX = 0;

@@ -83,9 +83,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   private measurementActiveSub!: Subscription;
   private activeLightSub?: Subscription;
   currentActiveLight: 'dome' | 'bar' | null = null;
-
-  // Track original values to detect actual changes
-  private originalValues: { [key: string]: any } = {};
+  private numericFocusValues: Record<string, number | null | undefined> = {};
 
 
   constructor(private http: HttpClient,
@@ -743,26 +741,16 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     return Object.keys(obj);
   }
 
-  // Store original value when user focuses on input
-  handleNumericFocus(settingKey: string): void {
-    this.originalValues[settingKey] = this.cameraSettings[settingKey];
-  }
-
-  // Numeric input handling for camera settings
-  handleNumericBlur(settingKey: string, decimals: number): void {
-    let raw = this.cameraSettings[settingKey];
-    if (raw === undefined || raw === null || raw === '') {
-      return; // do not apply empty
+  private normalizeNumber(value: unknown, decimals: number): number | null {
+    if (value === undefined || value === null || value === '') {
+      return null;
     }
 
-    // Parse as number
-    let num = Number(raw);
+    let num = Number(value);
     if (!isFinite(num)) {
-      // Revert to previous numeric value if invalid
-      return;
+      return null;
     }
 
-    // Round to requested decimals
     if (decimals <= 0) {
       num = Math.round(num);
     } else {
@@ -770,21 +758,36 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       num = Math.round(num * factor) / factor;
     }
 
+    return num;
+  }
+
+  handleNumericFocus(settingKey: string, decimals: number): void {
+    this.numericFocusValues[settingKey] = this.normalizeNumber(this.cameraSettings[settingKey], decimals);
+  }
+
+  // Numeric input handling for camera settings
+  handleNumericBlur(settingKey: string, decimals: number): void {
+    let raw = this.cameraSettings[settingKey];
+    const num = this.normalizeNumber(raw, decimals);
+    if (num === null) {
+      return; // do not apply empty/invalid
+    }
+
+    const prev = this.numericFocusValues[settingKey];
+    if (prev !== undefined && prev === num) {
+      // No effective change; keep preset name intact and skip backend call
+      this.cameraSettings[settingKey] = num;
+      return;
+    }
+
     // Trim trailing zeros by storing as number (not string)
     this.cameraSettings[settingKey] = num;
 
-    // Only invalidate preset if value actually changed
-    const originalValue = this.originalValues[settingKey];
-    const valueChanged = originalValue !== num;
-    
-    if (valueChanged) {
-      console.log(`[CameraControl] Setting ${settingKey} changed from ${originalValue} to ${num} - invalidating preset`);
-      this.invalidatePreset();
-      // Apply to backend
-      this.applySetting(settingKey);
-    } else {
-      console.log(`[CameraControl] Setting ${settingKey} unchanged (${num}) - keeping preset name`);
-    }
+    // Preset is now stale
+    this.invalidatePreset();
+
+    // Apply to backend
+    this.applySetting(settingKey);
   }
 
   invalidatePreset(): void {

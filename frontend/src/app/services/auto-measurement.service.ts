@@ -66,4 +66,23 @@ export class AutoMeasurementService {
   selectFolder(): Observable<{ folder: string }> {
     return this.http.get<{ folder: string }>(`${BASE_URL}/select-folder`);
   }
+
+  /**
+   * Attempt to reconnect to the motion platform.
+   * Returns an observable that succeeds if connected, errors if not.
+   */
+  reconnectMotionPlatform(): Observable<{ message: string; port?: string }> {
+    return this.http.post<{ message: string; port?: string }>(
+      `${BASE_URL}/connect-to-motionplatform`,
+      {}
+    );
+  }
+
+  /**
+   * Attempt to reconnect to the camera.
+   * Returns an observable that succeeds if connected, errors if not.
+   */
+  reconnectCamera(): Observable<any> {
+    return this.http.post(`${BASE_URL}/connect-camera`, {});
+  }
 }

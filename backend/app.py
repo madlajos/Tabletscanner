@@ -96,6 +96,35 @@ def _handle_motion_usb_disconnect(ser, context: str = "operation"):
     }), 503
 
 
+def _is_serial_disconnect(exc):
+    """Check if an exception is caused by a USB/serial disconnection."""
+    msg = str(exc).lower()
+    return any(keyword in msg for keyword in [
+        'serialexception', 'writefile failed', 'permissionerror',
+        'clearcommerror', 'device', 'usb'
+    ])
+
+
+def _is_camera_disconnect(exc):
+    """Check if an exception is caused by a camera disconnection or failure."""
+    msg = str(exc).lower()
+    return any(keyword in msg for keyword in [
+        'camera not ready', 'camera disconnected', 'grab failed',
+        'failed to grab', 'physically removed', 'not open',
+        'camera is not grabbing'
+    ])
+
+
+def _handle_camera_disconnect(context: str = "operation"):
+    """Handle camera disconnection. Returns (error_json, status_code)."""
+    app.logger.warning(f"Camera disconnected during {context}")
+    return jsonify({
+        'error': ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED, 'Camera disconnected'),
+        'code': ErrorCode.CAMERA_DISCONNECTED,
+        'popup': True
+    }), 503
+
+
 def retry_operation(operation, max_retries=3, wait=1, exceptions=(Exception,)):
     """
     Attempts to run 'operation' up to 'max_retries' times.
@@ -294,7 +323,21 @@ def api_home_toolhead():
             app.logger.warning(f"Error waiting for homing completion: {e}")
         
         globals.toolhead_homed = True
-        return jsonify({'ok': True, 'homed_axes': axes or ['x','y','z']})
+        
+        # Query and cache the position after successful homing
+        try:
+            pos = motioncontrols.get_toolhead_position(ser, timeout=2.0)
+            if pos and all(k in pos for k in ('x', 'y', 'z')):
+                globals.last_toolhead_pos = pos
+                app.logger.info(f"Position cached after homing: X={pos.get('x')}, Y={pos.get('y')}, Z={pos.get('z')}")
+        except Exception as e:
+            app.logger.warning(f"Could not cache position after homing: {e}")
+        
+        return jsonify({
+            'ok': True, 
+            'homed_axes': axes or ['x','y','z'],
+            'position': globals.last_toolhead_pos
+        })
     except (OSError, PermissionError) as e:
         app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
         try:
@@ -895,11 +938,17 @@ def _turn_on_bar_light():
         porthandler.write_and_wait(ser, "M106 P1 S255", timeout=2.0)  # bar on
 
 def _turn_off_all_lights():
-    """Turn off both lights."""
+    """Turn off both lights. Silently ignores errors if serial port is disconnected."""
     ser = globals.motion_platform
     if ser and ser.is_open:
-        porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
-        porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)    # bar off
+        try:
+            porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
+        except Exception:
+            pass
+        try:
+            porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)    # bar off
+        except Exception:
+            pass
 
 def _apply_camera_settings_for_light(light: str):
     """Apply camera settings for specific light (dome or bar)."""
@@ -1219,6 +1268,9 @@ def auto_measurement_step():
             except (OSError, PermissionError) as e:
                 return _handle_motion_usb_disconnect(motion_platform, f"autofocus tablet {tablet_index}")
             except Exception as e:
+                if _is_camera_disconnect(e):
+                    _turn_off_all_lights()
+                    return _handle_camera_disconnect(f"autofocus tablet {tablet_index}")
                 app.logger.warning(f"Tablet {tablet_index}: Autofocus error: {e}")
                 # Continue — autofocus failure should not block the measurement
             
@@ -1241,11 +1293,21 @@ def auto_measurement_step():
                 saved_images.extend(saved_paths)
                 app.logger.info(f"Tablet {tablet_index}: Saved dome image(s): {saved_paths}")
             except (OSError, PermissionError) as e:
-                _turn_off_all_lights()
+                try:
+                    _turn_off_all_lights()
+                except Exception:
+                    pass
                 return _handle_motion_usb_disconnect(motion_platform, f"dome capture tablet {tablet_index}")
             except Exception as e:
                 app.logger.error(f"Tablet {tablet_index}: Failed to capture dome image: {e}")
-                _turn_off_all_lights()
+                try:
+                    _turn_off_all_lights()
+                except Exception:
+                    pass
+                if _is_camera_disconnect(e):
+                    return _handle_camera_disconnect(f"dome capture tablet {tablet_index}")
+                if _is_serial_disconnect(e):
+                    return _handle_motion_usb_disconnect(motion_platform, f"dome capture tablet {tablet_index}")
                 return jsonify({
                     'status': 'error',
                     'message': f'Failed to capture dome image for tablet {tablet_index}: {e}'
@@ -1258,11 +1320,21 @@ def auto_measurement_step():
                 saved_images.extend(saved_paths)
                 app.logger.info(f"Tablet {tablet_index}: Saved bar image(s): {saved_paths}")
             except (OSError, PermissionError) as e:
-                _turn_off_all_lights()
+                try:
+                    _turn_off_all_lights()
+                except Exception:
+                    pass
                 return _handle_motion_usb_disconnect(motion_platform, f"bar capture tablet {tablet_index}")
             except Exception as e:
                 app.logger.error(f"Tablet {tablet_index}: Failed to capture bar image: {e}")
-                _turn_off_all_lights()
+                try:
+                    _turn_off_all_lights()
+                except Exception:
+                    pass
+                if _is_camera_disconnect(e):
+                    return _handle_camera_disconnect(f"bar capture tablet {tablet_index}")
+                if _is_serial_disconnect(e):
+                    return _handle_motion_usb_disconnect(motion_platform, f"bar capture tablet {tablet_index}")
                 return jsonify({
                     'status': 'error',
                     'message': f'Failed to capture bar image for tablet {tablet_index}: {e}'
@@ -1281,12 +1353,24 @@ def auto_measurement_step():
         }), 200
         
     except (OSError, PermissionError) as e:
-        _turn_off_all_lights()
+        try:
+            _turn_off_all_lights()
+        except Exception:
+            pass
         ser = globals.motion_platform
         return _handle_motion_usb_disconnect(ser, f"auto_measurement tablet {data.get('tablet_index', '?')}")
     except Exception as e:
-        _turn_off_all_lights()
+        try:
+            _turn_off_all_lights()
+        except Exception:
+            pass
         app.logger.exception(f"auto_measurement_step failed: {e}")
+        # Check if this is a serial/USB disconnect wrapped in another exception
+        if _is_serial_disconnect(e):
+            ser = globals.motion_platform
+            return _handle_motion_usb_disconnect(ser, f"auto_measurement tablet {data.get('tablet_index', '?')}")
+        if _is_camera_disconnect(e):
+            return _handle_camera_disconnect(f"auto_measurement tablet {data.get('tablet_index', '?')}")
         return jsonify({
             'status': 'error',
             'message': str(e)

@@ -7,7 +7,7 @@ Width	4508
 Height	4096
 OffsetX	0
 OffsetY	0
-PixelFormat	YCbCr422_8
+PixelFormat	BayerGR10p
 TestPattern	Off
 BslMultipleROIRowsEnable	0
 BslMultipleROIRowSelector	Row1
@@ -79,7 +79,7 @@ BslMultipleROIRowSelector	Row1
 AcquisitionStopMode	AbortExposure
 ExposureTimeMode	Common
 ExposureTimeSelector	Common
-ExposureTime	3271.0
+ExposureTime	600.0
 ExposureTimeSelector	Common
 ExposureAuto	Off
 ExposureMode	Timed
@@ -223,9 +223,9 @@ BslDemosaicingMode	Auto
 BalanceRatioSelector	Red
 BalanceRatio	1.0000
 BalanceRatioSelector	Green
-BalanceRatio	1.4250
+BalanceRatio	1.3530
 BalanceRatioSelector	Blue
-BalanceRatio	2.1289
+BalanceRatio	1.5581
 BalanceRatioSelector	Red
 BalanceWhiteAuto	Continuous
 ColorTransformationSelector	RGBtoRGB

@@ -530,8 +530,36 @@ def apply_camera_settings(camera, camera_properties, settings):
         app.logger.error(f"Failed to apply camera settings: {e}")
         raise CameraError("Error applying camera settings.") from e
 
+def _apply_camera_param(camera, param_name: str, valid_value):
+    """Apply a single validated parameter value to the camera hardware."""
+    if param_name == 'Width':
+        camera.Width.SetValue(valid_value)
+    elif param_name == 'Height':
+        camera.Height.SetValue(valid_value)
+    elif param_name == 'OffsetX':
+        camera.OffsetX.SetValue(valid_value)
+    elif param_name == 'OffsetY':
+        camera.OffsetY.SetValue(valid_value)
+    elif param_name == 'ExposureTime':
+        camera.ExposureTime.SetValue(valid_value)
+    elif param_name == 'FrameRate':
+        camera.AcquisitionFrameRateEnable.SetValue(True)
+        camera.AcquisitionFrameRate.SetValue(valid_value)
+    elif param_name == 'Gamma':
+        camera.Gamma.SetValue(valid_value)
+    elif param_name == 'Gain':
+        camera.Gain.SetValue(valid_value)
+
+    # Optional reversals
+    camera.ReverseX.SetValue(True)
+    camera.ReverseY.SetValue(True)
+
+
 def validate_and_set_camera_param(camera, param_name: str, param_value: float, properties: dict):
     valid_value = validate_param(param_name, param_value, properties)
+
+    MAX_RETRIES = 3
+    RETRY_DELAY = 0.15  # seconds between retries
 
     try:
         was_streaming = globals.stream_running
@@ -552,28 +580,35 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
             camera.Open()
             app.logger.info(f"Camera reopened to apply {param_name}.")
 
-        # Apply the validated parameter
-        if param_name == 'Width':
-            camera.Width.SetValue(valid_value)
-        elif param_name == 'Height':
-            camera.Height.SetValue(valid_value)
-        elif param_name == 'OffsetX':
-            camera.OffsetX.SetValue(valid_value)
-        elif param_name == 'OffsetY':
-            camera.OffsetY.SetValue(valid_value)
-        elif param_name == 'ExposureTime':
-            camera.ExposureTime.SetValue(valid_value)
-        elif param_name == 'FrameRate':
-            camera.AcquisitionFrameRateEnable.SetValue(True)
-            camera.AcquisitionFrameRate.SetValue(valid_value)
-        elif param_name == 'Gamma':
-            camera.Gamma.SetValue(valid_value)
-        elif param_name == 'Gain':
-            camera.Gain.SetValue(valid_value)
+        # Acquire grab_lock so we don't collide with the video stream's
+        # frame grabs – the USB bus can't handle concurrent register
+        # writes and frame retrieval, causing TimeoutExceptions.
+        lock = getattr(globals, "grab_lock", None)
+        if lock is None:
+            from threading import Lock
+            globals.grab_lock = Lock()
+            lock = globals.grab_lock
 
-        # Optional reversals
-        camera.ReverseX.SetValue(True)
-        camera.ReverseY.SetValue(True)
+        last_error = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                with lock:
+                    _apply_camera_param(camera, param_name, valid_value)
+                last_error = None
+                break  # success
+            except Exception as e:
+                last_error = e
+                is_timeout = "timeout" in str(e).lower() or "TimeoutException" in type(e).__name__
+                if is_timeout and attempt < MAX_RETRIES:
+                    app.logger.warning(
+                        f"Timeout setting {param_name} (attempt {attempt}/{MAX_RETRIES}), retrying..."
+                    )
+                    time.sleep(RETRY_DELAY)
+                else:
+                    break
+
+        if last_error is not None:
+            raise last_error
 
         app.logger.info(f"Camera {param_name} successfully set to {valid_value}")
 

@@ -8,11 +8,15 @@
           'streaming': sharedService.getCameraStreamStatus()
         }">
       </span>
+      <label class="live-toggle" title="Live view on/off">
+        <input type="checkbox" [checked]="liveViewVisible" (change)="liveViewVisible = !liveViewVisible" />
+        <span class="live-toggle-slider"></span>
+      </label>
     </div>
   </div>
 
   <div class="live-view">
-    <div #videoContainer class="video-host" [class.hidden]="!sharedService.getCameraStreamStatus()" 
+    <div #videoContainer class="video-host" [class.hidden]="!sharedService.getCameraStreamStatus()" [style.visibility]="liveViewVisible ? 'visible' : 'hidden'" 
          [class.zoomed]="isZoomed()" 
          [style.cursor]="getCursorStyle()"></div>
 

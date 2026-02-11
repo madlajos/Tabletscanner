@@ -147,14 +147,20 @@
     {{ measurementActive ? 'Mérés leállítása' : 'Mérés indítása' }}
   </button>
 
-  <!-- VALIDATION MESSAGE -->
+  <!-- VALIDATION MESSAGE (shown when not measuring) -->
   <div class="status warning" *ngIf="!measurementActive && validationMessage">
     {{ validationMessage }}
   </div>
 
   <!-- STATUS MESSAGES -->
-  <div class="status" *ngIf="measurementActive">
+  <div class="status" *ngIf="measurementActive && !reconnecting && validationMessage">
+    {{ validationMessage }}
+  </div>
+  <div class="status" *ngIf="measurementActive && !reconnecting && !validationMessage">
     Mérés folyamatban… ({{ currentTabletIndex }}/{{ selectedCount }})
+  </div>
+  <div class="status warning" *ngIf="measurementActive && reconnecting && reconnectMessage">
+    {{ reconnectMessage }}
   </div>
   <div class="status success" *ngIf="!measurementActive && successMessage">
     {{ successMessage }}

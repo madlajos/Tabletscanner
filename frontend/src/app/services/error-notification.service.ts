@@ -42,17 +42,28 @@ export class ErrorNotificationService {
   
 
   addError(error: AppError): void {
-    if (error.code && (error.code.startsWith("E2") || error.code.startsWith("E13"))) {
+    // Respect explicitly provided popupStyle. Only auto-set for measurement errors if not provided.
+    if (!error.popupStyle && error.code && (error.code.startsWith("E2") || error.code.startsWith("E13"))) {
       error.popupStyle = 'center';
       error.abortMeasurement = true;
     }
+    
     const currentErrors = this.errorsSubject.value;
-    if (!currentErrors.find(err => err.code === error.code)) {
+    const existingIndex = currentErrors.findIndex(err => err.code === error.code);
+    
+    if (existingIndex === -1) {
+      // New error — add it
       if (!error.message) {
         error.message = this.getMessage(error.code);
       }
       console.debug("Adding error to subject:", error);
       this.errorsSubject.next([...currentErrors, error]);
+    } else if (error.popupStyle === 'center' && currentErrors[existingIndex].popupStyle !== 'center') {
+      // Replace existing error with center-popup version (e.g., after 30s reconnection timeout)
+      const updated = [...currentErrors];
+      updated[existingIndex] = { ...currentErrors[existingIndex], ...error };
+      console.debug("Updating error with center-error-popup:", updated[existingIndex]);
+      this.errorsSubject.next(updated);
     }
   }
   

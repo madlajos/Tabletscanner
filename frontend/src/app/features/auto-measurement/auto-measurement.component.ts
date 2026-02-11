@@ -9,6 +9,7 @@ import {
   TabletStepRequest
 } from '../../services/auto-measurement.service';
 import { SharedService } from '../../shared.service';
+import { ErrorNotificationService } from '../../services/error-notification.service';
 import { BASE_URL } from '../../api-config';
 
 // Interface for tablet position calculation
@@ -95,6 +96,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   successMessage: string | null = null;
   validationMessage: string | null = null;
 
+  // Reconnection state during auto-measurement
+  reconnecting = false;
+  reconnectMessage: string | null = null;
+  private reconnectTimer: ReturnType<typeof setInterval> | null = null;
+
   // Context menu state for tablet grid
   tabletContextMenuVisible = false;
   tabletContextMenuX = 0;
@@ -106,6 +112,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   constructor(
     private autoService: AutoMeasurementService,
     private sharedService: SharedService,
+    private errorNotificationService: ErrorNotificationService,
     private http: HttpClient
   ) {}
 
@@ -550,6 +557,23 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       },
       error: (err) => {
         console.error('Failed to home motion platform:', err);
+
+        if (this.stopRequested) {
+          this.finishMeasurement(false);
+          return;
+        }
+
+        // Detect USB disconnect during homing
+        if (this.isDeviceDisconnectError(err)) {
+          const device = this.detectDisconnectedDevice(err);
+          this.attemptDeviceReconnect(
+            device,
+            'homing',
+            () => this.homeMotionPlatformThenProceed(indices)
+          );
+          return;
+        }
+
         this.errorMessage = 'Hiba: Nem sikerült pozicionálni a mozgásplatformot.';
         this.finishMeasurement(false);
       }
@@ -597,6 +621,14 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       this.homingSubscription.unsubscribe();
       this.homingSubscription = null;
     }
+
+    // Cancel reconnection timer
+    if (this.reconnectTimer) {
+      clearInterval(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnecting = false;
+    this.reconnectMessage = null;
   }
 
   private async processTabletQueue(indices: number[], queueIndex: number): Promise<void> {
@@ -675,17 +707,191 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         }
       },
       error: (err) => {
-        if (!this.stopRequested) {
-          this.errorMessage = err?.error?.message ?? `Szerver hiba a ${tabletId}. tabletta mérésekor.`;
-        }
         this.currentTabletSubscription?.unsubscribe();
         this.currentTabletSubscription = null;
+
+        if (this.stopRequested) {
+          this.finishMeasurement(false);
+          return;
+        }
+
+        // Check if this is a device disconnect
+        if (this.isDeviceDisconnectError(err)) {
+          const device = this.detectDisconnectedDevice(err);
+          this.attemptDeviceReconnect(
+            device,
+            `tabletta ${tabletId}`,
+            () => this.processTabletQueue(indices, queueIndex)
+          );
+          return;
+        }
+
+        this.errorMessage = err?.error?.message ?? `Szerver hiba a ${tabletId}. tabletta mérésekor.`;
         this.finishMeasurement(false);
       }
     });
   }
 
+  // ===== Device disconnect detection helpers =====
+
+  /**
+   * Check if an HTTP error indicates a device (motion platform or camera) disconnect.
+   */
+  private isDeviceDisconnectError(err: any): boolean {
+    const code = err?.error?.code;
+    const details = err?.error?.details || err?.error?.message || err?.error?.error || '';
+    const status = err?.status;
+
+    // Motion platform: E1201 with 503
+    if (code === 'E1201' && status === 503) return true;
+
+    // Camera: E1111 with 503
+    if (code === 'E1111' && status === 503) return true;
+
+    // Serial exception wrapped in 500
+    if (status === 500 && (
+      details.includes('SerialException') ||
+      details.includes('PermissionError') ||
+      details.includes('WriteFile failed') ||
+      details.includes('ClearCommError')
+    )) return true;
+
+    // Camera disconnect in 500
+    if (status === 500 && (
+      details.includes('Camera not ready') ||
+      details.includes('Camera disconnected') ||
+      details.includes('Grab failed') ||
+      details.includes('Failed to grab') ||
+      details.includes('physically removed') ||
+      details.includes('not open')
+    )) return true;
+
+    return false;
+  }
+
+  /**
+   * Determine which device is disconnected based on the error.
+   * Returns 'motion' or 'camera'.
+   */
+  private detectDisconnectedDevice(err: any): 'motion' | 'camera' {
+    const code = err?.error?.code;
+    if (code === 'E1111') return 'camera';
+
+    const details = err?.error?.details || err?.error?.message || err?.error?.error || '';
+    if (
+      details.includes('Camera not ready') ||
+      details.includes('Camera disconnected') ||
+      details.includes('Grab failed') ||
+      details.includes('Failed to grab') ||
+      details.includes('physically removed') ||
+      details.includes('not open')
+    ) return 'camera';
+
+    return 'motion';
+  }
+
+  /**
+   * Attempt to reconnect to the specified device for up to 30 seconds.
+   * If reconnection succeeds, call resumeCallback to continue the measurement.
+   * If it fails after 30s, show a center-error-popup and stop.
+   *
+   * @param device 'motion' or 'camera'
+   * @param context Human-readable context (e.g. 'homing' or 'tabletta 3')
+   * @param resumeCallback Function to call after successful reconnection
+   */
+  private attemptDeviceReconnect(
+    device: 'motion' | 'camera',
+    context: string,
+    resumeCallback: () => void
+  ): void {
+    const RECONNECT_TIMEOUT_S = 30;
+    const RECONNECT_INTERVAL_MS = 3000;
+    const startTime = Date.now();
+
+    const deviceName = device === 'motion' ? 'Mozgásplatform' : 'Kamera';
+    const errorCode = device === 'motion' ? 'E1201' : 'E1111';
+
+    this.reconnecting = true;
+    this.reconnectMessage = `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás... (0/${RECONNECT_TIMEOUT_S}s)`;
+
+    this.reconnectTimer = setInterval(() => {
+      const elapsedMs = Date.now() - startTime;
+      const elapsedS = Math.round(elapsedMs / 1000);
+
+      // If stop was requested, cancel reconnection
+      if (this.stopRequested) {
+        this.clearReconnectState();
+        this.finishMeasurement(false);
+        return;
+      }
+
+      // Timeout reached — give up
+      if (elapsedMs >= RECONNECT_TIMEOUT_S * 1000) {
+        this.clearReconnectState();
+
+        // Show center-error-popup
+        this.errorNotificationService.addError({
+          code: errorCode,
+          message: `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás sikertelen (${RECONNECT_TIMEOUT_S}s).`,
+          popupStyle: 'center'
+        });
+
+        this.errorMessage = `${deviceName} újracsatlakozás sikertelen (${RECONNECT_TIMEOUT_S}s). Mérés megszakítva.`;
+        this.finishMeasurement(false);
+        return;
+      }
+
+      // Update message with countdown
+      this.reconnectMessage = `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás... (${elapsedS}/${RECONNECT_TIMEOUT_S}s)`;
+
+      // Try to reconnect to the appropriate device
+      const reconnect$ = device === 'motion'
+        ? this.autoService.reconnectMotionPlatform()
+        : this.autoService.reconnectCamera();
+
+      reconnect$.subscribe({
+        next: (resp: any) => {
+          const msg = resp?.message || '';
+          if (msg.includes('failed')) return; // not actually connected
+
+          console.info(`${deviceName} reconnected during auto-measurement:`, msg);
+          this.clearReconnectState();
+
+          // Update shared service so UI reflects the reconnected state
+          if (device === 'motion') {
+            this.sharedService.setMotionPlatformConnectionStatus(true);
+          } else {
+            this.sharedService.setCameraConnectionStatus(true);
+          }
+
+          // Resume the operation
+          this.reconnectMessage = `Újracsatlakozás sikeres. Mérés folytatása...`;
+          setTimeout(() => {
+            this.reconnectMessage = null;
+            resumeCallback();
+          }, 500);
+        },
+        error: () => {
+          // Reconnection attempt failed — timer will try again
+          console.warn(`${deviceName} reconnect attempt failed (${elapsedS}s elapsed)`);
+        }
+      });
+    }, RECONNECT_INTERVAL_MS);
+  }
+
+  private clearReconnectState(): void {
+    if (this.reconnectTimer) {
+      clearInterval(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnecting = false;
+  }
+
   private finishMeasurement(success: boolean): void {
+    // Clean up reconnection state
+    this.clearReconnectState();
+    this.reconnectMessage = null;
+
     this.measurementActive = false;
     this.sharedService.setMeasurementActive(false);
     this.currentTabletId = null;

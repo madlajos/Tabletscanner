@@ -1,11 +1,11 @@
 {
     "camera_params_dome": {
-        "ExposureTime": 600.0,
+        "ExposureTime": 1500.0,
         "Gain": 0.0,
         "Gamma": 1.0
     },
     "camera_params_bar": {
-        "ExposureTime": 30000.0,
+        "ExposureTime": 40000.0,
         "Gain": 0.0,
         "Gamma": 1.0
     },
@@ -14,9 +14,9 @@
         "save_location": "D:/",
         "background_subtraction": true,
         "save_settings": false,
-        "camera_settings_file": "C:/Users/madla/OneDrive/Desktop/vilagos.pfs",
+        "camera_settings_file": "D:/source/Tabletscanner/backend/a2A4508-20ucBAS_40697387.pfs",
         "spacer_rings": "0",
-        "settings_preset_name": "test3"
+        "settings_preset_name": "ok"
     },
     "auto_measurement_settings": {
         "save_location": "D:/"
