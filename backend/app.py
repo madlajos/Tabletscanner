@@ -867,17 +867,32 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
 
     all_noop = True
     curr_pos = getattr(globals, "last_toolhead_pos", {})
+
+    # If cached position has None values, try a live M114 query to refresh
+    if any(curr_pos.get(ax) is None for ax in planned):
+        try:
+            live_pos = motioncontrols.get_toolhead_position(motion_platform, timeout=0.4)
+            if live_pos and all(k in live_pos and isinstance(live_pos[k], (int, float)) for k in ('x', 'y', 'z')):
+                globals.last_toolhead_pos = live_pos
+                curr_pos = live_pos
+                app.logger.info(f"Refreshed cached position via M114: {live_pos}")
+        except Exception as e:
+            app.logger.warning(f"Live M114 query failed, using cached position: {e}")
+
+    # Check if this is a noop (already at target). If any axis position is
+    # unknown we cannot determine noop, so skip the check and send the move
+    # anyway — the board enforces its own travel limits.
+    position_known = True
     for ax, clamped_val in planned.items():
         curr = curr_pos.get(ax)
         if curr is None:
-            return {
-                'status': 'error',
-                'message': f'Axis {ax.upper()} not homed; position unknown.'
-            }, 409
+            position_known = False
+            all_noop = False
+            break
         if not math.isclose(float(curr), float(clamped_val), abs_tol=_EPS):
             all_noop = False
 
-    if all_noop:
+    if all_noop and position_known:
         return {
             'status': 'success',
             'requested': requested,
@@ -913,6 +928,10 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
             'status': 'error',
             'message': str(e)
         }, 500
+
+    # Update cached position with the planned values
+    for ax, val in planned.items():
+        globals.last_toolhead_pos[ax] = float(val)
 
     return {
         'status': 'success',
@@ -1013,8 +1032,9 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     # Background subtraction: save masked version alongside original
     if background_subtraction:
         try:
-            masked, hull, mask = bgr_main.largest_object_hull_otsu_mask(img_cv)
-            if masked is not None:
+            mask, kind, metrics = bgr_main.make_object_mask_from_bgr(img_cv)
+            if mask is not None and np.any(mask):
+                masked = bgr_main.apply_mask_zero_background(img_cv, mask)
                 masked_path = os.path.join(target_folder, f"{filename}_masked.jpg")
                 bgr_main.save_bgr_image_keep_exif(
                     image_bgr=masked,
@@ -1022,7 +1042,7 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
                     dst_image_path=masked_path
                 )
                 saved_paths.append(masked_path)
-                app.logger.info(f"Background-subtracted image saved: {masked_path}")
+                app.logger.info(f"Background-subtracted image saved: {masked_path} (kind={kind})")
             else:
                 app.logger.warning(f"Background subtraction found no object in {filename}")
         except Exception as e:
@@ -1584,8 +1604,9 @@ def save_raw_image_endpoint():
     bg_sub_enabled = bool(settings_data.get('other_settings', {}).get('background_subtraction', False))
     if bg_sub_enabled:
         try:
-            masked, hull, mask = bgr_main.largest_object_hull_otsu_mask(img_cv)
-            if masked is not None:
+            mask, kind, metrics = bgr_main.make_object_mask_from_bgr(img_cv)
+            if mask is not None and np.any(mask):
+                masked = bgr_main.apply_mask_zero_background(img_cv, mask)
                 base, ext = os.path.splitext(full_path)
                 masked_path = f"{base}_masked{ext}"
                 bgr_main.save_bgr_image_keep_exif(
@@ -1593,7 +1614,7 @@ def save_raw_image_endpoint():
                     src_image_path=full_path,
                     dst_image_path=masked_path
                 )
-                app.logger.info(f"Background-subtracted image saved: {masked_path}")
+                app.logger.info(f"Background-subtracted image saved: {masked_path} (kind={kind})")
             else:
                 app.logger.warning("Background subtraction found no object in saved image")
         except Exception as e:

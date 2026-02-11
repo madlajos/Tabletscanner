@@ -1,8 +1,42 @@
+
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
+
 import os
 import glob
+
+def grayscale_difference_score(img_bgr, roi=None, blur_ksize=5):
+    """
+    Visszaad:
+      - std_gray: szürkeárnyalat szórása (globális különbség)
+      - mean_abs_diff: átlagtól vett abszolút eltérés átlaga
+      - min_gray, max_gray: tartomány
+    """
+    if roi is not None:
+        x, y, w, h = roi
+        img_bgr = img_bgr[y:y+h, x:x+w]
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    if blur_ksize and blur_ksize > 0:
+        gray = cv2.GaussianBlur(gray, (blur_ksize, blur_ksize), 0)
+
+    gray = gray.astype(np.float32)
+
+    mean_gray = np.mean(gray)
+    std_gray = float(np.std(gray))
+
+    mean_abs_diff = float(np.mean(np.abs(gray - mean_gray)))
+
+    min_gray = float(np.min(gray))
+    max_gray = float(np.max(gray))
+    print(std_gray, mean_abs_diff, min_gray, max_gray)
+    return std_gray, mean_abs_diff, min_gray, max_gray
+
+
+
+
+
 def edge_definition_score(frame_bgr, ring_width=5):
     """
     Objektum-háttér perem definíció:
@@ -52,20 +86,29 @@ def edge_definition_score(frame_bgr, ring_width=5):
     return round(float(np.mean(vals)), 4)
 
 # ---- 1. Focus score számoló függvény ----
-def process_frame(frame, roi=None):
-    # ROI kivágása, ha van
+def process_frame(frame, roi=None,
+                  w_sobel=0.6,
+                  w_lap=0.4):
     if roi is not None:
         x, y, w, h = roi
         frame = frame[y:y+h, x:x+w]
 
-    frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    gradient_x = cv2.Sobel(frame_gray, cv2.CV_64F, 1, 0, ksize=3)
-    gradient_y = cv2.Sobel(frame_gray, cv2.CV_64F, 0, 1, ksize=3)
-    gradient_magnitude = np.sqrt(gradient_x ** 2 + gradient_y ** 2)
+    # enyhe blur → zaj ellen
+    gray_blur = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    focus_score = round(np.mean(gradient_magnitude), 4)
-    return focus_score
+    # Sobel
+    sx = cv2.Sobel(gray_blur, cv2.CV_64F, 1, 0, ksize=3)
+    sy = cv2.Sobel(gray_blur, cv2.CV_64F, 0, 1, ksize=3)
+    sobel_mag = np.sqrt(sx*sx + sy*sy)
+    sobel_score = np.mean(sobel_mag)
+
+    # Laplacian
+    lap = cv2.Laplacian(gray_blur, cv2.CV_64F, ksize=3)
+    lap_score = lap.var()
+
+    return round(float(w_sobel*sobel_score + w_lap*lap_score), 4)
 
 def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, show_debug=False):
     """
@@ -186,3 +229,127 @@ def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, sho
 
     return square_roi
 
+
+
+def _square_bbox_from_contour(c, pad, w, h):
+    x, y, ww, hh = cv2.boundingRect(c)
+
+    cx = x + ww / 2.0
+    cy = y + hh / 2.0
+
+    side = int(np.ceil(max(ww, hh) + 2 * pad))
+
+    x1 = int(np.floor(cx - side / 2.0))
+    y1 = int(np.floor(cy - side / 2.0))
+    x2 = x1 + side
+    y2 = y1 + side
+
+    # clamp
+    x1 = max(0, x1); y1 = max(0, y1)
+    x2 = min(w, x2); y2 = min(h, y2)
+
+    # ha clamp miatt nem lett négyzet, a közös legkisebb oldalt vesszük
+    side2 = min(x2 - x1, y2 - y1)
+    x2 = x1 + side2
+    y2 = y1 + side2
+
+    return x1, y1, x2, y2
+
+
+def init_fixed_roi_state_from_frame(first_frame_bgr, ring_width=6):
+    """
+    FIX ROI állapot a te tesztkódod szerint:
+    - Otsu + legnagyobb kontúr -> objektum maszk
+    - kontúr bbox -> NÉGYZET ROI (körülölelő)
+    - roi_mask = objektum maszk ROI-ra vágva
+    - ring = dilate - erode (opcionális, itt bent hagyjuk)
+    """
+    if first_frame_bgr is None or first_frame_bgr.size == 0:
+        return None
+
+    H, W = first_frame_bgr.shape[:2]
+    gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGR2GRAY)
+    g_full = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    _, bw = cv2.threshold(g_full, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
+    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
+    if fg < bg:
+        bw = 255 - bw
+
+    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    c = max(contours, key=cv2.contourArea)
+
+    mask_full = np.zeros_like(bw)
+    cv2.drawContours(mask_full, [c], -1, 255, thickness=cv2.FILLED)
+    if int(np.count_nonzero(mask_full)) == 0:
+        return None
+
+    pad = int(max(2, ring_width * 2 + 2))
+    x1, y1, x2, y2 = _square_bbox_from_contour(c, pad=pad, w=W, h=H)
+
+    roi_mask = mask_full[y1:y2, x1:x2]
+    if roi_mask.size == 0:
+        return None
+
+    k = max(1, int(ring_width))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
+    dil = cv2.dilate(roi_mask, kernel, iterations=1)
+    ero = cv2.erode(roi_mask, kernel, iterations=1)
+    ring = cv2.subtract(dil, ero)
+
+    return {
+        "x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2),
+        "roi_mask": roi_mask,
+        "ring": ring,
+        "ring_width": int(ring_width),
+    }
+
+
+def lap_obj_score_fixed_roi(frame_bgr, roi_state):
+    """
+    FIX ROI + FIX roi_mask alapján
+    Kombinált fókusz-score:
+        sqrt( lap_obj * sobel_obj )
+
+    - Laplacian: nagyon fókuszérzékeny
+    - Sobel: stabil él/struktúra mérő
+    - Geometriai átlag: csak akkor nagy, ha mindkettő nagy
+    """
+
+    if frame_bgr is None or frame_bgr.size == 0 or roi_state is None:
+        return None
+
+    x1, y1, x2, y2 = roi_state["x1"], roi_state["y1"], roi_state["x2"], roi_state["y2"]
+    roi_mask = roi_state["roi_mask"]
+
+    roi_bgr = frame_bgr[y1:y2, x1:x2]
+    if roi_bgr.size == 0:
+        return None
+
+    roi_gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    g = cv2.GaussianBlur(roi_gray, (5, 5), 0)
+
+    # ---- Laplacian ----
+    lap = cv2.Laplacian(g, cv2.CV_32F, ksize=3)
+    lap_vals = np.abs(lap)[roi_mask > 0]
+    if lap_vals.size == 0:
+        return 0.0
+    lap_score = float(np.mean(lap_vals))
+
+    # ---- Sobel magnitude ----
+    sx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    sy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(sx, sy)
+
+    sob_vals = mag[roi_mask > 0]
+    if sob_vals.size == 0:
+        return 0.0
+    sob_score = float(np.mean(sob_vals))
+
+    # ---- Kombinált score (geometriai átlag) ----
+    return float(np.sqrt(lap_score * sob_score))

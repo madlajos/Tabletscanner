@@ -3,6 +3,7 @@
   "E1201": "Asztalvezérlő csatlakozási hiba",
   "E1311": "Kamera profil (.pfs) betöltése sikertelen",
   "E1312": "Beállítás fájl (.tss) betöltése sikertelen",
-  "E1401": "Adatbázis csatlakozási hiba",
+  "E2000": "Hiányzó tabletta",
+  "E2002": "Tabletta pozíció nem megfelelő",
   "GENERIC": "Váratlan hiba lépett fel"
 }

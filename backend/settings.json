@@ -1,6 +1,6 @@
 {
     "camera_params_dome": {
-        "ExposureTime": 1500.0,
+        "ExposureTime": 600.0,
         "Gain": 0.0,
         "Gamma": 1.0
     },

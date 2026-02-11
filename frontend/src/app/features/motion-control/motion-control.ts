@@ -629,10 +629,24 @@ export class MotionControl implements OnInit, OnDestroy {
   }
 
 
-  autoFocusCoarse(): void {
+  async autoFocusCoarse(): Promise<void> {
     this.isAutofocusing = true;
     this.autofocusDone = false;
-    
+
+    // If neither light is on, turn on the dome light before autofocus
+    if (!this.ringLightOn && !this.barLightOn) {
+      try {
+        await this.sendGcode('M106 P0 S0');   // dome on
+        this.ringLightOn = true;
+        this.barLightOn = false;
+        console.log('[MotionControl] Dome light auto-enabled for autofocus');
+        this.sharedService.setActiveLight('dome');
+        this.applyCameraSettingsForLight('dome');
+      } catch (err) {
+        console.error('Failed to turn on dome light before autofocus', err);
+      }
+    }
+
     this.http.post(`${BASE_URL}/autofocus_coarse`, {}).subscribe({
       next: (resp) => {
         console.log('Autofocus response:', resp);
