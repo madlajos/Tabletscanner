@@ -202,6 +202,11 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
         globals.grab_lock = Lock()
         lock = globals.grab_lock
 
+    # Rate-limit error logging: track consecutive errors and last log time
+    consecutive_errors = 0
+    last_error_log_time = 0.0
+    ERROR_LOG_INTERVAL = 5.0  # Log at most once every 5 seconds per error type
+
     try:
         while getattr(globals, "stream_running", False):
             try:
@@ -214,6 +219,9 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
 
                     # Use unified grab+convert function
                     image_bgr = grab_and_convert_frame(cam, timeout_ms=5000)
+
+                # Reset error counter on successful frame
+                consecutive_errors = 0
 
                 # Resize outside the lock
                 if scale_factor and scale_factor != 1.0:
@@ -239,13 +247,27 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
                 )
 
             except Exception as e:
+                error_str = str(e).lower()
                 app.logger.debug(f"Error in video stream loop: {e}")
-                if "Device has been removed" in str(e):
+
+                # Camera physically disconnected — stop the stream
+                if "removed" in error_str or "device has been" in error_str:
+                    app.logger.error(f"Camera disconnected during streaming: {e}")
                     break
-                # For temporary issues like camera not grabbing (during settings changes),
-                # just skip this frame and continue
-                if "Camera not grabbing" not in str(e):
-                    app.logger.warning(f"Video stream error: {e}")
+
+                consecutive_errors += 1
+
+                # Rate-limit warning logs to avoid log spam
+                now = time.time()
+                if "not grabbing" not in error_str:
+                    if now - last_error_log_time >= ERROR_LOG_INTERVAL:
+                        suppressed = f" ({consecutive_errors} errors since last log)" if consecutive_errors > 1 else ""
+                        app.logger.warning(f"Video stream error: {e}{suppressed}")
+                        last_error_log_time = now
+
+                # Back off to avoid tight-looping on persistent errors
+                backoff = min(0.5, 0.05 * consecutive_errors)
+                time.sleep(backoff)
                 continue
 
     finally:

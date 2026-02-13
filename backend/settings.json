@@ -1,6 +1,6 @@
 {
     "camera_params_dome": {
-        "ExposureTime": 600.0,
+        "ExposureTime": 1000.0,
         "Gain": 0.0,
         "Gamma": 1.0
     },
@@ -10,12 +10,12 @@
         "Gamma": 1.0
     },
     "other_settings": {
-        "objective": "100x",
+        "objective": "50x",
         "save_location": "D:/",
         "background_subtraction": true,
         "save_settings": false,
         "camera_settings_file": "D:/source/Tabletscanner/backend/a2A4508-20ucBAS_40697387.pfs",
-        "spacer_rings": "0",
+        "spacer_rings": "1",
         "settings_preset_name": "ok"
     },
     "auto_measurement_settings": {

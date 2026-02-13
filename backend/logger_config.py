@@ -33,7 +33,7 @@ def setup_logger():
     root.addHandler(ch)
 
     # File handler (WARNING+)
-    log_path = os.path.join(get_base_path(), 'zoltek_backend.log')
+    log_path = os.path.join(get_base_path(), 'tabletscanner_backend.log')
     fh = RotatingFileHandler(log_path, maxBytes=10_485_760, backupCount=1, encoding="utf-8")
     fh.setLevel(logging.WARNING)
     fh.setFormatter(formatter)

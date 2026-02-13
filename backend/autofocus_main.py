@@ -536,17 +536,14 @@ def autofocus_coarse(
             interpolation=cv2.INTER_AREA
         )
 
-    std_gray, _, _, _ = grayscale_difference_score(first_frame)
-    
-    print("Standard deviation of grayscale difference:", std_gray)
-    
-    if std_gray < 10:
+    std_gray, mean_abs_diff, min_gray, max_gray = grayscale_difference_score(first_frame)
+    print("Initial grayscale stats: std={:.3f}, mean_abs_diff={:.3f}, min={:.1f}, max={:.1f}".format(std_gray, mean_abs_diff, min_gray, max_gray))
+    if std_gray < 10 and mean_abs_diff <= 5:
         return _err("E2000")
-    if 10 <= std_gray <= 20:
+    if 5 < mean_abs_diff < 10:
         return _err("E2002")
-    if std_gray >= 80:
+    if mean_abs_diff > 100:
         return _err("E2003")
-
     if debug and debug_buffer is not None:
         debug_buffer.append({"stage": "roi_detect", "z": float(current_z), "idx": 0, "frame": first_frame.copy()})
 
