@@ -416,7 +416,7 @@ def final_out_of_frame_check(
 
     # ---- 1 oldal -> ERROR ----
     if touch_count == 1:
-        error_code = "E2002"
+        error_code = "E2004"
         if debug:
             dump_debug_buffer_to_error(debug_buffer, error_code)
         return False, error_code, c
@@ -427,14 +427,14 @@ def final_out_of_frame_check(
         if opposite_ok:
             return True, None, c
         else:
-            error_code = "E2002"
+            error_code = "E2004"
             if debug:
                 dump_debug_buffer_to_error(debug_buffer, error_code)
             return False, error_code, c
 
     # ---- 3 oldal -> ERROR ----
     if touch_count == 3:
-        error_code = "E2002"
+        error_code = "E2004"
         if debug:
             dump_debug_buffer_to_error(debug_buffer, error_code)
         return False, error_code, c
@@ -536,9 +536,16 @@ def autofocus_coarse(
             interpolation=cv2.INTER_AREA
         )
 
-    std_gray, mean_abs_diff, min_gray, max_gray = grayscale_difference_score(first_frame)
+    std_gray, _, _, _ = grayscale_difference_score(first_frame)
+    
+    print("Standard deviation of grayscale difference:", std_gray)
+    
     if std_gray < 10:
         return _err("E2000")
+    if 10 <= std_gray <= 20:
+        return _err("E2002")
+    if std_gray >= 80:
+        return _err("E2003")
 
     if debug and debug_buffer is not None:
         debug_buffer.append({"stage": "roi_detect", "z": float(current_z), "idx": 0, "frame": first_frame.copy()})

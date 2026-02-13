@@ -30,6 +30,8 @@ export interface TabletStepResponse {
   message?: string;
   tablet_index?: number;
   saved_images?: string[];
+  af_error_code?: string;
+  af_error_message?: string;
 }
 
 @Injectable({

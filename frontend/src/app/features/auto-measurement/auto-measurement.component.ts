@@ -81,6 +81,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   // Progress tracking
   currentTabletIndex = 0;  // 1-based index of current tablet being processed
   private completedTablets = new Set<number>();  // Set of completed tablet IDs
+  private failedTablets = new Set<number>();      // Set of tablets with AF errors (E2000/E2002/E2003)
+  private tabletErrors = new Map<number, string>(); // Tablet ID -> error message
   private currentTabletId: number | null = null;  // ID of tablet currently being processed
 
   // Measurement folder path (created at start)
@@ -218,6 +220,23 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     const hasLightSelected = this.lampTop || this.lampSide;
 
     return hasSelected && connected && hasSaveLocation && hasMeasurementName && hasLightSelected;
+  }
+
+  // Get info message to show when button is enabled
+  getInfoMessage(): string | null {
+    // Only show info message when:
+    // 1. Not currently measuring
+    // 2. Button is enabled (canStart returns true)
+    // 3. No validation message is being shown
+    if (this.measurementActive || this.validationMessage) {
+      return null;
+    }
+    
+    if (this.canStart()) {
+      return 'Ellenőrizze a mentési beállításokat!';
+    }
+    
+    return null;
   }
 
   // ===== Tablet context menu =====
@@ -375,14 +394,21 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     return this.completedTablets.has(id);
   }
 
+  isDotFailed(id: number): boolean {
+    return this.failedTablets.has(id);
+  }
+
   isDotInProgress(id: number): boolean {
     return this.currentTabletId === id;
   }
 
   // Determine dot state for CSS class binding
-  getDotState(id: number): 'completed' | 'in-progress' | 'pending' | 'none' {
+  getDotState(id: number): 'completed' | 'failed' | 'in-progress' | 'pending' | 'none' {
     if (this.isDotCompleted(id)) {
       return 'completed';
+    }
+    if (this.isDotFailed(id)) {
+      return 'failed';
     }
     if (this.isDotInProgress(id)) {
       return 'in-progress';
@@ -459,6 +485,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.rangeAnchorSignal.set(null);
     this.hoverIndexSignal.set(null);
     this.completedTablets.clear();
+    this.failedTablets.clear();
+    this.tabletErrors.clear();
     this.currentTabletId = null;
     this.currentTabletIndex = 0;
     this.errorMessage = null;
@@ -500,6 +528,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.validationMessage = null;
     this.stopRequested = false;
     this.completedTablets.clear();
+    this.failedTablets.clear();
+    this.tabletErrors.clear();
     this.currentTabletId = null;
     this.currentTabletIndex = 0;
 
@@ -676,8 +706,17 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         }
 
         if (resp.status === 'success') {
-          // Mark tablet as completed
-          this.completedTablets.add(tabletId);
+          // Check if autofocus flagged an error (tablet missing, exposure issue, position issue)
+          const AF_ERROR_CODES = ['E2000', 'E2002', 'E2003', 'E2004'];
+          if (resp.af_error_code && AF_ERROR_CODES.includes(resp.af_error_code)) {
+            // Mark tablet as failed (red) and store the error message
+            this.failedTablets.add(tabletId);
+            this.tabletErrors.set(tabletId, resp.af_error_message ?? resp.af_error_code);
+            this.errorMessage = `${tabletId}. tabletta: ${resp.af_error_message ?? resp.af_error_code}`;
+          } else {
+            // Mark tablet as completed (green)
+            this.completedTablets.add(tabletId);
+          }
           
           // Emit saved images to gallery (exclude background-subtracted _masked images)
           if (resp.saved_images && resp.saved_images.length > 0) {
@@ -897,9 +936,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.currentTabletId = null;
     
     if (this.stopRequested) {
-      this.successMessage = `Mérés leállítva. ${this.completedTablets.size} tabletta mérése kész.`;
+      const failedNote = this.failedTablets.size > 0 ? ` ${this.failedTablets.size} hibás.` : '';
+      this.successMessage = `Mérés leállítva. ${this.completedTablets.size} tabletta mérése kész.${failedNote}`;
     } else if (success) {
-      this.successMessage = `Mérés sikeresen befejezve. ${this.completedTablets.size} tabletta mérése kész.`;
+      const failedNote = this.failedTablets.size > 0 ? ` ${this.failedTablets.size} hibás.` : '';
+      this.successMessage = `Mérés sikeresen befejezve. ${this.completedTablets.size} tabletta mérése kész.${failedNote}`;
       this.scheduleBedMoveToZero();
     }
     // Error message is set in processTabletQueue if there was an error

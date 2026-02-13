@@ -4,6 +4,8 @@
   "E1311": "Kamera profil (.pfs) betöltése sikertelen",
   "E1312": "Beállítás fájl (.tss) betöltése sikertelen",
   "E2000": "Hiányzó tabletta",
-  "E2002": "Tabletta pozíció nem megfelelő",
+  "E2002": "Túl alacsony expozíciós idő az AutoFocus-hoz",
+  "E2003": "Túl magas expozíciós idő az AutoFocus-hoz",
+  "E2004": "Tabletta pozíció nem megfelelő",
   "GENERIC": "Váratlan hiba lépett fel"
 }

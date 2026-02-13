@@ -327,7 +327,7 @@
   }
 }
 
-/* Completed state (green) - tablets that have been measured */
+/* Completed state (green) – tablets that have been measured */
 .tablet-dot.completed {
   background-color: #2e7d32;
   box-shadow: 0 0 8px rgba(46, 125, 50, 0.9);
@@ -340,6 +340,23 @@
 }
 
 .tablet-dot.completed .tablet-number {
+  color: #f9f9f9;
+  font-weight: 500;
+}
+
+/* Failed state (red) – tablets where autofocus returned E2000/E2002/E2003 */
+.tablet-dot.failed {
+  background-color: #c62828;
+  box-shadow: 0 0 8px rgba(198, 40, 40, 0.9);
+}
+
+.tablet-dot.failed:hover {
+  background-color: #e53935;
+  box-shadow: 0 0 10px rgba(198, 40, 40, 0.9);
+  transform: scale(1.1);
+}
+
+.tablet-dot.failed .tablet-number {
   color: #f9f9f9;
   font-weight: 500;
 }
@@ -438,6 +455,12 @@
   color: #f9a825;
   border-color: rgba(249, 168, 37, 0.65);
   box-shadow: 0 0 8px rgba(249, 168, 37, 0.32);
+}
+
+.status.info {
+  color: #64b5f6;
+  border-color: rgba(100, 181, 246, 0.6);
+  box-shadow: 0 0 8px rgba(100, 181, 246, 0.32);
 }
 
 /* Context menu styling */

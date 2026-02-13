@@ -106,6 +106,7 @@
       class="tablet-dot"
       [class.selected]="isDotSelected(id)"
       [class.completed]="isDotCompleted(id)"
+      [class.failed]="isDotFailed(id)"
       [class.in-progress]="isDotInProgress(id)"
       [class.pending]="getDotState(id) === 'pending' && measurementActive"
       (click)="onDotClick(id)"
@@ -147,6 +148,11 @@
     {{ measurementActive ? 'Mérés leállítása' : 'Mérés indítása' }}
   </button>
 
+  <!-- INFO MESSAGE (shown when button is enabled) -->
+  <div class="status info" *ngIf="!measurementActive && getInfoMessage()">
+    {{ getInfoMessage() }}
+  </div>
+
   <!-- VALIDATION MESSAGE (shown when not measuring) -->
   <div class="status warning" *ngIf="!measurementActive && validationMessage">
     {{ validationMessage }}
@@ -158,6 +164,9 @@
   </div>
   <div class="status" *ngIf="measurementActive && !reconnecting && !validationMessage">
     Mérés folyamatban… ({{ currentTabletIndex }}/{{ selectedCount }})
+  </div>
+  <div class="status error" *ngIf="measurementActive && !reconnecting && errorMessage">
+    {{ errorMessage }}
   </div>
   <div class="status warning" *ngIf="measurementActive && reconnecting && reconnectMessage">
     {{ reconnectMessage }}

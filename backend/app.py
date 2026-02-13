@@ -1257,6 +1257,7 @@ def auto_measurement_step():
         #   - autofocus_enabled is True (user requested it), OR
         #   - autofocus_enabled is False BUT is_first_tablet is True (find focal plane once, then keep Z constant)
         should_autofocus = autofocus_enabled or is_first_tablet
+        af_error_code = None  # Track AF error codes (E2000/E2002/E2003) for the response
         
         if should_autofocus:
             app.logger.info(f"Tablet {tablet_index}: Starting autofocus ({'coarse' if is_first_tablet else 'fine'})")
@@ -1277,6 +1278,7 @@ def auto_measurement_step():
                     globals.last_autofocus_contour = af_result.get("contour")
                 
                 af_status = af_result.get('status', 'ERROR')
+                af_error_code = af_result.get('code')  # e.g. "E2000", "E2002", "E2003"
                 if af_status == 'OK':
                     app.logger.info(f"Tablet {tablet_index}: Autofocus OK at Z={af_result.get('z_rel', '?')}")
                 elif af_status == 'ABORTED':
@@ -1288,7 +1290,19 @@ def auto_measurement_step():
                     }), 200  # Not a server error; user stopped it
                 else:
                     app.logger.warning(f"Tablet {tablet_index}: Autofocus returned {af_status}: {af_result}")
-                    # Continue with image capture anyway — the focus may still be acceptable
+                    # For tablet-quality errors, skip image capture entirely
+                    if af_error_code in ('E2000', 'E2002', 'E2003', 'E2004'):
+                        app.logger.info(f"Tablet {tablet_index}: Skipping image capture (AF error {af_error_code})")
+                        _turn_off_all_lights()
+                        response_data = {
+                            'status': 'success',
+                            'tablet_index': tablet_index,
+                            'saved_images': [],
+                            'af_error_code': af_error_code,
+                            'af_error_message': ERROR_MESSAGES.get(af_error_code, af_error_code)
+                        }
+                        return jsonify(response_data), 200
+                    # For other AF errors, continue with image capture — the focus may still be acceptable
             except (OSError, PermissionError) as e:
                 return _handle_motion_usb_disconnect(motion_platform, f"autofocus tablet {tablet_index}")
             except Exception as e:
@@ -1370,11 +1384,12 @@ def auto_measurement_step():
         _turn_off_all_lights()
         
         app.logger.info(f"Tablet {tablet_index}: Measurement complete ({len(saved_images)} images)")
-        return jsonify({
+        response_data = {
             'status': 'success',
             'tablet_index': tablet_index,
             'saved_images': saved_images
-        }), 200
+        }
+        return jsonify(response_data), 200
         
     except (OSError, PermissionError) as e:
         try:
