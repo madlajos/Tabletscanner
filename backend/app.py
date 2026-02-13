@@ -140,6 +140,60 @@ def retry_operation(operation, max_retries=3, wait=1, exceptions=(Exception,)):
     raise Exception("Operation failed after %d attempts" % max_retries)
 
 
+### Lamp Timeout Monitor ###
+def lamp_timeout_monitor():
+    """
+    Background thread that checks every 10 seconds if lamps have been on for more than 20 seconds.
+    If so, automatically turns them off and sets a flag for the frontend to detect.
+    """
+    LAMP_TIMEOUT_SECONDS = 300
+    CHECK_INTERVAL_SECONDS = 10    # Check every 10 seconds
+    
+    app.logger.info("Lamp timeout monitor thread started")
+    
+    while True:
+        try:
+            time.sleep(CHECK_INTERVAL_SECONDS)
+            
+            current_time = time.time()
+            turned_off_any = False
+            
+            # Check dome light
+            if globals.lamp_dome_on_time is not None:
+                elapsed = current_time - globals.lamp_dome_on_time
+                if elapsed >= LAMP_TIMEOUT_SECONDS:
+                    app.logger.info(f"Dome light auto-off after {elapsed:.0f}s of inactivity")
+                    try:
+                        ser = globals.motion_platform
+                        if ser and ser.is_open:
+                            porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
+                            globals.lamp_dome_on_time = None
+                            turned_off_any = True
+                    except Exception as e:
+                        app.logger.warning(f"Failed to auto-turn off dome light: {e}")
+            
+            # Check bar light
+            if globals.lamp_bar_on_time is not None:
+                elapsed = current_time - globals.lamp_bar_on_time
+                if elapsed >= LAMP_TIMEOUT_SECONDS:
+                    app.logger.info(f"Bar light auto-off after {elapsed:.0f}s of inactivity")
+                    try:
+                        ser = globals.motion_platform
+                        if ser and ser.is_open:
+                            porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)  # bar off
+                            globals.lamp_bar_on_time = None
+                            turned_off_any = True
+                    except Exception as e:
+                        app.logger.warning(f"Failed to auto-turn off bar light: {e}")
+            
+            # Set flag if any lamp was turned off
+            if turned_off_any:
+                globals.lamp_auto_turned_off = True
+                        
+        except Exception as e:
+            app.logger.error(f"Lamp timeout monitor error: {e}")
+
+
 ### Serial Device Functions ###
 # Connect/Disconnect Serial devices
 @app.route('/api/connect-to-motionplatform', methods=['POST'])
@@ -822,6 +876,26 @@ def send_gcode():
             return jsonify({'error': 'Motion platform not connected'}), 503
 
         porthandler.write(ser, command)
+        
+        # Track lamp on/off state for 5-minute auto-off feature
+        cmd_upper = command.strip().upper()
+        if 'M106 P0 S0' in cmd_upper:
+            # Dome light ON (inverted logic: S0 = on)
+            globals.lamp_dome_on_time = time.time()
+            app.logger.debug("Dome light turned ON, timestamp tracked")
+        elif 'M106 P0 S255' in cmd_upper:
+            # Dome light OFF
+            globals.lamp_dome_on_time = None
+            app.logger.debug("Dome light turned OFF, timestamp cleared")
+        elif 'M106 P1 S255' in cmd_upper:
+            # Bar light ON
+            globals.lamp_bar_on_time = time.time()
+            app.logger.debug("Bar light turned ON, timestamp tracked")
+        elif 'M106 P1 S0' in cmd_upper:
+            # Bar light OFF
+            globals.lamp_bar_on_time = None
+            app.logger.debug("Bar light turned OFF, timestamp cleared")
+        
         return jsonify({'message': 'Command sent'}), 200
     except Exception as e:
         app.logger.exception("send_gcode failed")
@@ -948,6 +1022,9 @@ def _turn_on_dome_light():
     if ser and ser.is_open:
         porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)   # bar off
         porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)   # dome on (S0 = on for this inverted setup)
+        # Track dome light on time for 5-minute auto-off
+        globals.lamp_dome_on_time = time.time()
+        globals.lamp_bar_on_time = None
 
 def _turn_on_bar_light():
     """Turn on bar light (M106 P1 S255) and turn off dome light (M106 P0 S255)."""
@@ -955,6 +1032,9 @@ def _turn_on_bar_light():
     if ser and ser.is_open:
         porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
         porthandler.write_and_wait(ser, "M106 P1 S255", timeout=2.0)  # bar on
+        # Track bar light on time for 5-minute auto-off
+        globals.lamp_bar_on_time = time.time()
+        globals.lamp_dome_on_time = None
 
 def _turn_off_all_lights():
     """Turn off both lights. Silently ignores errors if serial port is disconnected."""
@@ -968,6 +1048,9 @@ def _turn_off_all_lights():
             porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)    # bar off
         except Exception:
             pass
+    # Clear lamp on times
+    globals.lamp_dome_on_time = None
+    globals.lamp_bar_on_time = None
 
 def _apply_camera_settings_for_light(light: str):
     """Apply camera settings for specific light (dome or bar)."""
@@ -1900,6 +1983,25 @@ def turn_off_all_lights_endpoint():
         app.logger.exception("Error turning off lights")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/check-lamp-auto-off', methods=['GET'])
+def check_lamp_auto_off():
+    """
+    Check if lamps were automatically turned off by the timeout monitor.
+    Returns the flag state and clears it.
+    """
+    try:
+        auto_off = globals.lamp_auto_turned_off
+        if auto_off:
+            globals.lamp_auto_turned_off = False  # Clear the flag after reading
+        return jsonify({
+            "auto_turned_off": auto_off,
+            "dome_on": globals.lamp_dome_on_time is not None,
+            "bar_on": globals.lamp_bar_on_time is not None
+        }), 200
+    except Exception as e:
+        app.logger.exception("Error checking lamp auto-off status")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/select-file', methods=['GET'])
 def select_file():
     """
@@ -2166,6 +2268,13 @@ if __name__ == '__main__':
     load_settings()
     initialize_cameras()
     initialize_serial_devices()
+    
+    # Start lamp timeout monitor thread
+    import threading
+    lamp_monitor = threading.Thread(target=lamp_timeout_monitor, daemon=True, name="LampTimeoutMonitor")
+    lamp_monitor.start()
+    globals.lamp_timeout_thread = lamp_monitor
+    app.logger.info("Lamp timeout monitor thread started")
     
     try:
         app.run(debug=False, use_reloader=False)

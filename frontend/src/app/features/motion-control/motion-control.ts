@@ -45,6 +45,7 @@ export class MotionControl implements OnInit, OnDestroy {
   private measurementActiveSub?: Subscription;
   private motionPositionSub?: Subscription;
   private lightsOffSub?: Subscription;
+  private lampAutoOffPolling?: Subscription;
   isConnected: boolean = false;
 
   // Flag to lock controls during auto-measurement
@@ -108,12 +109,16 @@ export class MotionControl implements OnInit, OnDestroy {
       this.ringLightOn = false;
       this.barLightOn = false;
     });
+
+    // Start polling for lamp auto-off status (5-minute inactivity timeout)
+    this.startLampAutoOffPolling();
   }
 
   ngOnDestroy(): void {
     this.stopConnectionPolling();
     this.stopReconnectionPolling();
     this.stopPositionPolling();
+    this.stopLampAutoOffPolling();
     this.measurementActiveSub?.unsubscribe();
     this.motionPositionSub?.unsubscribe();
     this.lightsOffSub?.unsubscribe();
@@ -262,6 +267,44 @@ export class MotionControl implements OnInit, OnDestroy {
       this.reconnectionPolling.unsubscribe();
       this.reconnectionPolling = undefined;
     }
+  }
+
+  startLampAutoOffPolling(): void {
+    if (this.lampAutoOffPolling && !this.lampAutoOffPolling.closed) {
+      return;
+    }
+    // Poll every 10 seconds to check if backend auto-turned off lamps
+    this.lampAutoOffPolling = interval(10000).subscribe(() => {
+      this.checkLampAutoOff();
+    });
+  }
+
+  stopLampAutoOffPolling(): void {
+    if (this.lampAutoOffPolling && !this.lampAutoOffPolling.closed) {
+      this.lampAutoOffPolling.unsubscribe();
+    }
+    this.lampAutoOffPolling = undefined;
+  }
+
+  checkLampAutoOff(): void {
+    this.http
+      .get<{ auto_turned_off: boolean; dome_on: boolean; bar_on: boolean }>(`${BASE_URL}/check-lamp-auto-off`)
+      .subscribe({
+        next: (response) => {
+          if (response.auto_turned_off) {
+            console.log('Lamps were auto-turned off by backend (5-minute timeout)');
+            // Update UI state to reflect that lamps are now off
+            this.ringLightOn = false;
+            this.barLightOn = false;
+            // Notify shared service
+            this.sharedService.setActiveLight(null);
+          }
+        },
+        error: (error) => {
+          // Silently ignore errors (backend might not be ready)
+          console.debug('Failed to check lamp auto-off status:', error);
+        },
+      });
   }
 
   tryReconnectMotionPlatform(): void {

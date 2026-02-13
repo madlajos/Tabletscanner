@@ -25,3 +25,9 @@ motion_limits = {
     "y": (0.0, 175.0),
     "z": (0.0, 30.0),
 }
+
+# Lamp tracking for 5-minute auto-off
+lamp_dome_on_time = None  # Timestamp when dome light was turned on (None if off)
+lamp_bar_on_time = None   # Timestamp when bar light was turned on (None if off)
+lamp_auto_turned_off = False  # Flag to signal frontend that lamps were auto-turned off
+lamp_timeout_thread = None  # Background thread for monitoring lamp timeouts

@@ -618,15 +618,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       error: (err) => console.warn('Could not send abort signal:', err)
     });
 
-    // Turn off all lights
-    this.http.post(`${BASE_URL}/turn-off-all-lights`, {}).subscribe({
-      next: () => {
-        console.log('All lights turned off');
-        // Emit event to notify other UI components that lights are off
-        this.sharedService.emitLightsOff();
-      },
-      error: (err) => console.warn('Could not turn off lights:', err)
-    });
+    // Note: Lights will be turned off in finishMeasurement()
+    // No need to duplicate the call here
 
     // Cancel any active operations immediately
     this.cancelActiveOperations();
@@ -929,6 +922,16 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     // Clean up reconnection state
     this.clearReconnectState();
     this.reconnectMessage = null;
+
+    // Turn off all lights whenever measurement finishes (success or stopped)
+    this.http.post(`${BASE_URL}/turn-off-all-lights`, {}).subscribe({
+      next: () => {
+        console.log('All lights turned off after measurement completion');
+        // Emit event to notify other UI components that lights are off
+        this.sharedService.emitLightsOff();
+      },
+      error: (err) => console.warn('Could not turn off lights after measurement:', err)
+    });
 
     this.measurementActive = false;
     this.sharedService.setMeasurementActive(false);
