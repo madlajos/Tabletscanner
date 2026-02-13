@@ -1105,6 +1105,25 @@ def _check_devices_connected():
     return motion_platform, camera, None, None
 
 
+def _format_capture_timestamp(dt: datetime) -> str:
+    return dt.strftime("%m%d_%H%M")
+
+
+def _tablet_index_to_label(tablet_index: int, grid_size: int = 10) -> str:
+    try:
+        index = int(tablet_index) - 1
+    except (TypeError, ValueError):
+        return str(tablet_index)
+
+    if index < 0 or index >= grid_size * grid_size:
+        return str(tablet_index)
+
+    col = index % grid_size
+    row = (index // grid_size) + 1
+    letter = chr(65 + col)
+    return f"{letter}{row}"
+
+
 def _capture_image_with_light(light_type: str, measurement_folder: str, measurement_name: str, tablet_index: int, background_subtraction: bool = False) -> list:
     """
     Turn on specified light, apply camera settings, capture and save image.
@@ -1125,8 +1144,9 @@ def _capture_image_with_light(light_type: str, measurement_folder: str, measurem
     _apply_camera_settings_for_light(light_type)
     time.sleep(0.3)  # Let light and camera settings stabilize
     
-    date_str = datetime.now().strftime("%Y%m%d")
-    filename = f"{date_str}_{measurement_name}_{light_type}_{tablet_index:03d}"
+    timestamp = _format_capture_timestamp(datetime.now())
+    tablet_label = _tablet_index_to_label(tablet_index)
+    filename = f"{measurement_name}_{timestamp}_{tablet_label}_{light_type}"
     
     return _capture_and_save_image(measurement_folder, filename, background_subtraction=background_subtraction)
 
@@ -1271,15 +1291,15 @@ def auto_measurement_step():
                 if is_first_tablet:
                     # First tablet: full coarse+fine scan to find the focal plane
                     af_result = autofocus_main.autofocus_coarse(motion_platform)
-                    globals.last_autofocus_contour = af_result.get("final_contour")
                 else:
                     # Subsequent tablets: fine-only around previous best Z
                     af_result = autofocus_main.autofocus_coarse(motion_platform)
-                    globals.last_autofocus_contour = af_result.get("contour")
                 
                 af_status = af_result.get('status', 'ERROR')
                 af_error_code = af_result.get('code')  # e.g. "E2000", "E2002", "E2003"
                 if af_status == 'OK':
+                    contour = af_result.get("final_contour") or af_result.get("contour")
+                    globals.last_autofocus_contour = contour if contour else None
                     app.logger.info(f"Tablet {tablet_index}: Autofocus OK at Z={af_result.get('z_rel', '?')}")
                 elif af_status == 'ABORTED':
                     app.logger.info(f"Tablet {tablet_index}: Autofocus aborted")
@@ -1289,6 +1309,7 @@ def auto_measurement_step():
                         'message': f'Autofocus aborted for tablet {tablet_index}'
                     }), 200  # Not a server error; user stopped it
                 else:
+                    globals.last_autofocus_contour = None
                     app.logger.warning(f"Tablet {tablet_index}: Autofocus returned {af_status}: {af_result}")
                     # For tablet-quality errors, skip image capture entirely
                     if af_error_code in ('E2000', 'E2002', 'E2003', 'E2004'):
@@ -1535,6 +1556,8 @@ def grab_camera_image():
 def save_raw_image_endpoint():
     data = request.get_json() or {}
     target_folder = data.get('target_folder')
+    measurement_name = data.get('measurement_name')
+    light_type = data.get('light_type') or 'dome'
 
     if not target_folder:
         return jsonify({"message": "Cancelled"}), 200
@@ -1573,8 +1596,12 @@ def save_raw_image_endpoint():
         }), 500
 
     # --- Save full-resolution image ---
-    now = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    full_path = os.path.join(target_folder, f"{now}.jpg")
+    if not measurement_name:
+        measurement_name = os.path.basename(os.path.normpath(target_folder)) or "measurement"
+
+    timestamp = _format_capture_timestamp(datetime.now())
+    filename = f"{timestamp}_{light_type}"
+    full_path = os.path.join(target_folder, f"{filename}.jpg")
 
     try:
         # Convert BGR (OpenCV) -> RGB (Pillow)

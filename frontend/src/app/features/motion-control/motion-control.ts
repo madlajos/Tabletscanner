@@ -396,6 +396,7 @@ export class MotionControl implements OnInit, OnDestroy {
   moveToolHeadRelative(axis: string, value: number): void {
     if (this.motorOffState) { console.error('Cannot move toolhead while motors are off.'); return; }
     this.resetMotorOffState();
+    this.autofocusDone = false;
 
     if ((axis === 'x' && !this.xHomed) || (axis === 'y' && !this.yHomed) || (axis === 'z' && !this.zHomed)) {
       console.error(`Cannot move ${axis.toUpperCase()} axis because it is not homed.`);
@@ -439,6 +440,7 @@ export class MotionControl implements OnInit, OnDestroy {
       return;
     }
     this.resetMotorOffState();
+    this.autofocusDone = false;
 
     const xNum = this.toNumberOrUndefined(x);
     const yNum = this.toNumberOrUndefined(y);
