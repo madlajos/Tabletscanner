@@ -238,12 +238,13 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
         next: (resp) => {
           const metadata = resp?.other_settings || {};
 
+          const activeLight = this.currentLight || 'dome';
+
           // Also fetch camera settings to include in metadata
           this.http.get<any>(`${BASE_URL}/get-camera-settings`)
             .subscribe({
               next: (camResp) => {
                 // Add only the currently active light's camera settings to metadata
-                const activeLight = this.currentLight || 'dome'; // default to dome if not set
                 const category = `camera_params_${activeLight}`;
                 if (camResp?.[category]) {
                   metadata[`exposure_time`] = camResp[category]['ExposureTime'];
@@ -256,7 +257,7 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
                   error?: string;
                 }>(
                   `${BASE_URL}/save_raw_image`,
-                  { target_folder: targetDir, metadata }
+                  { target_folder: targetDir, metadata, light_type: activeLight }
                 ).subscribe({
                   next: (res) => {
                     if (res?.path) {
@@ -276,7 +277,10 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
               error: (err) => {
                 console.warn('Could not fetch camera settings; saving with other_settings only.', err);
                 // Fallback: save with only other_settings
-                this.http.post<{ path?: string; message?: string }>(`${BASE_URL}/save_raw_image`, { target_folder: targetDir, metadata }).subscribe({
+                this.http.post<{ path?: string; message?: string }>(
+                  `${BASE_URL}/save_raw_image`,
+                  { target_folder: targetDir, metadata, light_type: activeLight }
+                ).subscribe({
                   next: (res) => {
                     if (res?.path) {
                       console.log(`Image saved to: ${res.path}`);
@@ -291,7 +295,7 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
         error: (err) => {
           console.warn('Could not fetch other_settings; saving without metadata.', err);
           // fallback: save without metadata
-          this.http.post(`${BASE_URL}/save_raw_image`, { target_folder: targetDir }).subscribe({
+          this.http.post(`${BASE_URL}/save_raw_image`, { target_folder: targetDir, light_type: this.currentLight || 'dome' }).subscribe({
             next: () => console.log('Saved image without metadata'),
             error: (e) => console.error('Failed to save image.', e)
           });

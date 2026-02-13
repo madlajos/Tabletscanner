@@ -534,8 +534,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.currentTabletIndex = 0;
 
     // Create measurement folder path
-    const datePrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    this.measurementFolder = `${this.saveLocation}/${datePrefix}_${this.measurementName.trim()}`;
+    this.measurementFolder = `${this.saveLocation}/${this.measurementName.trim()}`;
 
     // Set measurement active (locks UI)
     this.measurementActive = true;
