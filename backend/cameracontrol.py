@@ -276,7 +276,7 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
 
         
 def get_camera(camera_id: str) -> pylon.InstantCamera:
-    factory = pylon.TlFactory.GetInstance()
+    factory = pylon.TlFactory.GetInstance
     devices = factory.EnumerateDevices()
 
     app.logger.info("Connected devices:")

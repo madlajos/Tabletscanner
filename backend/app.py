@@ -31,6 +31,7 @@ from cameracontrol import converter  # if not already imported
 import autofocus_main
 import traceback
 import bgr_main
+import manual_bgr
 
 
 
@@ -116,8 +117,25 @@ def _is_camera_disconnect(exc):
 
 
 def _handle_camera_disconnect(context: str = "operation"):
-    """Handle camera disconnection. Returns (error_json, status_code)."""
+    """Handle camera disconnection. Cleans up stale handle and returns (error_json, status_code)."""
     app.logger.warning(f"Camera disconnected during {context}")
+
+    # Clean up the stale camera handle so the next connect attempt
+    # doesn't short-circuit on a dead IsOpen() handle.
+    cam = getattr(globals, 'camera', None)
+    if cam is not None:
+        try:
+            if cam.IsGrabbing():
+                cam.StopGrabbing()
+        except Exception:
+            pass
+        try:
+            cam.Close()
+        except Exception:
+            pass
+        globals.camera = None
+    globals.stream_running = False
+
     return jsonify({
         'error': ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED, 'Camera disconnected'),
         'code': ErrorCode.CAMERA_DISCONNECTED,
@@ -1426,6 +1444,59 @@ def auto_measurement_step():
             time.sleep(0)
         
         # =====================================================
+        # STEP 3b: Manual contour detection (no AF, BGR on)
+        # =====================================================
+        # When autofocus did NOT run for this tablet but background
+        # subtraction is enabled, we still need a fresh tablet contour.
+        # The dome light produces a reliable outline, so we always use
+        # dome illumination + manual_bgr even if only the bar light
+        # is selected for the actual measurement image.
+        if not should_autofocus and background_subtraction:
+            app.logger.info(f"Tablet {tablet_index}: Getting contour via manual_bgr (no autofocus)")
+            _turn_on_dome_light()
+            _apply_camera_settings_for_light('dome')
+            time.sleep(0.3)  # Let light and camera settings stabilize
+
+            try:
+                mbgr_result = manual_bgr.manual_return()
+                mbgr_status = mbgr_result.get('status', 'ERROR')
+                if mbgr_status == 'OK':
+                    contour = mbgr_result.get('final_contour')
+                    globals.last_autofocus_contour = contour if contour else None
+                    app.logger.info(f"Tablet {tablet_index}: manual_bgr contour obtained")
+                else:
+                    globals.last_autofocus_contour = None
+                    mbgr_code = mbgr_result.get('code', '')
+                    app.logger.warning(
+                        f"Tablet {tablet_index}: manual_bgr returned {mbgr_status} ({mbgr_code})"
+                    )
+                    # Frame-quality errors -> skip image capture for this tablet
+                    if mbgr_code in ('E2104', 'E2105', 'E2106'):
+                        app.logger.info(
+                            f"Tablet {tablet_index}: Skipping image capture (manual_bgr error {mbgr_code})"
+                        )
+                        _turn_off_all_lights()
+                        return jsonify({
+                            'status': 'success',
+                            'tablet_index': tablet_index,
+                            'saved_images': [],
+                            'af_error_code': mbgr_code,
+                            'af_error_message': ERROR_MESSAGES.get(mbgr_code, mbgr_code)
+                        }), 200
+            except (OSError, PermissionError) as e:
+                _turn_off_all_lights()
+                return _handle_motion_usb_disconnect(
+                    motion_platform, f"manual_bgr tablet {tablet_index}"
+                )
+            except Exception as e:
+                if _is_camera_disconnect(e):
+                    _turn_off_all_lights()
+                    return _handle_camera_disconnect(f"manual_bgr tablet {tablet_index}")
+                globals.last_autofocus_contour = None
+                app.logger.warning(f"Tablet {tablet_index}: manual_bgr failed: {e}")
+                # Continue — capture images without background subtraction
+
+        # =====================================================
         # STEP 4: Capture images with selected lights
         # =====================================================
         if lamp_top:
@@ -2075,12 +2146,32 @@ def connect_camera_internal():
         
     selected_cam = devices[0]
 
-    # If already connected, return info.
+    # If already connected, verify the handle is truly alive by reading
+    # a property.  A stale handle after USB disconnect can report IsOpen()
+    # == True but throw on any real operation.
     if globals.camera and globals.camera.IsOpen():
-        return {
-            "connected": True,
-            "name": selected_cam.GetModelName(),
-        }
+        try:
+            # Lightweight liveness check — read a hardware property
+            _ = globals.camera.GetDeviceInfo().GetSerialNumber()
+            globals.camera.Width.GetValue()
+            return {
+                "connected": True,
+                "name": selected_cam.GetModelName(),
+            }
+        except Exception as e:
+            app.logger.warning(f"Existing camera handle is stale ({e}), cleaning up for fresh reconnect")
+            # Handle is dead — clean it up so we fall through to a fresh open
+            try:
+                if globals.camera.IsGrabbing():
+                    globals.camera.StopGrabbing()
+            except Exception:
+                pass
+            try:
+                globals.camera.Close()
+            except Exception:
+                pass
+            globals.camera = None
+            globals.stream_running = False
 
     # Try to open the camera with a small retry loop. On some Windows setups
     # the Pylon SDK can leave the device in a transient state after frequent

@@ -537,7 +537,6 @@ def autofocus_coarse(
         )
 
     std_gray, mean_abs_diff, min_gray, max_gray = grayscale_difference_score(first_frame)
-    print("Initial grayscale stats: std={:.3f}, mean_abs_diff={:.3f}, min={:.1f}, max={:.1f}".format(std_gray, mean_abs_diff, min_gray, max_gray))
     if std_gray < 10 and mean_abs_diff <= 5:
         return _err("E2000")
     if 5 < mean_abs_diff < 10:

@@ -19,6 +19,7 @@ toolhead_z_pos = "?"
 toolhead_homed = False 
 last_best_z = None
 autofocus_abort = False  # Flag to abort autofocus if measurement is stopped
+last_autofocus_contour = None  # Contour from autofocus or manual_bgr for background subtraction
 
 motion_limits = {
     "x": (0.0, 175.0),

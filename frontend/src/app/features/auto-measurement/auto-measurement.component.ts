@@ -102,6 +102,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   reconnecting = false;
   reconnectMessage: string | null = null;
   private reconnectTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectAttemptCount = 0;
+  private static readonly MAX_RECONNECT_CYCLES = 3;
 
   // Context menu state for tablet grid
   tabletContextMenuVisible = false;
@@ -527,6 +529,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.successMessage = null;
     this.validationMessage = null;
     this.stopRequested = false;
+    this.reconnectAttemptCount = 0;
     this.completedTablets.clear();
     this.failedTablets.clear();
     this.tabletErrors.clear();
@@ -842,8 +845,25 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     const deviceName = device === 'motion' ? 'Mozgásplatform' : 'Kamera';
     const errorCode = device === 'motion' ? 'E1201' : 'E1111';
 
+    // Track how many full reconnect cycles have been attempted.
+    // If we keep cycling (connect returns 200 but device is still dead),
+    // stop after MAX_RECONNECT_CYCLES to prevent an infinite loop.
+    this.reconnectAttemptCount++;
+    if (this.reconnectAttemptCount > AutoMeasurementComponent.MAX_RECONNECT_CYCLES) {
+      console.error(`${deviceName} reconnect cycle limit reached (${AutoMeasurementComponent.MAX_RECONNECT_CYCLES}). Stopping measurement.`);
+      this.errorNotificationService.addError({
+        code: errorCode,
+        message: `${deviceName} kapcsolat megszakadt (${context}). Többszöri újracsatlakozás sikertelen.`,
+        popupStyle: 'center'
+      });
+      this.errorMessage = `${deviceName} újracsatlakozás többszöri sikertelen próbálkozás után. Mérés megszakítva.`;
+      this.reconnectAttemptCount = 0;
+      this.finishMeasurement(false);
+      return;
+    }
+
     this.reconnecting = true;
-    this.reconnectMessage = `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás... (0/${RECONNECT_TIMEOUT_S}s)`;
+    this.reconnectMessage = `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás... (0/${RECONNECT_TIMEOUT_S}s) [${this.reconnectAttemptCount}/${AutoMeasurementComponent.MAX_RECONNECT_CYCLES}]`;
 
     this.reconnectTimer = setInterval(() => {
       const elapsedMs = Date.now() - startTime;
@@ -873,7 +893,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       }
 
       // Update message with countdown
-      this.reconnectMessage = `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás... (${elapsedS}/${RECONNECT_TIMEOUT_S}s)`;
+      this.reconnectMessage = `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás... (${elapsedS}/${RECONNECT_TIMEOUT_S}s) [${this.reconnectAttemptCount}/${AutoMeasurementComponent.MAX_RECONNECT_CYCLES}]`;
 
       // Try to reconnect to the appropriate device
       const reconnect$ = device === 'motion'
@@ -887,6 +907,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
           console.info(`${deviceName} reconnected during auto-measurement:`, msg);
           this.clearReconnectState();
+          // Reset cycle counter on successful reconnection
+          this.reconnectAttemptCount = 0;
 
           // Update shared service so UI reflects the reconnected state
           if (device === 'motion') {
