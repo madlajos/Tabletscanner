@@ -1,20 +1,12 @@
-
+# autofocus_back.py
 import cv2
 import numpy as np
 
-import os
-import glob
 
 def grayscale_difference_score(img_bgr, roi=None, blur_ksize=5):
-    """
-    Visszaad:
-      - std_gray: szürkeárnyalat szórása (globális különbség)
-      - mean_abs_diff: átlagtól vett abszolút eltérés átlaga
-      - min_gray, max_gray: tartomány
-    """
     if roi is not None:
         x, y, w, h = roi
-        img_bgr = img_bgr[y:y+h, x:x+w]
+        img_bgr = img_bgr[y:y + h, x:x + w]
 
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -22,103 +14,160 @@ def grayscale_difference_score(img_bgr, roi=None, blur_ksize=5):
         gray = cv2.GaussianBlur(gray, (blur_ksize, blur_ksize), 0)
 
     gray = gray.astype(np.float32)
-
     mean_gray = np.mean(gray)
     std_gray = float(np.std(gray))
-
     mean_abs_diff = float(np.mean(np.abs(gray - mean_gray)))
-
     min_gray = float(np.min(gray))
     max_gray = float(np.max(gray))
     print(std_gray, mean_abs_diff, min_gray, max_gray)
     return std_gray, mean_abs_diff, min_gray, max_gray
 
 
+# ---------------- SCRIPT-LOGIC HELPERS ----------------
+
+def sobel_topk_score(gray_u8, top_k=500):
+    g = cv2.GaussianBlur(gray_u8, (5, 5), 0)
+    sx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    sy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(sx, sy)
+
+    vals = mag.reshape(-1)
+    if vals.size == 0:
+        return 0.0
+
+    kk = int(min(max(1, int(top_k)), vals.size))
+    return float(np.mean(np.partition(vals, -kk)[-kk:]))
 
 
-
-def edge_definition_score(frame_bgr, ring_width=5):
-    """
-    Objektum-háttér perem definíció:
-    - Otsu + legnagyobb kontúr => objektum maszk
-    - ring = dilate(mask) - erode(mask)
-    - score = átlagos Scharr gradiens a ring pixeleken
-
-    Nagyobb = élesebb kontúr.
-    """
-    if frame_bgr is None or frame_bgr.size == 0:
+def largest_inscribed_square_from_mask(mask_u8):
+    if mask_u8 is None or mask_u8.size == 0:
         return None
 
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    m = (mask_u8 > 0).astype(np.uint8)
+    if int(m.sum()) == 0:
+        return None
 
-    # Otsu
-    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    dist = cv2.distanceTransform(m, cv2.DIST_L2, 5)
+    _, maxVal, _, maxLoc = cv2.minMaxLoc(dist)
+    r = float(maxVal)
+    if r <= 1e-6:
+        return None
 
-    # invert ha kell (foreground fehér legyen)
-    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
-    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
+    side = int(np.floor(np.sqrt(2.0) * r))
+    if side < 2:
+        return None
+
+    cx, cy = maxLoc
+    x1 = int(cx - side // 2)
+    y1 = int(cy - side // 2)
+    x2 = x1 + side
+    y2 = y1 + side
+
+    H, W = m.shape[:2]
+
+    if x1 < 0:
+        x2 -= x1
+        x1 = 0
+    if y1 < 0:
+        y2 -= y1
+        y1 = 0
+    if x2 > W:
+        x1 -= (x2 - W)
+        x2 = W
+    if y2 > H:
+        y1 -= (y2 - H)
+        y2 = H
+
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(W, x2)
+    y2 = min(H, y2)
+
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return None
+
+    if np.any(m[y1:y2, x1:x2] == 0):
+        for shrink in range(1, 15):
+            nx1, ny1 = x1 + shrink, y1 + shrink
+            nx2, ny2 = x2 - shrink, y2 - shrink
+            if nx2 - nx1 < 2 or ny2 - ny1 < 2:
+                return None
+            if np.all(m[ny1:ny2, nx1:nx2] > 0):
+                return (nx1, ny1, nx2, ny2)
+        return None
+
+    return (x1, y1, x2, y2)
+
+
+def laplacian_mean_abs(gray_u8):
+    g = cv2.GaussianBlur(gray_u8, (5, 5), 0)
+    lap = cv2.Laplacian(g, cv2.CV_32F, ksize=3)
+    return float(np.mean(np.abs(lap))) if lap.size else 0.0
+
+
+def lap_sq_from_bbox_gray(gray_bbox_u8):
+    """
+    Script szerinti:
+      - bbox gray -> Otsu -> legnagyobb kontúr -> mask
+      - largest inscribed square a maskban
+      - laplacian_mean_abs a square-en
+    """
+    g = cv2.GaussianBlur(gray_bbox_u8, (5, 5), 0)
+    _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    fg = np.mean(gray_bbox_u8[bw == 255]) if np.any(bw == 255) else 0.0
+    bg = np.mean(gray_bbox_u8[bw == 0]) if np.any(bw == 0) else 0.0
     if fg < bg:
         bw = 255 - bw
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        return None
+        return 0.0, None
 
     c = max(contours, key=cv2.contourArea)
-
     mask = np.zeros_like(bw)
     cv2.drawContours(mask, [c], -1, 255, thickness=cv2.FILLED)
 
-    k = max(1, int(ring_width))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
-    dil = cv2.dilate(mask, kernel, iterations=1)
-    ero = cv2.erode(mask, kernel, iterations=1)
-    ring = cv2.subtract(dil, ero)
+    sq = largest_inscribed_square_from_mask(mask)
+    if sq is None:
+        return 0.0, None
 
-    gx = cv2.Scharr(gray, cv2.CV_64F, 1, 0)
-    gy = cv2.Scharr(gray, cv2.CV_64F, 0, 1)
-    mag = np.sqrt(gx * gx + gy * gy)
+    x1, y1, x2, y2 = sq
+    sq_gray = gray_bbox_u8[y1:y2, x1:x2]
+    return laplacian_mean_abs(sq_gray), sq
 
-    vals = mag[ring > 0]
-    if vals.size == 0:
+
+# (Opcionális) kombi-score, ha máshol kell
+def _combine_focus_scores(sobel_topk, lap_sq, eps=1e-12):
+    a = float(max(0.0, sobel_topk))
+    b = float(max(0.0, lap_sq))
+    if a <= eps and b <= eps:
+        return 0.0
+    if a <= eps:
+        return b
+    if b <= eps:
+        return a
+    return float(np.sqrt(a * b))
+
+
+def edge_definition_score(frame_bgr, top_k=500):
+    """
+    Kombinált score: sqrt( sobel_topk * lap_sq )
+    Meghagyva kompatibilitás miatt (AF most nem ezt fogja használni).
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
         return None
 
-    return round(float(np.mean(vals)), 4)
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    sob = sobel_topk_score(gray, top_k=int(top_k))
+    lap, _ = lap_sq_from_bbox_gray(gray)
+    return float(_combine_focus_scores(sob, lap))
 
-# ---- 1. Focus score számoló függvény ----
-def process_frame(frame, roi=None,
-                  w_sobel=0.6,
-                  w_lap=0.4):
-    if roi is not None:
-        x, y, w, h = roi
-        frame = frame[y:y+h, x:x+w]
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # enyhe blur → zaj ellen
-    gray_blur = cv2.GaussianBlur(gray, (3, 3), 0)
-
-    # Sobel
-    sx = cv2.Sobel(gray_blur, cv2.CV_64F, 1, 0, ksize=3)
-    sy = cv2.Sobel(gray_blur, cv2.CV_64F, 0, 1, ksize=3)
-    sobel_mag = np.sqrt(sx*sx + sy*sy)
-    sobel_score = np.mean(sobel_mag)
-
-    # Laplacian
-    lap = cv2.Laplacian(gray_blur, cv2.CV_64F, ksize=3)
-    lap_score = lap.var()
-
-    return round(float(w_sobel*sobel_score + w_lap*lap_score), 4)
-
+# ---------------------------------------------------------------------
+# detect_largest_object_square_roi (marad)
+# ---------------------------------------------------------------------
 def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, show_debug=False):
-    """
-    Legnagyobb objektum maszkját megkeresi, majd olyan négyzet ROI-t ad,
-    ami TELJESEN az objektumon belül van (distance transform alapú).
-
-    square_scale: a bounding box min(w,h)-jának hányad része legyen a négyzet oldala (kezdeti cél).
-    """
-
-    # --- grayscale ---
     if img.ndim == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
@@ -126,16 +175,13 @@ def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, sho
 
     img_h, img_w = gray.shape[:2]
 
-    # --- Otsu threshold ---
     _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # automatikus invert, ha a foreground sötétebb
     foreground_mean = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
     background_mean = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
     if foreground_mean < background_mean:
         bw = 255 - bw
 
-    # --- kontúrok, legnagyobb objektum ---
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         print("Nincs objektum a bináris képen.")
@@ -143,47 +189,36 @@ def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, sho
 
     largest_contour = max(contours, key=cv2.contourArea)
 
-    # maszk a legnagyobb objektumra (hogy a kisebb zaj-komponensek ne zavarjanak)
     obj_mask = np.zeros_like(bw)
     cv2.drawContours(obj_mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
 
     x, y, w, h = cv2.boundingRect(largest_contour)
 
-    width_pct  = (w / img_w) * 100
+    width_pct = (w / img_w) * 100
     height_pct = (h / img_h) * 100
     print(f"Bounding box szelessege: {w} px ({width_pct:.2f} %)")
     print(f"Bounding box magassaga: {h} px ({height_pct:.2f} %)")
 
-    # --- cél oldalméret ---
     side_target = int(min(w, h) * square_scale)
     side_target = max(side_target, 2)
 
-    # --- distance transform: mekkora négyzet "fér el" középen ---
-    # distanceTransform bemenet: 0 háttér, >0 foreground (uint8 OK)
     dist = cv2.distanceTransform((obj_mask > 0).astype(np.uint8), cv2.DIST_L2, 5)
 
-    # csak bbox-on belül keressünk középpontot (gyorsabb + releváns)
     dist_roi = dist[y:y+h, x:x+w]
     if dist_roi.size == 0:
         return None
 
-    # legjobb középpont ott, ahol a dist maximális
     max_loc = np.unravel_index(np.argmax(dist_roi), dist_roi.shape)
     cy = y + int(max_loc[0])
     cx = x + int(max_loc[1])
 
-    # maximum beférhető négyzet oldal (konzervatív): 2*dist(center) - 1
-    # (a -1 csak biztonsági, elhagyható)
     max_side = int(2 * dist[cy, cx] - 1)
     if max_side < 2:
         print("Az objektum túl keskeny, nincs értelmes belső négyzet.")
         return None
 
-    # tényleges side: cél és max korlát közül a kisebb
     side = min(side_target, max_side)
 
-    # segítség: garantáljuk, hogy a négyzet teljesen maszkban van
-    # Ha mégsem (diszkretizálás miatt), csökkentjük.
     def square_fits(cx, cy, side):
         half = side // 2
         x0 = cx - half
@@ -195,7 +230,6 @@ def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, sho
         patch = obj_mask[y0:y1, x0:x1]
         return np.all(patch == 255)
 
-    # csökkentés, amíg befér
     while side >= 2 and not square_fits(cx, cy, side):
         side -= 2
 
@@ -211,10 +245,10 @@ def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, sho
 
     if show_debug:
         vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        cv2.drawContours(vis, [largest_contour], -1, (0, 0, 255), 2)          # piros kontúr
-        cv2.rectangle(vis, (x, y), (x+w, y+h), (0, 255, 0), 2)                # zöld bbox
+        cv2.drawContours(vis, [largest_contour], -1, (0, 0, 255), 2)
+        cv2.rectangle(vis, (x, y), (x+w, y+h), (0, 255, 0), 2)
         cv2.rectangle(vis, (square_roi[0], square_roi[1]),
-                      (square_roi[0]+side, square_roi[1]+side), (255, 0, 0), 2)  # kék négyzet
+                      (square_roi[0] + side, square_roi[1] + side), (255, 0, 0), 2)
 
         text = f"BB: {width_pct:.1f}%, {height_pct:.1f}%, side={side}"
         cv2.putText(vis, text, (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
@@ -228,128 +262,3 @@ def detect_largest_object_square_roi(img, square_scale=0.8, debug_scale=0.3, sho
         cv2.destroyAllWindows()
 
     return square_roi
-
-
-
-def _square_bbox_from_contour(c, pad, w, h):
-    x, y, ww, hh = cv2.boundingRect(c)
-
-    cx = x + ww / 2.0
-    cy = y + hh / 2.0
-
-    side = int(np.ceil(max(ww, hh) + 2 * pad))
-
-    x1 = int(np.floor(cx - side / 2.0))
-    y1 = int(np.floor(cy - side / 2.0))
-    x2 = x1 + side
-    y2 = y1 + side
-
-    # clamp
-    x1 = max(0, x1); y1 = max(0, y1)
-    x2 = min(w, x2); y2 = min(h, y2)
-
-    # ha clamp miatt nem lett négyzet, a közös legkisebb oldalt vesszük
-    side2 = min(x2 - x1, y2 - y1)
-    x2 = x1 + side2
-    y2 = y1 + side2
-
-    return x1, y1, x2, y2
-
-
-def init_fixed_roi_state_from_frame(first_frame_bgr, ring_width=6):
-    """
-    FIX ROI állapot a te tesztkódod szerint:
-    - Otsu + legnagyobb kontúr -> objektum maszk
-    - kontúr bbox -> NÉGYZET ROI (körülölelő)
-    - roi_mask = objektum maszk ROI-ra vágva
-    - ring = dilate - erode (opcionális, itt bent hagyjuk)
-    """
-    if first_frame_bgr is None or first_frame_bgr.size == 0:
-        return None
-
-    H, W = first_frame_bgr.shape[:2]
-    gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGR2GRAY)
-    g_full = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    _, bw = cv2.threshold(g_full, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
-    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
-    if fg < bg:
-        bw = 255 - bw
-
-    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
-    c = max(contours, key=cv2.contourArea)
-
-    mask_full = np.zeros_like(bw)
-    cv2.drawContours(mask_full, [c], -1, 255, thickness=cv2.FILLED)
-    if int(np.count_nonzero(mask_full)) == 0:
-        return None
-
-    pad = int(max(2, ring_width * 2 + 2))
-    x1, y1, x2, y2 = _square_bbox_from_contour(c, pad=pad, w=W, h=H)
-
-    roi_mask = mask_full[y1:y2, x1:x2]
-    if roi_mask.size == 0:
-        return None
-
-    k = max(1, int(ring_width))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
-    dil = cv2.dilate(roi_mask, kernel, iterations=1)
-    ero = cv2.erode(roi_mask, kernel, iterations=1)
-    ring = cv2.subtract(dil, ero)
-
-    return {
-        "x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2),
-        "roi_mask": roi_mask,
-        "ring": ring,
-        "ring_width": int(ring_width),
-    }
-
-
-def lap_obj_score_fixed_roi(frame_bgr, roi_state):
-    """
-    FIX ROI + FIX roi_mask alapján
-    Kombinált fókusz-score:
-        sqrt( lap_obj * sobel_obj )
-
-    - Laplacian: nagyon fókuszérzékeny
-    - Sobel: stabil él/struktúra mérő
-    - Geometriai átlag: csak akkor nagy, ha mindkettő nagy
-    """
-
-    if frame_bgr is None or frame_bgr.size == 0 or roi_state is None:
-        return None
-
-    x1, y1, x2, y2 = roi_state["x1"], roi_state["y1"], roi_state["x2"], roi_state["y2"]
-    roi_mask = roi_state["roi_mask"]
-
-    roi_bgr = frame_bgr[y1:y2, x1:x2]
-    if roi_bgr.size == 0:
-        return None
-
-    roi_gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-    g = cv2.GaussianBlur(roi_gray, (5, 5), 0)
-
-    # ---- Laplacian ----
-    lap = cv2.Laplacian(g, cv2.CV_32F, ksize=3)
-    lap_vals = np.abs(lap)[roi_mask > 0]
-    if lap_vals.size == 0:
-        return 0.0
-    lap_score = float(np.mean(lap_vals))
-
-    # ---- Sobel magnitude ----
-    sx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
-    sy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
-    mag = cv2.magnitude(sx, sy)
-
-    sob_vals = mag[roi_mask > 0]
-    if sob_vals.size == 0:
-        return 0.0
-    sob_score = float(np.mean(sob_vals))
-
-    # ---- Kombinált score (geometriai átlag) ----
-    return float(np.sqrt(lap_score * sob_score))

@@ -1032,7 +1032,9 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     # Background subtraction: save masked version alongside original
     if background_subtraction:
         try:
-            mask, kind, metrics = bgr_main.make_object_mask_from_bgr(img_cv)
+            af_contour = getattr(globals, "last_autofocus_contour", None)
+            print(af_contour)
+            mask, kind, metrics = bgr_main.make_object_mask_from_bgr_rel(img_cv, autofocus_contour = af_contour)
             if mask is not None and np.any(mask):
                 masked = bgr_main.apply_mask_zero_background(img_cv, mask)
                 masked_path = os.path.join(target_folder, f"{filename}_masked.jpg")
@@ -1246,7 +1248,7 @@ def auto_measurement_step():
             return _handle_motion_usb_disconnect(motion_platform, f"move to tablet {tablet_index}")
         
         # Settle time: wait for vibrations to stop so camera gets a still image
-        time.sleep(0.5)
+        time.sleep(0.2)
         
         # =====================================================
         # STEP 3: Autofocus
@@ -1268,9 +1270,11 @@ def auto_measurement_step():
                 if is_first_tablet:
                     # First tablet: full coarse+fine scan to find the focal plane
                     af_result = autofocus_main.autofocus_coarse(motion_platform)
+                    globals.last_autofocus_contour = af_result.get("final_contour")
                 else:
                     # Subsequent tablets: fine-only around previous best Z
-                    af_result = autofocus_main.autofocus_fine_only(motion_platform)
+                    af_result = autofocus_main.autofocus_coarse(motion_platform)
+                    globals.last_autofocus_contour = af_result.get("contour")
                 
                 af_status = af_result.get('status', 'ERROR')
                 if af_status == 'OK':
@@ -1301,7 +1305,7 @@ def auto_measurement_step():
                 return _handle_motion_usb_disconnect(motion_platform, f"post-autofocus tablet {tablet_index}")
             
             # Settle time after autofocus Z movements
-            time.sleep(0.5)
+            time.sleep(0)
         
         # =====================================================
         # STEP 4: Capture images with selected lights
@@ -1604,7 +1608,9 @@ def save_raw_image_endpoint():
     bg_sub_enabled = bool(settings_data.get('other_settings', {}).get('background_subtraction', False))
     if bg_sub_enabled:
         try:
-            mask, kind, metrics = bgr_main.make_object_mask_from_bgr(img_cv)
+            af_contour = getattr(globals, "last_autofocus_contour", None)
+            print(af_contour)
+            mask, kind, metrics = bgr_main.make_object_mask_from_bgr_rel(img_cv, autofocus_contour = af_contour)
             if mask is not None and np.any(mask):
                 masked = bgr_main.apply_mask_zero_background(img_cv, mask)
                 base, ext = os.path.splitext(full_path)
