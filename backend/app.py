@@ -1289,10 +1289,7 @@ def auto_measurement_step():
         lamp_top = bool(data.get('lamp_top', False))
         lamp_side = bool(data.get('lamp_side', False))
         is_first_tablet = bool(data.get('is_first_tablet', False))
-        
-        # Read background subtraction setting from settings.json
-        settings_data = get_settings()
-        background_subtraction = bool(settings_data.get('other_settings', {}).get('background_subtraction', False))
+        background_subtraction = bool(data.get('background_subtraction', False))
         
         if tablet_index is None or x_pos is None or y_pos is None:
             return jsonify({
@@ -1900,7 +1897,7 @@ def open_image():
         return jsonify({"error": "No path specified"}), 400
 
     if not os.path.isfile(path):
-        return jsonify({"error": "File not found"}), 404
+        return jsonify({"success": True, "skipped": True}), 200
 
     try:
         # Windows-only: open with default associated app (typically Photos)
