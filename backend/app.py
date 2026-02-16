@@ -1099,10 +1099,11 @@ def _apply_camera_settings_for_light(light: str):
         except Exception as e:
             app.logger.warning(f"Could not apply {setting_name} for {light}: {e}")
 
-def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False) -> list:
+def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False, light_type: str = None) -> list:
     """Capture image from camera and save to target folder.
     
     If background_subtraction is True, also saves a masked version.
+    Also caches the latest images in globals for the /api/latest_image endpoints.
     
     Returns:
         list of saved file paths (original, and optionally masked)
@@ -1132,6 +1133,12 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     
     saved_paths = [full_path]
     
+    # Cache latest image in globals for external viewing endpoints
+    if light_type == 'dome':
+        globals.latest_dome_image = img_cv.copy()
+    elif light_type == 'bar':
+        globals.latest_bar_image = img_cv.copy()
+    
     # Background subtraction: save masked version alongside original
     if background_subtraction:
         try:
@@ -1147,6 +1154,11 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
                     dst_image_path=masked_path
                 )
                 saved_paths.append(masked_path)
+                # Cache masked image in globals
+                if light_type == 'dome':
+                    globals.latest_dome_masked_image = masked.copy()
+                elif light_type == 'bar':
+                    globals.latest_bar_masked_image = masked.copy()
                 app.logger.info(f"Background-subtracted image saved: {masked_path} (kind={kind})")
             else:
                 app.logger.warning(f"Background subtraction found no object in {filename}")
@@ -1251,7 +1263,7 @@ def _capture_image_with_light(light_type: str, measurement_folder: str, measurem
     tablet_label = _tablet_index_to_label(tablet_index)
     filename = f"{measurement_name}_{timestamp}_{tablet_label}_{light_type}"
     
-    return _capture_and_save_image(measurement_folder, filename, background_subtraction=background_subtraction)
+    return _capture_and_save_image(measurement_folder, filename, background_subtraction=background_subtraction, light_type=light_type)
 
 
 @app.route('/api/auto_measurement/step', methods=['POST'])
@@ -1917,6 +1929,12 @@ def save_raw_image_endpoint():
             "popup": True
         }), 500
 
+    # Cache latest image in globals for external viewing endpoints
+    if light_type == 'dome':
+        globals.latest_dome_image = img_cv.copy()
+    elif light_type == 'bar':
+        globals.latest_bar_image = img_cv.copy()
+
     # Background subtraction: save masked version alongside original if enabled
     masked_path = None
     settings_data = get_settings()
@@ -1935,6 +1953,11 @@ def save_raw_image_endpoint():
                     src_image_path=full_path,
                     dst_image_path=masked_path
                 )
+                # Cache masked image in globals
+                if light_type == 'dome':
+                    globals.latest_dome_masked_image = masked.copy()
+                elif light_type == 'bar':
+                    globals.latest_bar_masked_image = masked.copy()
                 app.logger.info(f"Background-subtracted image saved: {masked_path} (kind={kind})")
             else:
                 app.logger.warning("Background subtraction found no object in saved image")
@@ -2471,6 +2494,90 @@ def shutdown_devices():
     except Exception as e:
         app.logger.debug(f"Error closing motion platform: {e}")      
        
+
+### Latest Image Endpoints ###
+# These endpoints serve the most recently captured images as viewable JPEGs.
+# They are the ONLY endpoints exposed in the compiled (PyInstaller) build.
+
+_LATEST_IMAGE_TYPES = {
+    'dome': 'latest_dome_image',
+    'dome_masked': 'latest_dome_masked_image',
+    'bar': 'latest_bar_image',
+    'bar_masked': 'latest_bar_masked_image',
+}
+
+@app.route('/api/latest_image/<image_type>', methods=['GET'])
+def get_latest_image(image_type):
+    """Serve the latest captured image as a viewable JPEG.
+    
+    Valid image_type values:
+        - dome          : dome light image
+        - dome_masked   : dome light with background subtraction
+        - bar           : bar light image
+        - bar_masked    : bar light with background subtraction
+    """
+    attr_name = _LATEST_IMAGE_TYPES.get(image_type)
+    if attr_name is None:
+        return jsonify({
+            'error': f'Unknown image type: {image_type}. '
+                     f'Valid types: {", ".join(_LATEST_IMAGE_TYPES.keys())}'
+        }), 400
+    
+    img_bgr = getattr(globals, attr_name, None)
+    if img_bgr is None:
+        return jsonify({
+            'error': f'No {image_type} image available yet. Run a measurement first.'
+        }), 404
+    
+    # Encode BGR numpy array to JPEG bytes
+    success, jpeg_buf = cv2.imencode('.jpg', img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if not success:
+        return jsonify({'error': 'Failed to encode image'}), 500
+    
+    return Response(
+        jpeg_buf.tobytes(),
+        mimetype='image/jpeg',
+        headers={'Cache-Control': 'no-cache, no-store, must-revalidate'}
+    )
+
+
+@app.route('/api/latest_images', methods=['GET'])
+def get_latest_images_status():
+    """Return availability status of all latest image types."""
+    status = {}
+    for image_type, attr_name in _LATEST_IMAGE_TYPES.items():
+        img = getattr(globals, attr_name, None)
+        status[image_type] = {
+            'available': img is not None,
+            'url': f'/api/latest_image/{image_type}' if img is not None else None
+        }
+    return jsonify(status), 200
+
+
+# --- Compiled-mode route restriction ---
+# When running as a PyInstaller .exe, only the latest_image endpoints
+# (and health) are accessible. All other API routes are blocked.
+_COMPILED_ALLOWED_PREFIXES = (
+    '/api/latest_image/',
+    '/api/latest_images',
+    '/api/health',
+)
+
+@app.before_request
+def _restrict_routes_in_compiled_mode():
+    """In compiled (frozen) mode, block all endpoints except image serving."""
+    if not getattr(sys, 'frozen', False):
+        return None  # Development mode — allow everything
+    
+    path = request.path
+    for prefix in _COMPILED_ALLOWED_PREFIXES:
+        if path.startswith(prefix) or path == prefix:
+            return None  # Allowed
+    
+    return jsonify({
+        'error': 'This endpoint is not available in standalone mode.',
+    }), 403
+
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
