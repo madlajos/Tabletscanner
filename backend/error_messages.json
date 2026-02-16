@@ -7,5 +7,10 @@
   "E2002": "Túl alacsony expozíciós idő az AutoFocus-hoz",
   "E2003": "Túl magas expozíciós idő az AutoFocus-hoz",
   "E2004": "Tabletta pozíció nem megfelelő",
+  "E2005": "Érvénytelen képformátum",
+  "E2010": "Nincs kép a kamerából",
+  "E2012": "Éldetektálás: gyenge élek",
+  "E2013": "Érvénytelen képformátum (szegmentálás)",
+  "E2014": "Nem található kontúr a képen",
   "GENERIC": "Váratlan hiba lépett fel"
 }

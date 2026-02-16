@@ -32,6 +32,7 @@ import autofocus_main
 import traceback
 import bgr_main
 import manual_bgr
+import check_only
 
 
 
@@ -1492,6 +1493,85 @@ def auto_measurement_step():
                 globals.last_autofocus_contour = None
                 app.logger.warning(f"Tablet {tablet_index}: manual_bgr failed: {e}")
                 # Continue — capture images without background subtraction
+
+        # =====================================================
+        # STEP 3c: Tablet presence check (no AF, no BGR)
+        # =====================================================
+        # When neither autofocus nor background subtraction ran,
+        # we still need to verify that a tablet is present and
+        # correctly positioned. Use check_only's greyscale
+        # difference score and out-of-frame detection.
+        if not should_autofocus and not background_subtraction:
+            app.logger.info(f"Tablet {tablet_index}: Running check_only (no AF, no BGR)")
+            _turn_on_dome_light()
+            _apply_camera_settings_for_light('dome')
+            time.sleep(0.3)  # Let light and camera settings stabilize
+
+            try:
+                from cameracontrol import grab_and_convert_frame
+                cam = globals.camera
+                with globals.grab_lock:
+                    frame_bgr = grab_and_convert_frame(cam, timeout_ms=5000, retries=2)
+
+                # -- Greyscale difference score --
+                gds_result = check_only.grayscale_difference_score(frame_bgr)
+                gds_status = gds_result.get('status', 'ERROR')
+                gds_code = gds_result.get('code', '')
+                if gds_status != 'OK':
+                    app.logger.warning(
+                        f"Tablet {tablet_index}: check_only grayscale_difference_score "
+                        f"returned {gds_status} ({gds_code})"
+                    )
+                    if gds_code in ('E2000', 'E2002', 'E2003', 'E2005'):
+                        app.logger.info(
+                            f"Tablet {tablet_index}: Skipping image capture "
+                            f"(check_only error {gds_code})"
+                        )
+                        _turn_off_all_lights()
+                        return jsonify({
+                            'status': 'success',
+                            'tablet_index': tablet_index,
+                            'saved_images': [],
+                            'af_error_code': gds_code,
+                            'af_error_message': ERROR_MESSAGES.get(gds_code, gds_code)
+                        }), 200
+
+                # -- Final out-of-frame check --
+                oof_result = check_only.final_out_of_frame_check(frame_bgr)
+                oof_status = oof_result.get('status', 'ERROR')
+                oof_code = oof_result.get('code', '')
+                if oof_status != 'OK':
+                    app.logger.warning(
+                        f"Tablet {tablet_index}: check_only final_out_of_frame_check "
+                        f"returned {oof_status} ({oof_code})"
+                    )
+                    if oof_code in ('E2004', 'E2010', 'E2012', 'E2013', 'E2014'):
+                        app.logger.info(
+                            f"Tablet {tablet_index}: Skipping image capture "
+                            f"(check_only error {oof_code})"
+                        )
+                        _turn_off_all_lights()
+                        return jsonify({
+                            'status': 'success',
+                            'tablet_index': tablet_index,
+                            'saved_images': [],
+                            'af_error_code': oof_code,
+                            'af_error_message': ERROR_MESSAGES.get(oof_code, oof_code)
+                        }), 200
+
+                app.logger.info(f"Tablet {tablet_index}: check_only passed")
+
+            except (OSError, PermissionError) as e:
+                _turn_off_all_lights()
+                return _handle_motion_usb_disconnect(
+                    motion_platform, f"check_only tablet {tablet_index}"
+                )
+            except Exception as e:
+                if _is_camera_disconnect(e):
+                    _turn_off_all_lights()
+                    return _handle_camera_disconnect(f"check_only tablet {tablet_index}")
+                app.logger.warning(f"Tablet {tablet_index}: check_only failed: {e}")
+                # Continue — check failure should not block the measurement
 
         # =====================================================
         # STEP 4: Capture images with selected lights
