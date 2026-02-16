@@ -1471,7 +1471,7 @@ def auto_measurement_step():
                         f"Tablet {tablet_index}: manual_bgr returned {mbgr_status} ({mbgr_code})"
                     )
                     # Frame-quality errors -> skip image capture for this tablet
-                    if mbgr_code in ('E2104', 'E2105', 'E2106'):
+                    if mbgr_code in ('E2000', 'E2002', 'E2003', 'E2004', 'E2104', 'E2105', 'E2106'):
                         app.logger.info(
                             f"Tablet {tablet_index}: Skipping image capture (manual_bgr error {mbgr_code})"
                         )

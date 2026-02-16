@@ -112,7 +112,7 @@
       (click)="onDotClick(id)"
       (contextmenu)="onTabletContextMenu($event, id)"
       (mouseenter)="onDotMouseEnter(id)"
-      [title]="'Tabletta ' + id"
+      [title]="getTabletTooltip(id)"
     >
       <span class="tablet-number">{{ getTabletLabel(id) }}</span>
     </div>

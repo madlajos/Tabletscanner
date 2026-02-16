@@ -3,12 +3,17 @@ import cv2
 import numpy as np
 
 
-def grayscale_difference_score(img_bgr, roi=None, blur_ksize=5):
-    if roi is not None:
-        x, y, w, h = roi
-        img_bgr = img_bgr[y:y + h, x:x + w]
-
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+def grayscale_difference_score(img_bgr, blur_ksize=5):
+    if img_bgr is None or img_bgr.size == 0:
+        return None, None, None, None
+    if img_bgr.ndim == 2:
+        gray = img_bgr
+    elif img_bgr.shape[2] == 3:
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    elif img_bgr.shape[2] == 4:
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2GRAY)
+    else:
+        return None, None, None, None
 
     if blur_ksize and blur_ksize > 0:
         gray = cv2.GaussianBlur(gray, (blur_ksize, blur_ksize), 0)

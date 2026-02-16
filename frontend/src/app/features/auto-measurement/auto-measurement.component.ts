@@ -352,6 +352,24 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     return letter + row;
   }
 
+  /**
+   * Returns the tooltip text for a tablet based on its measurement state.
+   */
+  getTabletTooltip(id: number): string {
+    const label = this.getTabletLabel(id);
+    if (this.completedTablets.has(id)) {
+      return `${label} - Sikeres mérés`;
+    }
+    if (this.currentTabletId === id) {
+      return `${label} - Mérés folyamatban`;
+    }
+    if (this.failedTablets.has(id)) {
+      const error = this.tabletErrors.get(id);
+      return error ? `${label} - ${error}` : `${label} - Hiba`;
+    }
+    return label;
+  }
+
   // ===== Folder selection =====
 
   selectSaveFolder(): void {
@@ -707,7 +725,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
             // Mark tablet as failed (red) and store the error message
             this.failedTablets.add(tabletId);
             this.tabletErrors.set(tabletId, resp.af_error_message ?? resp.af_error_code);
-            this.errorMessage = `${tabletId}. tabletta: ${resp.af_error_message ?? resp.af_error_code}`;
+            this.errorMessage = `${this.getTabletLabel(tabletId)} tabletta: ${resp.af_error_message ?? resp.af_error_code}`;
           } else {
             // Mark tablet as completed (green)
             this.completedTablets.add(tabletId);

@@ -137,12 +137,27 @@ def acquire_frame(timeout_ms=2000, retries=2):
     raise RuntimeError("Grab failed")
 
 
+
 # ---------------------------------------------------------------------
 # SCRIPT-style FIXED BBOX (first frame)
 # ---------------------------------------------------------------------
 def init_bbox_state(first_frame_bgr, pad=20):
+    if first_frame_bgr is None or first_frame_bgr.size == 0:
+        return None
     H, W = first_frame_bgr.shape[:2]
-    gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGR2GRAY)
+
+    if first_frame_bgr is None or first_frame_bgr.size == 0:
+        return None
+
+    if first_frame_bgr.ndim == 2:
+        gray = first_frame_bgr
+    elif first_frame_bgr.ndim == 3 and first_frame_bgr.shape[2] == 3:
+        gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGR2GRAY)
+    elif first_frame_bgr.ndim == 3 and first_frame_bgr.shape[2] == 4:
+        gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGRA2GRAY)
+    else:
+        return None
+
     g = cv2.GaussianBlur(gray, (5, 5), 0)
 
     _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -157,6 +172,8 @@ def init_bbox_state(first_frame_bgr, pad=20):
         return None
 
     c = max(contours, key=cv2.contourArea)
+
+
     x, y, ww, hh = cv2.boundingRect(c)
 
     x1 = max(0, x - int(pad))
@@ -179,7 +196,11 @@ def bbox_roi_gray(frame_bgr, bbox_state):
     roi = crop_bbox(frame_bgr, bbox_state)
     if roi is None:
         return None
-    return cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    if roi.ndim == 2:
+        roi = roi
+    else:
+        roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    return roi
 
 
 # ---------------------------------------------------------------------
@@ -217,7 +238,10 @@ def coarse_metrics_on_bbox(frame_bgr, bbox_state, top_k=500):
     if roi is None:
         return None
 
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    if roi.ndim == 2:
+        gray = roi
+    else:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
     sob = float(sobel_topk_score(gray, top_k=int(top_k)))
     lap, _sq = lap_sq_from_bbox_gray(gray)  # <-- tuple
@@ -362,7 +386,7 @@ def final_out_of_frame_check(
               f"(min={float(min_edge_strength):.4f})")
 
         if edge_strength < float(min_edge_strength):
-            error_code = "AF_EDGE_TOO_WEAK"
+            error_code = "E2012"
             if debug:
                 dump_debug_buffer_to_error(debug_buffer, error_code)
             return False, error_code, None
@@ -370,7 +394,15 @@ def final_out_of_frame_check(
     # -----------------------------
     # Teljes képes OTSU szegmentálás
     # -----------------------------
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if frame.ndim == 2:
+        gray = frame
+    elif frame.shape[2] == 3:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    elif frame.shape[2] == 4:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+    else:
+        return False, "E2013", None
+
     H, W = gray.shape[:2]
 
     _, bw = cv2.threshold(gray, 0, 255,
@@ -386,7 +418,7 @@ def final_out_of_frame_check(
     )
 
     if not contours:
-        return True, None, None
+        return False, "E2014", None
 
     c = max(contours, key=cv2.contourArea)
 
@@ -537,6 +569,8 @@ def autofocus_coarse(
         )
 
     std_gray, mean_abs_diff, min_gray, max_gray = grayscale_difference_score(first_frame)
+    if std_gray is None:
+        return _err("E2005")
     if std_gray < 10 and mean_abs_diff <= 5:
         return _err("E2000")
     if 5 < mean_abs_diff < 10:
@@ -548,7 +582,7 @@ def autofocus_coarse(
 
     bbox_state = init_bbox_state(first_frame, pad=20)
     if bbox_state is None:
-        return _err("AF_NO_BBOX")
+        return _err("E2006")
 
     z_list = []
     sobels = []
@@ -564,7 +598,7 @@ def autofocus_coarse(
 
     while z >= float(z_min) - 1e-9:
         if globals.autofocus_abort:
-            return _err("ABORTED")
+            return _err("E2007")
 
         current_z, sob, lap = measure_score(
             motion_platform, current_z, z,
@@ -599,19 +633,19 @@ def autofocus_coarse(
         i += 1
 
     if len(z_list) < 3:
-        return _err("AF_TOO_FEW_POINTS")
+        return _err("E2008")
 
     lz = longest_consecutive_near_zero(laps, eps=float(lap_zero_eps))
     if lz >= int(lap_zero_run_needed):
         if debug:
-            dump_debug_buffer_to_error(debug_buffer, "AF_LAP_TOO_LONG_ZERO")
-        return _err("AF_LAP_TOO_LONG_ZERO")
+            dump_debug_buffer_to_error(debug_buffer, "E2009")
+        return _err("E2009")
 
     ok_peak = has_peak_shape(sobels, prominence_ratio=float(coarse_peak_prominence_ratio))
     if not ok_peak:
         if debug:
-            dump_debug_buffer_to_error(debug_buffer, "AF_NO_PEAK_COARSE_SOBEL")
-        return _err("AF_NO_PEAK_COARSE_SOBEL")
+            dump_debug_buffer_to_error(debug_buffer, "E2010")
+        return _err("E2010")
 
     sob_norm = _normalize_01(sobels)
     lap_norm = _normalize_01(laps)
@@ -619,8 +653,8 @@ def autofocus_coarse(
     crossings = estimate_crossings_linear(z_list, sob_norm, lap_norm)
     if not crossings:
         if debug:
-            dump_debug_buffer_to_error(debug_buffer, "AF_NO_CROSSING")
-        return _err("AF_NO_CROSSING")
+            dump_debug_buffer_to_error(debug_buffer, "E2011")
+        return _err("E2011")
 
     best_cross = pick_best_crossing(crossings)
     _i, _j, best_z, y_star, t = best_cross
