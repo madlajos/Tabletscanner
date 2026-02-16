@@ -1803,6 +1803,43 @@ def save_raw_image_endpoint():
             "popup": True
         }), 400
 
+    # --- Bar light + background subtraction: obtain contour under dome light ---
+    settings_data_pre = get_settings()
+    bg_sub_pre = bool(settings_data_pre.get('other_settings', {}).get('background_subtraction', False))
+
+    if light_type == 'bar' and bg_sub_pre:
+        app.logger.info("Manual save: bar light + BGR — obtaining contour under dome light")
+        try:
+            _turn_on_dome_light()
+            _apply_camera_settings_for_light('dome')
+            time.sleep(0.3)  # Let light and camera settings stabilize
+
+            mbgr_result = manual_bgr.manual_return()
+            mbgr_status = mbgr_result.get('status', 'ERROR')
+            if mbgr_status == 'OK':
+                contour = mbgr_result.get('final_contour')
+                globals.last_autofocus_contour = contour if contour else None
+                app.logger.info("Manual save: dome-light contour obtained for BGR")
+            else:
+                globals.last_autofocus_contour = None
+                mbgr_code = mbgr_result.get('code', '')
+                app.logger.warning(f"Manual save: manual_bgr returned {mbgr_status} ({mbgr_code})")
+
+            # Switch back to bar light for the actual capture
+            _turn_on_bar_light()
+            _apply_camera_settings_for_light('bar')
+            time.sleep(0.3)  # Let light and camera settings stabilize
+        except Exception as e:
+            app.logger.warning(f"Manual save: contour detection under dome light failed: {e}")
+            globals.last_autofocus_contour = None
+            # Restore bar light and continue — save image without background subtraction
+            try:
+                _turn_on_bar_light()
+                _apply_camera_settings_for_light('bar')
+                time.sleep(0.3)
+            except Exception:
+                pass
+
     # --- Grab frame from camera ---
     img = grab_camera_image()  # your existing helper
 
