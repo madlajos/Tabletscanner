@@ -326,11 +326,6 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  clearGallery(): void {
-    this.savedImages = [];
-    this.hideContextMenu();
-  }
-
   private removeImageFromGallery(imagePath: string): void {
     this.savedImages = this.savedImages.filter(img => img.path !== imagePath);
     if (this.contextMenuImage?.path === imagePath) {
