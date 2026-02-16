@@ -134,13 +134,13 @@ def final_out_of_frame_check(
 
         if edge_strength < float(min_edge_strength):
             # csak ERROR dict
-            return _err("E2012", edge_strength=float(edge_strength))
+            return _err("E2112", edge_strength=float(edge_strength))
 
     # -----------------------------
     # Teljes képes OTSU szegmentálás
     # -----------------------------
     if frame is None or frame.size == 0:
-        return _err("E2010")  # opcionális: "no frame"
+        return _err("E2110")  # opcionális: "no frame"
 
     if frame.ndim == 2:
         gray = frame
@@ -149,7 +149,7 @@ def final_out_of_frame_check(
     elif frame.ndim == 3 and frame.shape[2] == 4:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
     else:
-        return _err("E2013")
+        return _err("E2113")
 
     H, W = gray.shape[:2]
 
@@ -163,7 +163,7 @@ def final_out_of_frame_check(
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not contours:
-        return _err("E2014")
+        return _err("E2114")
 
     c = max(contours, key=cv2.contourArea)
 

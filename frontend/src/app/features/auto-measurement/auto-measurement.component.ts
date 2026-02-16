@@ -727,9 +727,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         }
 
         if (resp.status === 'success') {
-          // Check if autofocus flagged an error (tablet missing, exposure issue, position issue)
-          const AF_ERROR_CODES = ['E2000', 'E2002', 'E2003', 'E2004'];
-          if (resp.af_error_code && AF_ERROR_CODES.includes(resp.af_error_code)) {
+          // Check if any E2xxx error was flagged (tablet missing, exposure, position, quality, etc.)
+          if (resp.af_error_code && resp.af_error_code.startsWith('E2')) {
             // Mark tablet as failed (red) and store the error message
             this.failedTablets.add(tabletId);
             this.tabletErrors.set(tabletId, resp.af_error_message ?? resp.af_error_code);

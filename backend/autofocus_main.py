@@ -14,6 +14,11 @@ from autofocus_back import (
     grayscale_difference_score,
     sobel_topk_score,
     lap_sq_from_bbox_gray,
+
+    # a korábban main-ben lévő helper-ek most innen jönnek:
+    rounded_by_curvature_ignore_border,
+    edge_ring_strength_from_roi_gray,
+    largest_contour_from_gray_otsu,
 )
 
 # ---------------------------------------------------------------------
@@ -36,10 +41,6 @@ def ensure_dir(path: str) -> str:
 
 def safe_float_str(x, nd=3) -> str:
     return f"{float(x):.{nd}f}".replace(".", "p").replace("-", "m")
-
-
-def clamp(v, vmin, vmax):
-    return max(vmin, min(vmax, v))
 
 
 def wait_motion_done(motion_platform):
@@ -90,6 +91,26 @@ def _ok(**extra):
 
 
 # ---------------------------------------------------------------------
+# Debug-dump gating (csak bizonyos hibáknál)
+# ---------------------------------------------------------------------
+def should_dump_debug_for_error(error_code: str) -> bool:
+    code = str(error_code)
+
+    # Sobel/Lap "lépkedős" logika hibák
+    sobel_lap_fail_codes = {"E2008", "E2009", "E2010", "E2011"}
+
+    # Rounded / sok éles sarok
+    rounded_fail_codes = {"E2015"}
+
+    return (code in sobel_lap_fail_codes) or (code in rounded_fail_codes)
+
+
+def maybe_dump_debug(debug: bool, debug_buffer, error_code: str) -> None:
+    if debug and debug_buffer is not None and should_dump_debug_for_error(error_code):
+        dump_debug_buffer_to_error(debug_buffer, str(error_code))
+
+
+# ---------------------------------------------------------------------
 # Camera
 # ---------------------------------------------------------------------
 def acquire_frame(timeout_ms=2000, retries=2):
@@ -120,8 +141,10 @@ def acquire_frame(timeout_ms=2000, retries=2):
 
                 frame_bgr = converter.Convert(grab_result).GetArray()
                 return frame_bgr.copy()
+
             except Exception as e:
                 last_error = e
+
             finally:
                 try:
                     if grab_result is not None:
@@ -137,7 +160,6 @@ def acquire_frame(timeout_ms=2000, retries=2):
     raise RuntimeError("Grab failed")
 
 
-
 # ---------------------------------------------------------------------
 # SCRIPT-style FIXED BBOX (first frame)
 # ---------------------------------------------------------------------
@@ -145,9 +167,6 @@ def init_bbox_state(first_frame_bgr, pad=20):
     if first_frame_bgr is None or first_frame_bgr.size == 0:
         return None
     H, W = first_frame_bgr.shape[:2]
-
-    if first_frame_bgr is None or first_frame_bgr.size == 0:
-        return None
 
     if first_frame_bgr.ndim == 2:
         gray = first_frame_bgr
@@ -159,7 +178,6 @@ def init_bbox_state(first_frame_bgr, pad=20):
         return None
 
     g = cv2.GaussianBlur(gray, (5, 5), 0)
-
     _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
@@ -172,8 +190,6 @@ def init_bbox_state(first_frame_bgr, pad=20):
         return None
 
     c = max(contours, key=cv2.contourArea)
-
-
     x, y, ww, hh = cv2.boundingRect(c)
 
     x1 = max(0, x - int(pad))
@@ -197,37 +213,8 @@ def bbox_roi_gray(frame_bgr, bbox_state):
     if roi is None:
         return None
     if roi.ndim == 2:
-        roi = roi
-    else:
-        roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    return roi
-
-
-# ---------------------------------------------------------------------
-# Edge ring strength (blur / weak edge check)
-# ---------------------------------------------------------------------
-def edge_ring_strength_from_roi_gray(roi_gray: np.ndarray, ring_w: int = 5) -> float:
-    if roi_gray is None or roi_gray.size == 0:
-        return 0.0
-
-    H, W = roi_gray.shape[:2]
-    rw = int(max(1, ring_w))
-    if H < 2 * rw + 2 or W < 2 * rw + 2:
-        return 0.0
-
-    gx = cv2.Sobel(roi_gray, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(roi_gray, cv2.CV_32F, 0, 1, ksize=3)
-    mag = cv2.magnitude(gx, gy)
-
-    mask = np.zeros((H, W), dtype=np.uint8)
-    mask[:, :] = 255
-    mask[rw:H - rw, rw:W - rw] = 0  # keep only border ring
-
-    vals = mag[mask == 255]
-    if vals.size == 0:
-        return 0.0
-
-    return float(np.median(vals))
+        return roi
+    return cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
 
 # ---------------------------------------------------------------------
@@ -238,16 +225,10 @@ def coarse_metrics_on_bbox(frame_bgr, bbox_state, top_k=500):
     if roi is None:
         return None
 
-    if roi.ndim == 2:
-        gray = roi
-    else:
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-
+    gray = roi if roi.ndim == 2 else cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     sob = float(sobel_topk_score(gray, top_k=int(top_k)))
-    lap, _sq = lap_sq_from_bbox_gray(gray)  # <-- tuple
-    lap = float(lap)
-
-    return sob, lap
+    lap, _sq = lap_sq_from_bbox_gray(gray)
+    return float(sob), float(lap)
 
 
 # ---------------------------------------------------------------------
@@ -267,7 +248,7 @@ def estimate_crossings_linear(x_vals, sob_norm, lap_norm):
         elif float(d[i]) * float(d[i + 1]) < 0.0:
             di = float(d[i])
             dj = float(d[i + 1])
-            t = di / (di - dj)  # (0..1)
+            t = di / (di - dj)
             xi, xj = float(x_vals[i]), float(x_vals[i + 1])
             x_star = xi + t * (xj - xi)
             y_star = float(sob_norm[i] + t * (sob_norm[i + 1] - sob_norm[i]))
@@ -303,7 +284,7 @@ def has_peak_shape(scores, prominence_ratio=0.05, eps=1e-12) -> bool:
 
 
 # ---------------------------------------------------------------------
-# Debug dump + final check
+# Debug dump
 # ---------------------------------------------------------------------
 def dump_debug_buffer_to_error(debug_buffer, error_code: str) -> str:
     if not debug_buffer:
@@ -341,6 +322,9 @@ def dump_debug_buffer_to_error(debug_buffer, error_code: str) -> str:
     return out_dir
 
 
+# ---------------------------------------------------------------------
+# Final check
+# ---------------------------------------------------------------------
 def final_out_of_frame_check(
     motion_platform,
     current_z,
@@ -354,46 +338,34 @@ def final_out_of_frame_check(
     bbox_state=None,
     edge_ring_width=5,
     min_edge_strength=None,
+
+    do_rounded_check=False,
+    rounded_margin_px=15,
+    rounded_step=12,
+    rounded_angle_threshold_deg=55.0,
+    rounded_max_sharp=20,
+    rounded_min_used=20,
+    rounded_downsample=4,
+    rounded_error_code="E2015",
 ):
     current_z = move_to_virtual_z(motion_platform, current_z, float(target_z))
     frame = acquire_frame(timeout_ms=grab_timeout_ms)
 
     if frame_scale is not None and float(frame_scale) != 1.0:
-        frame = cv2.resize(
-            frame, None,
-            fx=float(frame_scale),
-            fy=float(frame_scale),
-            interpolation=cv2.INTER_AREA
-        )
+        frame = cv2.resize(frame, None, fx=float(frame_scale), fy=float(frame_scale), interpolation=cv2.INTER_AREA)
 
     if debug and debug_buffer is not None:
-        debug_buffer.append({
-            "stage": "final_check",
-            "z": float(target_z),
-            "idx": 0,
-            "frame": frame.copy()
-        })
+        debug_buffer.append({"stage": "final_check", "z": float(target_z), "idx": 0, "frame": frame.copy()})
 
-    # -----------------------------
-    # Edge strength check (opcionális)
-    # -----------------------------
+    # Edge strength check (opcionális) -> NEM dumpolunk (nem kértél rá)
     if (min_edge_strength is not None) and (bbox_state is not None):
         roi_g = bbox_roi_gray(frame, bbox_state)
-        edge_strength = edge_ring_strength_from_roi_gray(
-            roi_g, ring_w=int(edge_ring_width)
-        )
-        print(f"[FINAL_EDGE] edge_strength={edge_strength:.4f} "
-              f"(min={float(min_edge_strength):.4f})")
-
+        edge_strength = edge_ring_strength_from_roi_gray(roi_g, ring_w=int(edge_ring_width))
+        print(f"[FINAL_EDGE] edge_strength={edge_strength:.4f} (min={float(min_edge_strength):.4f})")
         if edge_strength < float(min_edge_strength):
-            error_code = "E2012"
-            if debug:
-                dump_debug_buffer_to_error(debug_buffer, error_code)
-            return False, error_code, None
+            return False, "E2012", None
 
-    # -----------------------------
-    # Teljes képes OTSU szegmentálás
-    # -----------------------------
+    # Gray
     if frame.ndim == 2:
         gray = frame
     elif frame.shape[2] == 3:
@@ -405,78 +377,62 @@ def final_out_of_frame_check(
 
     H, W = gray.shape[:2]
 
-    _, bw = cv2.threshold(gray, 0, 255,
-                          cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
-    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
-    if fg < bg:
-        bw = 255 - bw
-
-    contours, _ = cv2.findContours(
-        bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    if not contours:
+    # Largest contour (back)
+    c = largest_contour_from_gray_otsu(gray)
+    if c is None:
         return False, "E2014", None
-
-    c = max(contours, key=cv2.contourArea)
 
     area = float(cv2.contourArea(c))
     if area < (float(min_area_ratio) * H * W):
         return True, None, c
 
-    x, y, w, h = cv2.boundingRect(c)
+    # Rounded check (back) -> HA BUKIK, dump kell
+    if bool(do_rounded_check):
+        ok_round, info = rounded_by_curvature_ignore_border(
+            c, W, H,
+            margin_px=int(rounded_margin_px),
+            step=int(rounded_step),
+            angle_threshold_deg=float(rounded_angle_threshold_deg),
+            max_sharp=int(rounded_max_sharp),
+            min_used=int(rounded_min_used),
+            downsample=int(rounded_downsample),
+        )
+        print(f"[ROUNDED_CHECK] ok={ok_round} info={info}")
 
-    # -----------------------------
-    # ÚJ SZÉLERINTÉSI LOGIKA
-    # -----------------------------
+        if (ok_round is None) or (ok_round is False):
+            maybe_dump_debug(debug, debug_buffer, str(rounded_error_code))
+            return False, str(rounded_error_code), c
+
+    # Frame touch logic -> NEM dumpolunk (nem kértél rá)
+    x, y, w, h = cv2.boundingRect(c)
     left   = (x <= margin_px)
     top    = (y <= margin_px)
     right  = ((x + w) >= (W - 1 - margin_px))
     bottom = ((y + h) >= (H - 1 - margin_px))
-
     touch_count = int(left) + int(top) + int(right) + int(bottom)
 
-    print(f"[FRAME_TOUCH] "
-          f"L={left} T={top} R={right} B={bottom} "
-          f"count={touch_count}")
+    print(f"[FRAME_TOUCH] L={left} T={top} R={right} B={bottom} count={touch_count}")
 
-    # ---- 0 oldal -> OK ----
     if touch_count == 0:
         return True, None, c
 
-    # ---- 1 oldal -> ERROR ----
     if touch_count == 1:
-        error_code = "E2004"
-        if debug:
-            dump_debug_buffer_to_error(debug_buffer, error_code)
-        return False, error_code, c
+        return False, "E2004", c
 
-    # ---- 2 oldal ----
     if touch_count == 2:
         opposite_ok = (left and right) or (top and bottom)
         if opposite_ok:
             return True, None, c
-        else:
-            error_code = "E2004"
-            if debug:
-                dump_debug_buffer_to_error(debug_buffer, error_code)
-            return False, error_code, c
+        return False, "E2004", c
 
-    # ---- 3 oldal -> ERROR ----
     if touch_count == 3:
-        error_code = "E2004"
-        if debug:
-            dump_debug_buffer_to_error(debug_buffer, error_code)
-        return False, error_code, c
+        return False, "E2004", c
 
-    # ---- 4 oldal -> OK ----
     if touch_count == 4:
         return True, None, c
 
-    # fallback (elvileg nem kell)
     return True, None, c
+
 
 # ---------------------------------------------------------------------
 # Measure at a Z
@@ -515,8 +471,8 @@ def measure_score(
         else:
             sob, lap = float(m[0]), float(m[1])
 
-        sobs.append(sob)
-        laps.append(lap)
+        sobs.append(float(sob))
+        laps.append(float(lap))
 
     sobs.sort()
     laps.sort()
@@ -562,11 +518,7 @@ def autofocus_coarse(
 
     first_frame = acquire_frame(timeout_ms=grab_timeout_ms)
     if frame_scale is not None and float(frame_scale) != 1.0:
-        first_frame = cv2.resize(
-            first_frame, None,
-            fx=float(frame_scale), fy=float(frame_scale),
-            interpolation=cv2.INTER_AREA
-        )
+        first_frame = cv2.resize(first_frame, None, fx=float(frame_scale), fy=float(frame_scale), interpolation=cv2.INTER_AREA)
 
     std_gray, mean_abs_diff, min_gray, max_gray = grayscale_difference_score(first_frame)
     if std_gray is None:
@@ -577,6 +529,7 @@ def autofocus_coarse(
         return _err("E2002")
     if mean_abs_diff > 100:
         return _err("E2003")
+
     if debug and debug_buffer is not None:
         debug_buffer.append({"stage": "roi_detect", "z": float(current_z), "idx": 0, "frame": first_frame.copy()})
 
@@ -633,18 +586,17 @@ def autofocus_coarse(
         i += 1
 
     if len(z_list) < 3:
+        maybe_dump_debug(debug, debug_buffer, "E2008")
         return _err("E2008")
 
     lz = longest_consecutive_near_zero(laps, eps=float(lap_zero_eps))
     if lz >= int(lap_zero_run_needed):
-        if debug:
-            dump_debug_buffer_to_error(debug_buffer, "E2009")
+        maybe_dump_debug(debug, debug_buffer, "E2009")
         return _err("E2009")
 
     ok_peak = has_peak_shape(sobels, prominence_ratio=float(coarse_peak_prominence_ratio))
     if not ok_peak:
-        if debug:
-            dump_debug_buffer_to_error(debug_buffer, "E2010")
+        maybe_dump_debug(debug, debug_buffer, "E2010")
         return _err("E2010")
 
     sob_norm = _normalize_01(sobels)
@@ -652,8 +604,7 @@ def autofocus_coarse(
 
     crossings = estimate_crossings_linear(z_list, sob_norm, lap_norm)
     if not crossings:
-        if debug:
-            dump_debug_buffer_to_error(debug_buffer, "E2011")
+        maybe_dump_debug(debug, debug_buffer, "E2011")
         return _err("E2011")
 
     best_cross = pick_best_crossing(crossings)
@@ -678,9 +629,20 @@ def autofocus_coarse(
         bbox_state=bbox_state,
         edge_ring_width=edge_ring_width,
         min_edge_strength=min_edge_strength,
+
+        do_rounded_check=True,
+        rounded_margin_px=15,
+        rounded_step=12,
+        rounded_angle_threshold_deg=55,
+        rounded_max_sharp=20,
+        rounded_min_used=20,
+        rounded_downsample=4,
+        rounded_error_code="E2015",
     )
 
     if not ok:
+        # itt már csak E2015 dumpolhat (a többihez nem kérsz mentést)
+        maybe_dump_debug(debug, debug_buffer, str(err_code))
         return _err(str(err_code))
 
     final_contour_pts = contour_to_points_list(final_contour)

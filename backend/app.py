@@ -31,7 +31,6 @@ from cameracontrol import converter  # if not already imported
 import autofocus_main
 import traceback
 import bgr_main
-import manual_bgr
 import manual_bgr_with_check
 import check_only
 
@@ -1423,8 +1422,8 @@ def auto_measurement_step():
                 else:
                     globals.last_autofocus_contour = None
                     app.logger.warning(f"Tablet {tablet_index}: Autofocus returned {af_status}: {af_result}")
-                    # For tablet-quality errors, skip image capture entirely
-                    if af_error_code in ('E2000', 'E2002', 'E2003', 'E2004'):
+                    # For any E2xxx tablet/quality errors, skip image capture entirely
+                    if af_error_code and af_error_code.startswith('E2'):
                         app.logger.info(f"Tablet {tablet_index}: Skipping image capture (AF error {af_error_code})")
                         _turn_off_all_lights()
                         response_data = {
@@ -1482,7 +1481,7 @@ def auto_measurement_step():
                         f"Tablet {tablet_index}: manual_bgr returned {mbgr_status} ({mbgr_code})"
                     )
                     # Frame-quality errors -> skip image capture for this tablet
-                    if mbgr_code in ('E2000', 'E2002', 'E2003', 'E2004', 'E2104', 'E2105', 'E2106'):
+                    if mbgr_code and mbgr_code.startswith('E2'):
                         app.logger.info(
                             f"Tablet {tablet_index}: Skipping image capture (manual_bgr error {mbgr_code})"
                         )
@@ -1535,7 +1534,7 @@ def auto_measurement_step():
                         f"Tablet {tablet_index}: check_only grayscale_difference_score "
                         f"returned {gds_status} ({gds_code})"
                     )
-                    if gds_code in ('E2000', 'E2002', 'E2003', 'E2005'):
+                    if gds_code and gds_code.startswith('E2'):
                         app.logger.info(
                             f"Tablet {tablet_index}: Skipping image capture "
                             f"(check_only error {gds_code})"
@@ -1558,7 +1557,7 @@ def auto_measurement_step():
                         f"Tablet {tablet_index}: check_only final_out_of_frame_check "
                         f"returned {oof_status} ({oof_code})"
                     )
-                    if oof_code in ('E2004', 'E2010', 'E2012', 'E2013', 'E2014'):
+                    if oof_code and oof_code.startswith('E2'):
                         app.logger.info(
                             f"Tablet {tablet_index}: Skipping image capture "
                             f"(check_only error {oof_code})"

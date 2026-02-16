@@ -7,8 +7,65 @@ import numpy as np
 
 import globals
 from cameracontrol import converter
-from autofocus_back import grayscale_difference_score
 
+from autofocus_back import (
+    grayscale_difference_score,
+    edge_ring_strength_from_roi_gray,
+    rounded_by_curvature_ignore_border,
+    largest_contour_from_gray_otsu,
+)
+def init_bbox_state(first_frame_bgr, pad=20):
+    if first_frame_bgr is None or first_frame_bgr.size == 0:
+        return None
+    H, W = first_frame_bgr.shape[:2]
+
+    if first_frame_bgr.ndim == 2:
+        gray = first_frame_bgr
+    elif first_frame_bgr.ndim == 3 and first_frame_bgr.shape[2] == 3:
+        gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGR2GRAY)
+    elif first_frame_bgr.ndim == 3 and first_frame_bgr.shape[2] == 4:
+        gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGRA2GRAY)
+    else:
+        return None
+
+    g = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
+    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
+    if fg < bg:
+        bw = 255 - bw
+
+    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    c = max(contours, key=cv2.contourArea)
+    x, y, ww, hh = cv2.boundingRect(c)
+
+    x1 = max(0, x - int(pad))
+    y1 = max(0, y - int(pad))
+    x2 = min(W, x + ww + int(pad))
+    y2 = min(H, y + hh + int(pad))
+
+    return {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)}
+
+
+def crop_bbox(frame_bgr, bbox):
+    x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
+    roi = frame_bgr[y1:y2, x1:x2]
+    if roi.size == 0:
+        return None
+    return roi
+
+
+def bbox_roi_gray(frame_bgr, bbox_state):
+    roi = crop_bbox(frame_bgr, bbox_state)
+    if roi is None:
+        return None
+    if roi.ndim == 2:
+        return roi
+    return cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
 # ==========================================================
 # Small utils
@@ -143,15 +200,27 @@ def final_out_of_frame_check_manual(
         debug_buffer,
         margin_px=2,
         min_area_ratio=0.001,
+
+        # --- kötelező edge check paramok ---
+        min_edge_strength=10.0,     # <- állítsd be amit használsz
+        edge_ring_width=5,
+        bbox_pad=20,
+
+        # --- kötelező rounded check paramok (AF defaultok) ---
+        rounded_margin_px=15,
+        rounded_step=12,
+        rounded_angle_threshold_deg=55.0,
+        rounded_max_sharp=20,
+        rounded_min_used=20,
+        rounded_downsample=4,
 ):
     # --- grab ---
     try:
         frame = acquire_frame_manual(timeout_ms=grab_timeout_ms)
-    except Exception as e:
-        # képelemzés szempontból ez "nincs frame"
-        return False, "E2200", None  # (új) grab fail
+    except Exception:
+        return False, "E2200", None  # grab fail
 
-    # --- resize (logika marad, csak try) ---
+    # --- resize ---
     if frame_scale is not None and float(frame_scale) != 1.0:
         try:
             frame = cv2.resize(
@@ -161,9 +230,8 @@ def final_out_of_frame_check_manual(
                 interpolation=cv2.INTER_AREA
             )
         except Exception:
-            return False, "E2201", None  # (új) resize fail
-
-    # --- stats check (AF stílus) ---
+            return False, "E2201", None  # resize fail
+    # --- stats gate (AF stílus) ---
     std_gray, mean_abs_diff, min_gray, max_gray = grayscale_difference_score(frame)
     if std_gray is None:
         return False, "E2205", None
@@ -175,7 +243,7 @@ def final_out_of_frame_check_manual(
     if mean_abs_diff > 100:
         return False, "E2003", None
 
-    # --- Debug buffer (mint AF-ben) ---
+    # --- Debug buffer ---
     if debug and debug_buffer is not None:
         debug_buffer.append({
             "stage": "final_check_manual",
@@ -184,7 +252,32 @@ def final_out_of_frame_check_manual(
             "frame": frame.copy()
         })
 
-    # --- grayscale conversion (ugyanaz mint AF-ben) ---
+    # --- Debug buffer ---
+    if debug and debug_buffer is not None:
+        debug_buffer.append({
+            "stage": "final_check_manual",
+            "z": 0.0,
+            "idx": 0,
+            "frame": frame.copy()
+        })
+
+    # -----------------------------
+    # Kötelező EDGE RING check
+    # -----------------------------
+    # bbox detektálás (ha nem tudsz külső bbox_state-et adni manualnál)
+    bbox_state = init_bbox_state(frame, pad=int(bbox_pad))
+    if bbox_state is None:
+        return False, "E2006", None  # ROI/bbox fail (AF-ben is ez)
+
+    roi_g = bbox_roi_gray(frame, bbox_state)
+    edge_strength = edge_ring_strength_from_roi_gray(roi_g, ring_w=int(edge_ring_width))
+    print(f"[FINAL_EDGE] edge_strength={edge_strength:.4f} (min={float(min_edge_strength):.4f})")
+    if edge_strength < float(min_edge_strength):
+        return False, "E2012", None  # AF kód
+
+    # -----------------------------
+    # Grayscale + OTSU largest contour
+    # -----------------------------
     if frame.ndim == 2:
         gray = frame
     elif frame.ndim == 3 and frame.shape[2] == 3:
@@ -196,23 +289,41 @@ def final_out_of_frame_check_manual(
 
     H, W = gray.shape[:2]
 
-    # --- OTSU (logika marad) ---
-    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    c = largest_contour_from_gray_otsu(gray)
+    if c is None:
+        return False, "E2207", None
 
-    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
-    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
-    if fg < bg:
-        bw = 255 - bw
+    # -----------------------------
+    # Area check + frame-touch (AF logika)
+    # -----------------------------
+    area = float(cv2.contourArea(c))
+    if area < (float(min_area_ratio) * H * W):
+        return True, None, c
 
-    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    x, y, w, h = cv2.boundingRect(c)
 
-    # itt nálad eddig: return True, None, None
-    if not contours:
-        return True, None, None
 
-    c = max(contours, key=cv2.contourArea)
+
+
+    # -----------------------------
+    # Kötelező ROUNDED check
+    # -----------------------------
+    ok_round, info = rounded_by_curvature_ignore_border(
+        c, W, H,
+        margin_px=int(rounded_margin_px),
+        step=int(rounded_step),
+        angle_threshold_deg=float(rounded_angle_threshold_deg),
+        max_sharp=int(rounded_max_sharp),
+        min_used=int(rounded_min_used),
+        downsample=int(rounded_downsample),
+    )
+    print(f"[ROUNDED_CHECK] ok={ok_round} info={info}")
+
+    if (ok_round is None) or (ok_round is False):
+        return False, "E2015", c  # AF kód
 
     return True, None, c
+
 
 
 
@@ -226,6 +337,17 @@ def manual_return(
         margin_px=2,
         min_area_ratio=0.001,
         debug=True,
+
+        # kötelező edge + rounded paramok továbbadva
+        min_edge_strength=10.0,
+        edge_ring_width=5,
+
+        rounded_margin_px=15,
+        rounded_step=12,
+        rounded_angle_threshold_deg=55.0,
+        rounded_max_sharp=20,
+        rounded_min_used=20,
+        rounded_downsample=4,
 ):
     debug_buffer = [] if debug else None
 
@@ -236,13 +358,25 @@ def manual_return(
         debug_buffer=debug_buffer,
         margin_px=margin_px,
         min_area_ratio=min_area_ratio,
+
+        min_edge_strength=min_edge_strength,
+        edge_ring_width=edge_ring_width,
+
+        rounded_margin_px=rounded_margin_px,
+        rounded_step=rounded_step,
+        rounded_angle_threshold_deg=rounded_angle_threshold_deg,
+        rounded_max_sharp=rounded_max_sharp,
+        rounded_min_used=rounded_min_used,
+        rounded_downsample=rounded_downsample,
     )
 
     if not ok:
+        # ha akarsz: csak ezeknél dump
+        if debug and debug_buffer is not None and str(err_code) in {"E2012", "E2015"}:
+            dump_debug_buffer_to_error(debug_buffer, str(err_code))
         return _err(str(err_code))
 
     final_contour_pts = contour_to_points_list(final_contour)
-
     return _ok(
         z_rel=0.0,
         score=0.0,
