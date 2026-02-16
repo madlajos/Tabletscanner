@@ -84,7 +84,7 @@ td button:not(.browse-button) {
 
 /* Hover Effect */
 /* Generic hover, but avoid overriding connected/streaming state */
-td button:not(.browse-button):hover {
+td button:not(.browse-button):hover:not(:disabled) {
   background-color: #777;
 }
 
@@ -95,7 +95,7 @@ td button:not(.browse-button):hover {
   border-color: #224477;
 }
 
-.connect-button.connected:hover {
+.connect-button.connected:hover:not(:disabled) {
   background-color: #2360b2 !important;
 }
 
@@ -106,8 +106,14 @@ td button:not(.browse-button):hover {
   border-color: #224477;
 }
 
-.stream-button.streaming:hover {
+.stream-button.streaming:hover:not(:disabled) {
   background-color: #2360b2 !important;
+}
+
+/* Disabled buttons during auto measurement */
+td button:not(.browse-button):disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* ─────────────────────────────────── */

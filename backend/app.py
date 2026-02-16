@@ -32,6 +32,7 @@ import autofocus_main
 import traceback
 import bgr_main
 import manual_bgr
+import manual_bgr_with_check
 import check_only
 
 
@@ -1450,13 +1451,13 @@ def auto_measurement_step():
         # dome illumination + manual_bgr even if only the bar light
         # is selected for the actual measurement image.
         if not should_autofocus and background_subtraction:
-            app.logger.info(f"Tablet {tablet_index}: Getting contour via manual_bgr (no autofocus)")
+            app.logger.info(f"Tablet {tablet_index}: Getting contour via manual_bgr_with_check (no autofocus)")
             _turn_on_dome_light()
             _apply_camera_settings_for_light('dome')
             time.sleep(0.3)  # Let light and camera settings stabilize
 
             try:
-                mbgr_result = manual_bgr.manual_return()
+                mbgr_result = manual_bgr_with_check.manual_return()
                 mbgr_status = mbgr_result.get('status', 'ERROR')
                 if mbgr_status == 'OK':
                     contour = mbgr_result.get('final_contour')
@@ -1803,18 +1804,20 @@ def save_raw_image_endpoint():
             "popup": True
         }), 400
 
-    # --- Bar light + background subtraction: obtain contour under dome light ---
+    # --- Background subtraction: obtain contour under dome light ---
     settings_data_pre = get_settings()
     bg_sub_pre = bool(settings_data_pre.get('other_settings', {}).get('background_subtraction', False))
 
-    if light_type == 'bar' and bg_sub_pre:
-        app.logger.info("Manual save: bar light + BGR — obtaining contour under dome light")
+    if bg_sub_pre:
+        app.logger.info(f"Manual save: {light_type} light + BGR — obtaining contour under dome light")
         try:
-            _turn_on_dome_light()
-            _apply_camera_settings_for_light('dome')
-            time.sleep(0.3)  # Let light and camera settings stabilize
+            # Always switch to dome light for contour detection
+            if light_type != 'dome':
+                _turn_on_dome_light()
+                _apply_camera_settings_for_light('dome')
+                time.sleep(0.3)  # Let light and camera settings stabilize
 
-            mbgr_result = manual_bgr.manual_return()
+            mbgr_result = manual_bgr_with_check.manual_return()
             mbgr_status = mbgr_result.get('status', 'ERROR')
             if mbgr_status == 'OK':
                 contour = mbgr_result.get('final_contour')
@@ -1823,22 +1826,24 @@ def save_raw_image_endpoint():
             else:
                 globals.last_autofocus_contour = None
                 mbgr_code = mbgr_result.get('code', '')
-                app.logger.warning(f"Manual save: manual_bgr returned {mbgr_status} ({mbgr_code})")
+                app.logger.warning(f"Manual save: manual_bgr_with_check returned {mbgr_status} ({mbgr_code})")
 
-            # Switch back to bar light for the actual capture
-            _turn_on_bar_light()
-            _apply_camera_settings_for_light('bar')
-            time.sleep(0.3)  # Let light and camera settings stabilize
+            # Switch back to original light for the actual capture
+            if light_type == 'bar':
+                _turn_on_bar_light()
+                _apply_camera_settings_for_light('bar')
+                time.sleep(0.3)  # Let light and camera settings stabilize
         except Exception as e:
             app.logger.warning(f"Manual save: contour detection under dome light failed: {e}")
             globals.last_autofocus_contour = None
-            # Restore bar light and continue — save image without background subtraction
-            try:
-                _turn_on_bar_light()
-                _apply_camera_settings_for_light('bar')
-                time.sleep(0.3)
-            except Exception:
-                pass
+            # Restore original light and continue — save image without background subtraction
+            if light_type == 'bar':
+                try:
+                    _turn_on_bar_light()
+                    _apply_camera_settings_for_light('bar')
+                    time.sleep(0.3)
+                except Exception:
+                    pass
 
     # --- Grab frame from camera ---
     img = grab_camera_image()  # your existing helper
