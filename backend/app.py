@@ -1468,6 +1468,61 @@ def auto_measurement_step():
             time.sleep(0.3)  # Let light and camera settings stabilize
 
             try:
+                # --- Pre-check: run check_only before manual_bgr_with_check ---
+                from cameracontrol import grab_and_convert_frame
+                cam = globals.camera
+                with globals.grab_lock:
+                    check_frame = grab_and_convert_frame(cam, timeout_ms=5000, retries=2)
+
+                # Greyscale difference score
+                gds_result = check_only.grayscale_difference_score(check_frame)
+                gds_status = gds_result.get('status', 'ERROR')
+                gds_code = gds_result.get('code', '')
+                if gds_status != 'OK':
+                    app.logger.warning(
+                        f"Tablet {tablet_index}: check_only grayscale_difference_score "
+                        f"returned {gds_status} ({gds_code}) before manual_bgr"
+                    )
+                    if gds_code and gds_code.startswith('E2'):
+                        app.logger.info(
+                            f"Tablet {tablet_index}: Skipping manual_bgr + image capture "
+                            f"(check_only error {gds_code})"
+                        )
+                        _turn_off_all_lights()
+                        return jsonify({
+                            'status': 'success',
+                            'tablet_index': tablet_index,
+                            'saved_images': [],
+                            'af_error_code': gds_code,
+                            'af_error_message': ERROR_MESSAGES.get(gds_code, gds_code)
+                        }), 200
+
+                # Final out-of-frame check
+                oof_result = check_only.final_out_of_frame_check(check_frame)
+                oof_status = oof_result.get('status', 'ERROR')
+                oof_code = oof_result.get('code', '')
+                if oof_status != 'OK':
+                    app.logger.warning(
+                        f"Tablet {tablet_index}: check_only final_out_of_frame_check "
+                        f"returned {oof_status} ({oof_code}) before manual_bgr"
+                    )
+                    if oof_code and oof_code.startswith('E2'):
+                        app.logger.info(
+                            f"Tablet {tablet_index}: Skipping manual_bgr + image capture "
+                            f"(check_only error {oof_code})"
+                        )
+                        _turn_off_all_lights()
+                        return jsonify({
+                            'status': 'success',
+                            'tablet_index': tablet_index,
+                            'saved_images': [],
+                            'af_error_code': oof_code,
+                            'af_error_message': ERROR_MESSAGES.get(oof_code, oof_code)
+                        }), 200
+
+                app.logger.info(f"Tablet {tablet_index}: check_only passed, proceeding with manual_bgr")
+
+                # --- Pre-check passed: run manual_bgr_with_check ---
                 mbgr_result = manual_bgr_with_check.manual_return()
                 mbgr_status = mbgr_result.get('status', 'ERROR')
                 if mbgr_status == 'OK':
