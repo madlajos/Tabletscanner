@@ -83,6 +83,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   private completedTablets = new Set<number>();  // Set of completed tablet IDs
   private failedTablets = new Set<number>();      // Set of tablets with AF errors (E2000/E2002/E2003)
   private tabletErrors = new Map<number, string>(); // Tablet ID -> error message
+  private tabletImages = new Map<number, string[]>(); // Tablet ID -> saved image paths (non-masked)
   private currentTabletId: number | null = null;  // ID of tablet currently being processed
 
   // Measurement folder path (created at start)
@@ -442,6 +443,12 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   // ===== CLICK SELECTION LOGIC =====
 
   onDotClick(id: number): void {
+    // If the tablet was successfully measured, open its saved images (works during and after measurement)
+    if (this.completedTablets.has(id)) {
+      this.openTabletImages(id);
+      return;
+    }
+
     if (this.measurementActive) {
       // Selection is locked while measurement is running
       return;
@@ -700,7 +707,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       autofocus: this.autofocus,
       lamp_top: this.lampTop,
       lamp_side: this.lampSide,
-      is_first_tablet: isFirstTablet
+      is_first_tablet: isFirstTablet,
+      background_subtraction: this.backgroundSubtraction
     };
 
     // If stop was requested before starting this tablet, exit early
@@ -731,18 +739,23 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
             this.completedTablets.add(tabletId);
           }
           
-          // Emit saved images to gallery (exclude background-subtracted _masked images)
+          // Emit saved images to gallery and store paths (exclude background-subtracted _masked images)
           if (resp.saved_images && resp.saved_images.length > 0) {
+            const nonMaskedPaths: string[] = [];
             for (const imagePath of resp.saved_images) {
               if (imagePath.includes('_masked')) {
                 continue;
               }
+              nonMaskedPaths.push(imagePath);
               const lightType = imagePath.includes('_dome_') ? 'dome' : 'bar';
               this.sharedService.emitSavedImage({
                 path: imagePath,
                 tabletIndex: tabletId,
                 lightType: lightType as 'dome' | 'bar'
               });
+            }
+            if (nonMaskedPaths.length > 0) {
+              this.tabletImages.set(tabletId, nonMaskedPaths);
             }
           }
 
@@ -988,6 +1001,18 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     // Error message is set in processTabletQueue if there was an error
     
     this.stopRequested = false;
+  }
+
+  private openTabletImages(id: number): void {
+    const paths = this.tabletImages.get(id);
+    if (!paths || paths.length === 0) {
+      return;
+    }
+    for (const path of paths) {
+      this.http.post(`${BASE_URL}/open_image`, { path }).subscribe({
+        error: (err) => console.error('Failed to open image:', err)
+      });
+    }
   }
 
   private scheduleBedMoveToZero(): void {

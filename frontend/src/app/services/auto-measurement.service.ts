@@ -23,6 +23,7 @@ export interface TabletStepRequest {
   lamp_top: boolean;
   lamp_side: boolean;
   is_first_tablet?: boolean;
+  background_subtraction?: boolean;
 }
 
 export interface TabletStepResponse {
