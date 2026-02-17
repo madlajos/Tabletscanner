@@ -85,6 +85,22 @@ export class SharedService {
   // Track light state (on/off)
   private lightsOffSubject = new Subject<void>();
   lightsOff$ = this.lightsOffSubject.asObservable();
+
+  // Signal to invalidate autofocus state (e.g., when another component moves the platform)
+  private autofocusInvalidateSubject = new Subject<void>();
+  autofocusInvalidate$ = this.autofocusInvalidateSubject.asObservable();
+
+  invalidateAutofocus(): void {
+    this.autofocusInvalidateSubject.next();
+  }
+
+  // Autofocus error from manual autofocus (motion-control → auto-measurement)
+  private autofocusErrorSubject = new Subject<string | null>();
+  autofocusError$ = this.autofocusErrorSubject.asObservable();
+
+  setAutofocusError(message: string | null): void {
+    this.autofocusErrorSubject.next(message);
+  }
   
   private motionHomingStatus = new BehaviorSubject<boolean>(false);
   motionHomingStatus$ = this.motionHomingStatus.asObservable();

@@ -1142,7 +1142,6 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     if background_subtraction:
         try:
             af_contour = getattr(globals, "last_autofocus_contour", None)
-            print(af_contour)
             mask, kind, metrics = bgr_main.make_object_mask_from_bgr_rel(img_cv, autofocus_contour = af_contour)
             if mask is not None and np.any(mask):
                 masked = bgr_main.apply_mask_zero_background(img_cv, mask)
@@ -1362,6 +1361,15 @@ def auto_measurement_step():
         )
         if status != 200:
             _turn_off_all_lights()
+            # If the move failed due to a device disconnect (503), propagate
+            # the error code at the top level so the frontend can detect it
+            # and trigger the 30-second reconnection timer.
+            if status == 503 and resp.get('code'):
+                return jsonify({
+                    'error': resp.get('message', 'Device disconnected'),
+                    'code': resp['code'],
+                    'popup': True
+                }), 503
             return jsonify({
                 'status': 'error',
                 'message': f"Move failed for tablet {tablet_index}",

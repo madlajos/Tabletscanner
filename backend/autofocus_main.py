@@ -11,11 +11,9 @@ from cameracontrol import converter
 import porthandler
 
 from autofocus_back import (
-    grayscale_difference_score,
     sobel_topk_score,
     lap_sq_from_bbox_gray,
 
-    # a korábban main-ben lévő helper-ek most innen jönnek:
     rounded_by_curvature_ignore_border,
     edge_ring_strength_from_roi_gray,
     largest_contour_from_gray_otsu,
@@ -91,17 +89,85 @@ def _ok(**extra):
 
 
 # ---------------------------------------------------------------------
+# Gates
+# ---------------------------------------------------------------------
+def exposure_gate(
+    gray_u8,
+    white_thr=250,
+    frac_white_thr=0.20,
+    under_p95_thr=30,
+    under_dr_thr=30
+):
+    """
+    Returns:
+      exp_code: "EXP_OK" | "E_OVER" | "E_UNDER"
+      metrics:  dict(p95, dr, white)
+    """
+    if gray_u8 is None or gray_u8.size == 0:
+        return "E_UNDER", {"p95": 0.0, "dr": 0.0, "white": 0.0}
+
+    g = gray_u8.astype(np.float32)
+    p1, p95, p99 = np.percentile(g, [1, 95, 99])
+    dr = float(p99 - p1)
+
+    frac_white = float((gray_u8 >= int(white_thr)).mean())
+    metrics = {"p95": float(p95), "dr": dr, "white": frac_white}
+
+    if frac_white > float(frac_white_thr) or p95 > 250:
+        return "E_OVER", metrics
+
+    if (p95 < float(under_p95_thr)) and (dr < float(under_dr_thr)):
+        return "E_UNDER", metrics
+
+    return "EXP_OK", metrics
+
+
+def center_bbox_state(frame_bgr, w_frac=0.5, h_frac=0.5):
+    """Fallback ROI: kép közepe (OTSU nélkül)."""
+    if frame_bgr is None or frame_bgr.size == 0:
+        return None
+    H, W = frame_bgr.shape[:2]
+
+    ww = int(max(20, min(W, int(W * float(w_frac)))))
+    hh = int(max(20, min(H, int(H * float(h_frac)))))
+
+    cx, cy = W // 2, H // 2
+    x1 = max(0, cx - ww // 2)
+    y1 = max(0, cy - hh // 2)
+    x2 = min(W, x1 + ww)
+    y2 = min(H, y1 + hh)
+
+    return {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)}
+
+
+def full_frame_bbox_state(frame_bgr):
+    """ROI = teljes kép."""
+    if frame_bgr is None or frame_bgr.size == 0:
+        return None
+    H, W = frame_bgr.shape[:2]
+    return {"x1": 0, "y1": 0, "x2": int(W), "y2": int(H)}
+
+
+def full_frame_points_from_frame(frame_bgr):
+    """Full-frame 'contour' pontok a returnbe."""
+    if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+        return None
+    H, W = frame_bgr.shape[:2]
+    return [
+        [0, 0],
+        [int(W - 1), 0],
+        [int(W - 1), int(H - 1)],
+        [0, int(H - 1)],
+    ]
+
+
+# ---------------------------------------------------------------------
 # Debug-dump gating (csak bizonyos hibáknál)
 # ---------------------------------------------------------------------
 def should_dump_debug_for_error(error_code: str) -> bool:
     code = str(error_code)
-
-    # Sobel/Lap "lépkedős" logika hibák
     sobel_lap_fail_codes = {"E2008", "E2009", "E2010", "E2011"}
-
-    # Rounded / sok éles sarok
     rounded_fail_codes = {"E2015"}
-
     return (code in sobel_lap_fail_codes) or (code in rounded_fail_codes)
 
 
@@ -161,7 +227,7 @@ def acquire_frame(timeout_ms=2000, retries=2):
 
 
 # ---------------------------------------------------------------------
-# SCRIPT-style FIXED BBOX (first frame)
+# SCRIPT-style FIXED BBOX (first frame) (OTSU)
 # ---------------------------------------------------------------------
 def init_bbox_state(first_frame_bgr, pad=20):
     if first_frame_bgr is None or first_frame_bgr.size == 0:
@@ -323,7 +389,180 @@ def dump_debug_buffer_to_error(debug_buffer, error_code: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# Final check
+# PATTERN / EMPTY decision (beépítve) - csak uniform + EXP_OK
+# ---------------------------------------------------------------------
+def _preprocess_gray(gray_u8, scale=0.10, blur_ksize=11):
+    g = gray_u8
+    if scale is not None and float(scale) < 1.0:
+        g = cv2.resize(g, None, fx=float(scale), fy=float(scale), interpolation=cv2.INTER_AREA)
+
+    if blur_ksize and int(blur_ksize) > 0:
+        k = int(blur_ksize)
+        if k % 2 == 0:
+            k += 1
+        if k < 3:
+            k = 3
+        g = cv2.GaussianBlur(g, (k, k), 0)
+
+    return g
+
+
+def _percentile_span(gray_u8, p_low=10, p_high=90):
+    g = gray_u8.astype(np.float32)
+    pl, ph = np.percentile(g, [p_low, p_high])
+    return float(pl), float(ph), float(ph - pl)
+
+
+def _robust_texture_and_edge_activity(gray_u8, hp_sigma=12.0, hp_clip_lo=5, hp_clip_hi=95, act_k=6.0):
+    g = gray_u8.astype(np.float32)
+
+    low = cv2.GaussianBlur(g, (0, 0), float(hp_sigma))
+    hp = g - low
+    lo, hi = np.percentile(hp, [float(hp_clip_lo), float(hp_clip_hi)])
+    hp_w = np.clip(hp, lo, hi)
+
+    hp_med = float(np.median(hp_w))
+    hp_mad = float(np.median(np.abs(hp_w - hp_med)))
+    hp_rstd = float(1.4826 * hp_mad)
+
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+
+    sobel_med = float(np.median(mag))
+    sobel_mad = float(np.median(np.abs(mag - sobel_med)))
+    sobel_p90 = float(np.percentile(mag, 90))
+
+    thr = sobel_med + float(act_k) * (1.4826 * sobel_mad + 1e-6)
+    edge_act = float((mag > thr).mean())
+
+    return {"hp_rstd": hp_rstd, "sobel_p90": sobel_p90, "edge_act": edge_act}
+
+
+def _vignette_profile_metrics(gray_u8, blur_ksize=11, bins=24):
+    k = int(blur_ksize)
+    if k % 2 == 0:
+        k += 1
+    if k < 31:
+        k = 31
+
+    g = cv2.GaussianBlur(gray_u8, (k, k), 0).astype(np.float32)
+
+    H, W = g.shape[:2]
+    cy, cx = H / 2.0, W / 2.0
+    yy, xx = np.indices((H, W))
+    r = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    r = r / (r.max() + 1e-9)
+
+    edges = np.linspace(0.0, 1.0, int(bins) + 1)
+    means = []
+    for i in range(int(bins)):
+        m = (r >= edges[i]) & (r < edges[i + 1])
+        means.append(float(g[m].mean()) if np.any(m) else float(np.mean(g)))
+
+    center = float(means[0])
+    edge = float(np.mean(means[-2:]))
+    dEC = float(edge - center)
+    dAbs = float(abs(dEC))
+
+    diffs = np.diff(np.array(means, dtype=np.float32))
+    mono = float(max((diffs > 0).mean(), (diffs < 0).mean()))
+
+    radii = np.linspace(0.0, 1.0, int(bins)).astype(np.float32)
+    corr = float(np.corrcoef(radii, np.array(means, dtype=np.float32))[0, 1])
+
+    return {"center": center, "edge": edge, "dEC": dEC, "dAbs": dAbs, "mono": mono, "corr": corr}
+
+
+def _decide_pattern(gray_u8,
+                    p10_zoom_thr=60.0,
+                    dabs_sus_thr=10.0,
+                    span_thr=25.0,
+                    hp_thr=2.5,
+                    sobel_p90_thr=10.0,
+                    edge_act_empty_thr=0.002,
+                    edge_act_tex_thr=0.010,
+                    v_corr_abs_thr=0.55,
+                    v_mono_thr=0.60):
+    p10, p90, span = _percentile_span(gray_u8, 10, 90)
+    tm = _robust_texture_and_edge_activity(gray_u8, hp_sigma=12.0, hp_clip_lo=5, hp_clip_hi=95, act_k=6.0)
+    vm = _vignette_profile_metrics(gray_u8, blur_ksize=11, bins=24)
+
+    info = {"p10": p10, "p90": p90, "span": span, **tm, **vm}
+
+    if p10 >= float(p10_zoom_thr):
+        return "PATTERN_PRESENT_ZOOM", info
+
+    if vm["dAbs"] > float(dabs_sus_thr):
+        return "PATTERN_PRESENT", info
+
+    radial_ok = (abs(vm["corr"]) >= float(v_corr_abs_thr)) and (vm["mono"] >= float(v_mono_thr))
+    info["radial_ok"] = bool(radial_ok)
+
+    if tm["edge_act"] <= float(edge_act_empty_thr):
+        return "E_EMPTY", info
+
+    if (span < float(span_thr)) and radial_ok:
+        return "E_EMPTY", info
+
+    has_texture = (
+        ((tm["hp_rstd"] >= float(hp_thr)) or (tm["sobel_p90"] >= float(sobel_p90_thr)))
+        and (tm["edge_act"] >= float(edge_act_tex_thr))
+    )
+    info["has_texture"] = bool(has_texture)
+
+    if has_texture:
+        return "PATTERN_PRESENT_ZOOM", info
+
+    return "E_EMPTY", info
+
+
+def pattern_empty_gate_from_frame(first_frame_bgr,
+                                  uniform_std_thr=10.0,
+                                  pattern_scale=0.10,
+                                  pattern_pre_blur_ksize=11):
+    """
+    Csak akkor fut:
+      - std_gray < uniform_std_thr
+      - exposure EXP_OK
+
+    Return dict:
+      run(bool), pattern_code(str|None), is_empty(bool|None), info(dict)
+    """
+    if first_frame_bgr is None or getattr(first_frame_bgr, "size", 0) == 0:
+        return {"run": False, "pattern_code": None, "is_empty": None, "info": {}}
+
+    # gray_u8
+    if first_frame_bgr.ndim == 2:
+        gray_u8 = first_frame_bgr
+    elif first_frame_bgr.shape[2] == 3:
+        gray_u8 = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGR2GRAY)
+    elif first_frame_bgr.shape[2] == 4:
+        gray_u8 = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGRA2GRAY)
+    else:
+        return {"run": False, "pattern_code": None, "is_empty": None, "info": {}}
+
+    std_gray = float(gray_u8.std())
+    is_uniform = bool(std_gray < float(uniform_std_thr))
+
+    exp_code, exp_m = exposure_gate(gray_u8, white_thr=250, frac_white_thr=0.20, under_p95_thr=30, under_dr_thr=30)
+
+    if (not is_uniform) or (exp_code != "EXP_OK"):
+        return {"run": False, "pattern_code": None, "is_empty": None, "info": {"std_gray": std_gray, "exp_code": exp_code, **exp_m}}
+
+    gray_pat = _preprocess_gray(gray_u8, scale=float(pattern_scale), blur_ksize=int(pattern_pre_blur_ksize))
+    pattern_code, info = _decide_pattern(gray_pat)
+
+    return {
+        "run": True,
+        "pattern_code": pattern_code,
+        "is_empty": bool(pattern_code == "E_EMPTY"),
+        "info": {"std_gray": std_gray, "exp_code": exp_code, **exp_m, **info},
+    }
+
+
+# ---------------------------------------------------------------------
+# Final check (eredeti)
 # ---------------------------------------------------------------------
 def final_out_of_frame_check(
     motion_platform,
@@ -357,7 +596,7 @@ def final_out_of_frame_check(
     if debug and debug_buffer is not None:
         debug_buffer.append({"stage": "final_check", "z": float(target_z), "idx": 0, "frame": frame.copy()})
 
-    # Edge strength check (opcionális) -> NEM dumpolunk (nem kértél rá)
+    # Edge strength check (opcionális)
     if (min_edge_strength is not None) and (bbox_state is not None):
         roi_g = bbox_roi_gray(frame, bbox_state)
         edge_strength = edge_ring_strength_from_roi_gray(roi_g, ring_w=int(edge_ring_width))
@@ -386,7 +625,7 @@ def final_out_of_frame_check(
     if area < (float(min_area_ratio) * H * W):
         return True, None, c
 
-    # Rounded check (back) -> HA BUKIK, dump kell
+    # Rounded check (back)
     if bool(do_rounded_check):
         ok_round, info = rounded_by_curvature_ignore_border(
             c, W, H,
@@ -403,7 +642,7 @@ def final_out_of_frame_check(
             maybe_dump_debug(debug, debug_buffer, str(rounded_error_code))
             return False, str(rounded_error_code), c
 
-    # Frame touch logic -> NEM dumpolunk (nem kértél rá)
+    # Frame touch logic
     x, y, w, h = cv2.boundingRect(c)
     left   = (x <= margin_px)
     top    = (y <= margin_px)
@@ -485,7 +724,7 @@ def measure_score(
 
 
 # ---------------------------------------------------------------------
-# COARSE only (best_z = crossing)
+# COARSE only (best_z = crossing) + requested uniform-mode behavior
 # ---------------------------------------------------------------------
 def autofocus_coarse(
     motion_platform,
@@ -518,25 +757,91 @@ def autofocus_coarse(
 
     first_frame = acquire_frame(timeout_ms=grab_timeout_ms)
     if frame_scale is not None and float(frame_scale) != 1.0:
-        first_frame = cv2.resize(first_frame, None, fx=float(frame_scale), fy=float(frame_scale), interpolation=cv2.INTER_AREA)
+        first_frame = cv2.resize(
+            first_frame, None,
+            fx=float(frame_scale), fy=float(frame_scale),
+            interpolation=cv2.INTER_AREA
+        )
 
-    std_gray, mean_abs_diff, min_gray, max_gray = grayscale_difference_score(first_frame)
-    if std_gray is None:
+    # ---- Gray for gates ----
+    if first_frame.ndim == 2:
+        gray_first = first_frame
+    elif first_frame.shape[2] == 3:
+        gray_first = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+    elif first_frame.shape[2] == 4:
+        gray_first = cv2.cvtColor(first_frame, cv2.COLOR_BGRA2GRAY)
+    else:
         return _err("E2005")
-    if std_gray < 10 and mean_abs_diff <= 5:
-        return _err("E2000")
-    if 5 < mean_abs_diff < 10:
-        return _err("E2002")
-    if mean_abs_diff > 100:
-        return _err("E2003")
+
+    # ---- Exposure gate (UNDER/OVER) ----
+    exp_code, exp_m = exposure_gate(
+        gray_first,
+        white_thr=250,
+        frac_white_thr=0.20,
+        under_p95_thr=30,
+        under_dr_thr=30
+    )
+    print(f"[EXPOSURE_GATE] exp={exp_code} p95={exp_m['p95']:.1f} dr={exp_m['dr']:.1f} white={exp_m['white']:.3f}")
+
+    if exp_code == "E_OVER":
+        return _err("E2003", **exp_m)
+    if exp_code == "E_UNDER":
+        return _err("E2002", **exp_m)
+
+    # ---- Uniformity ----
+    std_gray = float(gray_first.std())
+    uniform_mode = (std_gray < 10.0)
+    print(f"[UNIFORM_CHECK] std_gray={std_gray:.2f} uniform_mode={uniform_mode}")
 
     if debug and debug_buffer is not None:
         debug_buffer.append({"stage": "roi_detect", "z": float(current_z), "idx": 0, "frame": first_frame.copy()})
 
-    bbox_state = init_bbox_state(first_frame, pad=20)
-    if bbox_state is None:
-        return _err("E2006")
+    # -----------------------------------------------------------------
+    # ROI selection:
+    #   - uniform: pattern/empty gate + pattern->fullframe else center
+    #   - non-uniform: original OTSU ROI
+    # -----------------------------------------------------------------
+    if uniform_mode:
+        gate = pattern_empty_gate_from_frame(
+            first_frame,
+            uniform_std_thr=10.0,
+            pattern_scale=0.10,
+            pattern_pre_blur_ksize=11
+        )
 
+        if gate.get("run", False):
+            pat_code = str(gate.get("pattern_code") or "")
+            is_empty = bool(gate.get("is_empty"))
+            print(f"[PATTERN_GATE] pattern_code={pat_code} is_empty={is_empty}")
+
+            if is_empty:
+                maybe_dump_debug(debug, debug_buffer, "E2000")
+                return _err("E2000", **gate.get("info", {}))
+
+            if pat_code.startswith("PATTERN_"):
+                bbox_state = full_frame_bbox_state(first_frame)
+                if bbox_state is None:
+                    return _err("E2006")
+                print("[ROI] uniform + PATTERN -> using FULL-FRAME bbox")
+            else:
+                bbox_state = center_bbox_state(first_frame, w_frac=0.5, h_frac=0.5)
+                if bbox_state is None:
+                    return _err("E2006")
+                print("[ROI] uniform -> using CENTER bbox (no OTSU)")
+        else:
+            bbox_state = center_bbox_state(first_frame, w_frac=0.5, h_frac=0.5)
+            if bbox_state is None:
+                return _err("E2006")
+            print("[ROI] uniform -> using CENTER bbox (no OTSU)")
+    else:
+        bbox_state = init_bbox_state(first_frame, pad=20)
+        if bbox_state is None:
+            return _err("E2006")
+        print("[ROI] using OTSU bbox")
+
+    # -----------------------------------------------------------------
+    # Coarse scan
+    # -----------------------------------------------------------------
     z_list = []
     sobels = []
     laps = []
@@ -603,7 +908,27 @@ def autofocus_coarse(
     lap_norm = _normalize_01(laps)
 
     crossings = estimate_crossings_linear(z_list, sob_norm, lap_norm)
+
+    # -----------------------------------------------------------------
+    # NEW: Laplace fallback ONLY if uniform_mode
+    #   - if no crossings -> pick max Laplace
+    #   - uniform_mode esetén final_out_of_frame_check NEM fut
+    #   - final_contour = full-frame pontok
+    # -----------------------------------------------------------------
     if not crossings:
+        if uniform_mode:
+            best_i = int(np.argmax(np.asarray(laps, dtype=np.float32)))
+            best_z = float(z_list[best_i]) * 0.99
+            print(f"[FALLBACK] no crossings -> LAPLACE max at z={best_z:.6f}")
+
+            globals.last_best_z = float(best_z)
+
+            return _ok(
+                z_rel=float(best_z),
+                score=float(laps[best_i]) if laps else 0.0,
+                final_contour=full_frame_points_from_frame(first_frame),
+            )
+
         maybe_dump_debug(debug, debug_buffer, "E2011")
         return _err("E2011")
 
@@ -616,6 +941,17 @@ def autofocus_coarse(
 
     globals.last_best_z = float(best_z)
 
+    if uniform_mode:
+        # uniform: NINCS final check, full-frame pontok a returnbe
+        return _ok(
+            z_rel=float(best_z),
+            score=float(max(sobels)) if sobels else 0.0,
+            final_contour=full_frame_points_from_frame(first_frame),
+        )
+
+    # -----------------------------------------------------------------
+    # Original final check (non-uniform only)
+    # -----------------------------------------------------------------
     ok, err_code, final_contour = final_out_of_frame_check(
         motion_platform=motion_platform,
         current_z=current_z,
@@ -641,7 +977,6 @@ def autofocus_coarse(
     )
 
     if not ok:
-        # itt már csak E2015 dumpolhat (a többihez nem kérsz mentést)
         maybe_dump_debug(debug, debug_buffer, str(err_code))
         return _err(str(err_code))
 

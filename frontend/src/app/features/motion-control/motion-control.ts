@@ -110,6 +110,11 @@ export class MotionControl implements OnInit, OnDestroy {
       this.barLightOn = false;
     });
 
+    // Subscribe to autofocus invalidation (e.g., when auto-measurement moves the platform)
+    this.sharedService.autofocusInvalidate$.subscribe(() => {
+      this.autofocusDone = false;
+    });
+
     // Start polling for lamp auto-off status (5-minute inactivity timeout)
     this.startLampAutoOffPolling();
   }
@@ -692,11 +697,21 @@ export class MotionControl implements OnInit, OnDestroy {
       }
     }
 
+    this.sharedService.setAutofocusError(null);
+
     this.http.post(`${BASE_URL}/autofocus_coarse`, {}).subscribe({
-      next: (resp) => {
+      next: (resp: any) => {
         console.log('Autofocus response:', resp);
         this.isAutofocusing = false;
-        this.autofocusDone = true;
+        if (resp.status === 'ERROR' && resp.code) {
+          this.autofocusDone = false;
+          this.sharedService.setAutofocusError(
+            this.errorNotificationService.getMessage(resp.code)
+          );
+        } else {
+          this.autofocusDone = true;
+          this.sharedService.setAutofocusError(null);
+        }
       },
       error: (error) => {
         console.error('Autofocus error:', error);

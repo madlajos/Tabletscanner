@@ -35,6 +35,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   motionConnected = false;
   private cameraSub?: Subscription;
   private motionSub?: Subscription;
+  private autofocusErrorSub?: Subscription;
 
   // Tablet IDs, bottom-left = 1, top-right = gridSize^2
   readonly tablets = Array.from(
@@ -136,6 +137,13 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       console.log('Auto-measurement received homed state:', homed);
     });
 
+    // Subscribe to manual autofocus errors from motion-control
+    this.autofocusErrorSub = this.sharedService.autofocusError$.subscribe(msg => {
+      if (!this.measurementActive) {
+        this.errorMessage = msg;
+      }
+    });
+
     // Load saved settings from backend
     this.autoService.getSettings().subscribe({
       next: (res) => {
@@ -163,6 +171,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.cameraSub?.unsubscribe();
     this.motionSub?.unsubscribe();
     this.homedSub?.unsubscribe();
+    this.autofocusErrorSub?.unsubscribe();
     
     // Ensure measurement is marked inactive on destroy
     if (this.measurementActive) {
@@ -305,6 +314,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
     const pos = this.getTabletPosition(this.tabletContextMenuId);
     if (pos) {
+      this.sharedService.invalidateAutofocus();
       this.http.post(`${BASE_URL}/move_toolhead_absolute`, {
         x: pos.x,
         y: pos.y
