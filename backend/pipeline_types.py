@@ -192,3 +192,4 @@ class PipelineResult:
     step_results: List[StepResult] = field(default_factory=list)
     errors: List[StepError] = field(default_factory=list)
     executed_up_to: int = -1
+    data: Any = None  # Final data dict from the pipeline (multi-image)

@@ -65,10 +65,11 @@ export interface PreviewResponse {
   success: boolean;
   errors?: StepError[];
   executed_up_to: number;
-  side_outputs?: Record<string, Record<string, any>>;
+  side_outputs?: Record<string, any>;
   image_base64?: string;
   image_width?: number;
   image_height?: number;
+  image_count?: number;
 }
 
 export interface RecipeSummary {

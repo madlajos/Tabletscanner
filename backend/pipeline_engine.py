@@ -1,15 +1,19 @@
 """
-Pipeline execution engine: runs pipeline steps with auto-conversion,
-parameter clamping, runtime safety wrappers, and intermediate caching.
+Pipeline execution engine.
+
+Runs pipeline steps sequentially, passing a shared *data dict* through
+each step.  The data dict is created by the first step (``load_image``)
+and accumulates images, results, and metadata as it flows through.
+
+Processing-element error codes (E2xxx) are translated to human-readable
+messages via PROC_ELEMENT_MESSAGES; these are separate from the scanner
+error codes that share the same numbering range.
 """
-import hashlib
-import json
 import cv2
 import numpy as np
-from typing import Optional
+from typing import Any, Optional
 from pipeline_types import (
-    DataType, AUTO_CONVERSIONS, StepResult, StepError,
-    PipelineDocument, PipelineResult,
+    StepError, PipelineDocument, PipelineResult,
 )
 from pipeline_steps import STEP_DEFINITIONS, STEP_EXECUTORS
 from pipeline_validators import validate_pipeline
@@ -17,52 +21,75 @@ from pipeline_validators import validate_pipeline
 import logging
 logger = logging.getLogger(__name__)
 
-# In-memory cache: step_hash -> (StepResult.primary_output, StepResult.side_outputs, output_type)
-_step_cache: dict[str, tuple] = {}
-_MAX_CACHE_ENTRIES = 50
 
+# ---------------------------------------------------------------------------
+# Proc-element error code → Hungarian message mapping
+# ---------------------------------------------------------------------------
 
-def _compute_input_hash(img: Optional[np.ndarray]) -> str:
-    """Produce a fast hash of a numpy image for cache keying."""
-    if img is None:
-        return "none"
-    # Use a strided sample for speed on large images
-    flat = img.flat
-    sample_size = min(10000, len(flat))
-    step = max(1, len(flat) // sample_size)
-    sample = flat[::step]
-    h = hashlib.md5(sample.tobytes(), usedforsecurity=False)
-    h.update(f"{img.shape}_{img.dtype}".encode())
-    return h.hexdigest()
-
-
-def _compute_step_hash(step_def_id: str, param_values: dict, input_hash: str) -> str:
-    """Cache key for one step execution."""
-    param_str = json.dumps(param_values, sort_keys=True, default=str)
-    raw = f"{step_def_id}|{param_str}|{input_hash}"
-    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
-
-
-def _auto_convert(image: np.ndarray, from_type: DataType, to_type: DataType) -> np.ndarray:
-    """Apply auto-conversion between compatible data types."""
-    if from_type == to_type:
-        return image
-
-    key = (from_type, to_type)
-    conv_name = AUTO_CONVERSIONS.get(key)
-    if conv_name is None:
-        return image  # identity (same-type or compatible pair with no-op)
-
-    if conv_name == "bgr_to_gray":
-        if image.ndim == 3 and image.shape[2] >= 3:
-            return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        return image
-    elif conv_name == "gray_to_bgr":
-        if image.ndim == 2:
-            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        return image
-
-    return image
+PROC_ELEMENT_MESSAGES: dict[str, str] = {
+    # load_image
+    "E2001": "A betöltés után nem áll rendelkezésre egyetlen kép sem.",
+    "E2002": "Érvénytelen vagy nem létező útvonal.",
+    "E2003": "Egyetlen érvényes kép sem tölthető be a megadott útvonalból.",
+    "E2004": "Nem támogatott képformátum.",
+    # select_channel
+    "E2100": "Nincsenek feldolgozandó képek.",
+    "E2101": "A kép nem 3 csatornás, a csatorna kiválasztás nem lehetséges.",
+    "E2102": "Érvénytelen színtér megadva.",
+    "E2103": "Érvénytelen csatorna megadva.",
+    "E2104": "Színtér konverzió sikertelen.",
+    # apply_threshold
+    "E2201": "Nincsenek feldolgozandó képek.",
+    "E2202": "A képek nem egycsatornásak, küszöbölés előtt csatorna kiválasztás szükséges.",
+    # calculate_histograms
+    "E2301": "Nincsenek feldolgozandó képek.",
+    "E2302": "A képeknek szürkeárnyalatosnak kell lenniük a hisztogram számításhoz.",
+    "E2303": "Érvénytelen osztásszám (bins) megadva.",
+    "E2304": "Érvénytelen hisztogram tartomány.",
+    "E2305": "Hisztogram számítás sikertelen.",
+    "E2306": "Váratlan hiba a hisztogram számítás során.",
+    # apply_range_mask
+    "E2401": "Nincsenek feldolgozandó képek.",
+    "E2402": "A képeknek egycsatornásnak kell lenniük.",
+    "E2403": "Érvénytelen intenzitás tartomány (alsó > felső).",
+    "E2404": "Váratlan hiba a tartomány maszkolás során.",
+    # calculate_intensity_stats
+    "E2501": "Nincsenek feldolgozandó képek.",
+    "E2502": "Hiányzó tartomány maszkok. Futtassa előbb a 'Tartomány maszk' lépést.",
+    "E2503": "A maszkok száma nem egyezik a képek számával.",
+    "E2504": "Érvénytelen percentilis értékek.",
+    "E2505": "Nincsenek érvényes pixelek a maszkban.",
+    "E2506": "Intenzitás statisztika számítás sikertelen.",
+    "E2507": "Váratlan hiba az intenzitás statisztika számítás során.",
+    # add_sequence_values
+    "E2631": "Nincsenek feldolgozandó képek.",
+    "E2632": "Hiányzó változó név.",
+    "E2633": "Nem adott meg értékeket vagy generálási paramétereket.",
+    "E2634": "Az explicit értékek érvénytelenek (nem számok).",
+    "E2635": "Az értékek száma nem egyezik a képek számával.",
+    "E2636": "Érvénytelen kezdőérték/lépésköz.",
+    "E2637": "Érvénytelen kezdő/végérték.",
+    "E2638": "Váratlan hiba a szekvencia értékek hozzáadásakor.",
+    # fit_curve
+    "E2701": "Nincsenek feldolgozandó képek.",
+    "E2702": "Hiányzó intenzitás statisztikák.",
+    "E2703": "Az X tengely változó nem található.",
+    "E2704": "Az Y tengely statisztika nem található.",
+    "E2705": "Nincs elegendő adatpont a görbe illesztéshez.",
+    "E2706": "Az X és Y adatsorok hossza nem egyezik.",
+    "E2707": "NaN vagy végtelen érték az adatokban.",
+    "E2708": "Görbe illesztés sikertelen.",
+    "E2709": "Érvénytelen illesztési modell.",
+    "E2710": "A polinom fok túl magas az adatpontok számához képest.",
+    "E2711": "Váratlan hiba a görbe illesztés során.",
+    # predict_node
+    "E2801": "Hiányzó modell adatok.",
+    "E2803": "Nincsenek illesztett görbék a modell adatokban.",
+    "E2804": "A görbe illesztés index tartományon kívül esik.",
+    "E2805": "Hiányzó intenzitás statisztikák a bemeneti adatokban.",
+    "E2806": "Predikció számítás sikertelen.",
+    "E2808": "Váratlan hiba a predikció során.",
+}
 
 
 def _clamp_params(step_def_id: str, params: dict) -> dict:
@@ -101,182 +128,166 @@ def _clamp_params(step_def_id: str, params: dict) -> dict:
     return clamped
 
 
-def safe_execute_step(
-    step_def_id: str,
-    params: dict,
-    input_image: Optional[np.ndarray],
-    step_index: int,
-) -> StepResult:
+def _serialize_value(val: Any) -> Any:
+    """Convert numpy types to JSON-serializable Python types."""
+    if isinstance(val, np.ndarray):
+        if val.ndim <= 1 and val.size <= 1024:
+            return val.tolist()
+        return f"<array shape={val.shape}>"
+    if isinstance(val, (np.integer,)):
+        return int(val)
+    if isinstance(val, (np.floating,)):
+        return float(val)
+    if isinstance(val, dict):
+        return {k: _serialize_value(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        return [_serialize_value(v) for v in val]
+    return val
+
+
+def extract_side_outputs(data: Optional[dict]) -> dict:
     """
-    Execute a single pipeline step with full safety wrapping.
+    Extract JSON-serializable side outputs from the pipeline data dict.
 
-    1. Validate input (non-empty for non-load steps)
-    2. Auto-convert input type
-    3. Clamp params
-    4. Execute in try/except
-    5. Validate output
+    Skips large arrays (masks, images) and returns results, meta,
+    and scalar summaries.
     """
-    defn = STEP_DEFINITIONS.get(step_def_id)
-    if defn is None:
-        return StepResult(
-            success=False,
-            warnings=[f"Ismeretlen lépés: {step_def_id}"],
-        )
+    if data is None:
+        return {}
 
-    executor = STEP_EXECUTORS.get(step_def_id)
-    if executor is None:
-        return StepResult(
-            success=False,
-            warnings=[f"Nincs végrehajtó a lépéshez: {step_def_id}"],
-        )
+    side = {}
 
-    # For non-load steps, validate input image
-    if step_def_id != "load_image":
-        if input_image is None or (isinstance(input_image, np.ndarray) and input_image.size == 0):
-            return StepResult(
-                success=False,
-                warnings=["Nincs bemeneti kép ehhez a lépéshez."],
-            )
+    # Copy serializable results
+    results = data.get("results", {})
+    for key, val in results.items():
+        if key == "range_masks":
+            side["range_masks_count"] = len(val) if isinstance(val, list) else 0
+            continue
+        side[key] = _serialize_value(val)
 
-        # Determine previous output type from image shape
-        if input_image.ndim == 2:
-            actual_type = DataType.GRAYSCALE
-        else:
-            actual_type = DataType.IMAGE
+    # Copy meta
+    meta = data.get("meta", {})
+    if meta:
+        side["meta"] = _serialize_value(meta)
 
-        # Auto-convert if needed
-        input_image = _auto_convert(input_image, actual_type, defn.input_type)
+    # Image count
+    images = data.get("images", [])
+    side["image_count"] = len(images)
 
-    # Clamp parameters
-    params = _clamp_params(step_def_id, params)
+    # History
+    history = data.get("history", [])
+    if history:
+        side["history"] = history
 
-    # Execute with safety wrapper
-    try:
-        result = executor(input_image, params)
-    except cv2.error as e:
-        logger.error(f"OpenCV error in step {step_index} ({step_def_id}): {e}")
-        return StepResult(
-            success=False,
-            warnings=[f"OpenCV hiba a(z) {defn.name} lépésben: {str(e)[:200]}"],
-        )
-    except (ValueError, TypeError) as e:
-        logger.error(f"Value/Type error in step {step_index} ({step_def_id}): {e}")
-        return StepResult(
-            success=False,
-            warnings=[f"Paraméter hiba a(z) {defn.name} lépésben: {str(e)[:200]}"],
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error in step {step_index} ({step_def_id}): {e}")
-        return StepResult(
-            success=False,
-            warnings=[f"Váratlan hiba a(z) {defn.name} lépésben: {str(e)[:200]}"],
-        )
-
-    # Validate output
-    if result.success and result.primary_output is not None:
-        if not isinstance(result.primary_output, np.ndarray):
-            return StepResult(
-                success=False,
-                warnings=[f"A(z) {defn.name} lépés nem numpy tömböt adott vissza."],
-            )
-        if result.primary_output.size == 0:
-            return StepResult(
-                success=False,
-                warnings=[f"A(z) {defn.name} lépés üres képet adott vissza."],
-            )
-
-    return result
+    return side
 
 
 def execute_pipeline(
     doc: PipelineDocument,
     up_to_step: int = -1,
-    use_cache: bool = True,
 ) -> PipelineResult:
     """
     Execute pipeline steps 0..up_to_step (inclusive).
-    If up_to_step < 0, execute all steps.
+
+    Each step receives and returns a shared *data dict*.  The first step
+    (``load_image``) creates the dict; subsequent steps modify it in
+    place.  If ``data["error"]`` is set by a processing element, execution
+    stops immediately.
     """
-    # Validate first
     validation_errors = validate_pipeline(doc)
     if validation_errors:
-        return PipelineResult(
-            success=False,
-            errors=validation_errors,
-        )
+        return PipelineResult(success=False, errors=validation_errors)
 
     if up_to_step < 0 or up_to_step >= len(doc.steps):
         up_to_step = len(doc.steps) - 1
 
-    current_image = None
-    step_results = []
+    data: Optional[dict] = None
 
     for i in range(up_to_step + 1):
         step_inst = doc.steps[i]
         defn = STEP_DEFINITIONS.get(step_inst.step_def_id)
         if defn is None:
-            error = StepError(
-                step_index=i, step_def_id=step_inst.step_def_id,
-                error_code="E3005", message=f"Ismeretlen lépés: {step_inst.step_def_id}",
+            return PipelineResult(
+                success=False,
+                errors=[StepError(
+                    step_index=i, step_def_id=step_inst.step_def_id,
+                    error_code="E3005",
+                    message=f"Ismeretlen lépés: {step_inst.step_def_id}",
+                )],
+                executed_up_to=max(0, i - 1),
+            )
+
+        executor = STEP_EXECUTORS.get(step_inst.step_def_id)
+        if executor is None:
+            return PipelineResult(
+                success=False,
+                errors=[StepError(
+                    step_index=i, step_def_id=step_inst.step_def_id,
+                    error_code="E3005",
+                    message=f"Nincs végrehajtó a lépéshez: {step_inst.step_def_id}",
+                )],
+                executed_up_to=max(0, i - 1),
+            )
+
+        # For non-load steps, data must already exist
+        if step_inst.step_def_id != "load_image" and data is None:
+            return PipelineResult(
+                success=False,
+                errors=[StepError(
+                    step_index=i, step_def_id=step_inst.step_def_id,
+                    error_code="E3001",
+                    message="Nincs bemeneti adat. Az első lépésnek 'Kép betöltése' típusúnak kell lennie.",
+                )],
+                executed_up_to=max(0, i - 1),
+            )
+
+        params = _clamp_params(step_inst.step_def_id, step_inst.param_values)
+
+        try:
+            data = executor(data, params)
+        except cv2.error as e:
+            logger.error("OpenCV error in step %d (%s): %s", i, step_inst.step_def_id, e)
+            return PipelineResult(
+                success=False,
+                errors=[StepError(
+                    step_index=i, step_def_id=step_inst.step_def_id,
+                    error_code="E3005",
+                    message=f"OpenCV hiba a(z) {defn.name} lépésben: {str(e)[:200]}",
+                )],
+                executed_up_to=max(0, i - 1),
+                data=data,
+            )
+        except Exception as e:
+            logger.error("Error in step %d (%s): %s", i, step_inst.step_def_id, e)
+            return PipelineResult(
+                success=False,
+                errors=[StepError(
+                    step_index=i, step_def_id=step_inst.step_def_id,
+                    error_code="E3005",
+                    message=f"Hiba a(z) {defn.name} lépésben: {str(e)[:200]}",
+                )],
+                executed_up_to=max(0, i - 1),
+                data=data,
+            )
+
+        # Check for processing-element error
+        if data is not None and data.get("error"):
+            error_code = data["error"]
+            message = PROC_ELEMENT_MESSAGES.get(
+                error_code, f"Feldolgozási hiba: {error_code}"
             )
             return PipelineResult(
-                success=False, step_results=step_results,
-                errors=[error], executed_up_to=i - 1,
+                success=False,
+                errors=[StepError(
+                    step_index=i, step_def_id=step_inst.step_def_id,
+                    error_code=error_code, message=message,
+                )],
+                executed_up_to=i,
+                data=data,
             )
-
-        # Check cache
-        input_hash = _compute_input_hash(current_image)
-        step_hash = _compute_step_hash(step_inst.step_def_id, step_inst.param_values, input_hash)
-
-        cached = _step_cache.get(step_hash) if use_cache else None
-        if cached is not None:
-            img, side_outputs, out_type = cached
-            result = StepResult(
-                success=True, primary_output=img,
-                side_outputs=side_outputs, output_type=out_type,
-            )
-        else:
-            result = safe_execute_step(
-                step_inst.step_def_id,
-                step_inst.param_values,
-                current_image,
-                i,
-            )
-
-            # Store in cache if successful
-            if result.success and use_cache:
-                if len(_step_cache) >= _MAX_CACHE_ENTRIES:
-                    # Evict oldest entries (simple strategy)
-                    keys = list(_step_cache.keys())
-                    for k in keys[:len(keys) // 2]:
-                        del _step_cache[k]
-                _step_cache[step_hash] = (
-                    result.primary_output,
-                    result.side_outputs,
-                    result.output_type,
-                )
-
-        step_results.append(result)
-
-        if not result.success:
-            error = StepError(
-                step_index=i, step_def_id=step_inst.step_def_id,
-                error_code="E3005",
-                message=result.warnings[0] if result.warnings else "Ismeretlen hiba",
-            )
-            return PipelineResult(
-                success=False, step_results=step_results,
-                errors=[error], executed_up_to=i,
-            )
-
-        current_image = result.primary_output
 
     return PipelineResult(
-        success=True, step_results=step_results,
+        success=True,
         executed_up_to=up_to_step,
+        data=data,
     )
-
-
-def clear_cache():
-    """Clear the pipeline step cache."""
-    _step_cache.clear()

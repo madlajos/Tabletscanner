@@ -2,9 +2,7 @@
 Pipeline validation: structural and parameter validation for pipeline documents.
 """
 from typing import List
-from pipeline_types import (
-    DataType, StepError, StepInstance, PipelineDocument, can_convert,
-)
+from pipeline_types import StepError, StepInstance, PipelineDocument
 from pipeline_steps import STEP_DEFINITIONS
 
 
@@ -45,24 +43,6 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
         # Validate parameters
         param_errors = _validate_params(i, step_inst, defn)
         errors.extend(param_errors)
-
-        # Validate type compatibility with previous step
-        if i > 0:
-            prev_inst = doc.steps[i - 1]
-            prev_defn = STEP_DEFINITIONS.get(prev_inst.step_def_id)
-            if prev_defn is not None:
-                prev_out = prev_defn.output_type
-                cur_in = defn.input_type
-                if not can_convert(prev_out, cur_in):
-                    errors.append(StepError(
-                        step_index=i, step_def_id=step_inst.step_def_id,
-                        error_code="E3002",
-                        message=(
-                            f"Típus inkompatibilitás: {prev_defn.name} kimenete "
-                            f"({prev_out.value}) nem csatlakoztatható "
-                            f"{defn.name} bemenetéhez ({cur_in.value})."
-                        ),
-                    ))
 
     return errors
 

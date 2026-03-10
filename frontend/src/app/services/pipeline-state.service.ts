@@ -37,8 +37,8 @@ export class PipelineStateService {
   private previewImageSubject = new BehaviorSubject<string | null>(null);
   previewImage$ = this.previewImageSubject.asObservable();
 
-  /** Side outputs from the currently selected step. */
-  private sideOutputsSubject = new BehaviorSubject<Record<string, Record<string, any>>>({});
+  /** Side outputs from the pipeline execution (accumulated). */
+  private sideOutputsSubject = new BehaviorSubject<Record<string, any>>({});
   sideOutputs$ = this.sideOutputsSubject.asObservable();
 
   /** Emitted when pipeline changes (debounced for preview). */

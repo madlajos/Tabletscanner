@@ -329,8 +329,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
           this.step = pipeline.steps[idx];
           this.definition = this.pipelineState.getStepDefinition(this.step.step_def_id);
           this.stepErrors = errors.filter((e) => e.step_index === idx);
-          const stepId = this.step.instance_id;
-          this.sideOutputs = sideOutputs[stepId] ?? {};
+          this.sideOutputs = sideOutputs ?? {};
         } else {
           this.step = undefined;
           this.definition = undefined;

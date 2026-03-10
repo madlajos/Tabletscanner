@@ -2838,12 +2838,8 @@ def preview_pipeline():
             'executed_up_to': result.executed_up_to,
         }), 200
 
-    # Build response: JPEG image + side outputs for each executed step
-    last_result = result.step_results[-1] if result.step_results else None
-    side_outputs = {}
-    for i, sr in enumerate(result.step_results):
-        if sr.side_outputs:
-            side_outputs[str(i)] = sr.side_outputs
+    # Build response: JPEG image + side outputs from the data dict
+    side_outputs = pipeline_engine.extract_side_outputs(result.data)
 
     response_data = {
         'success': True,
@@ -2851,15 +2847,22 @@ def preview_pipeline():
         'side_outputs': side_outputs,
     }
 
-    # Encode the preview image as base64 JPEG
-    if last_result and last_result.primary_output is not None:
-        img = last_result.primary_output
-        success_enc, jpeg_buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        if success_enc:
-            import base64
-            response_data['image_base64'] = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
-            response_data['image_width'] = img.shape[1]
-            response_data['image_height'] = img.shape[0]
+    # Encode the first image from the data dict as preview
+    if result.data and result.data.get("images"):
+        img = result.data["images"][0]
+        if img is not None and hasattr(img, 'shape'):
+            # Convert single-channel to BGR for JPEG encoding
+            if img.ndim == 2:
+                img_enc = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            else:
+                img_enc = img
+            success_enc, jpeg_buf = cv2.imencode('.jpg', img_enc, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if success_enc:
+                import base64
+                response_data['image_base64'] = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
+                response_data['image_width'] = img.shape[1]
+                response_data['image_height'] = img.shape[0]
+                response_data['image_count'] = len(result.data["images"])
 
     return jsonify(response_data), 200
 

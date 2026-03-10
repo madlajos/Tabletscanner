@@ -1,26 +1,33 @@
 """
-Pipeline step catalog: definitions and execution functions for all V1 steps.
+Pipeline step catalog: definitions and execution functions for all steps.
 
-Each step is registered via STEP_REGISTRY (id -> StepDefinition) and
+Each step is registered via STEP_DEFINITIONS (id -> StepDefinition) and
 STEP_EXECUTORS (id -> callable).
 
-Executor signature:
-    def execute(input_image: np.ndarray | None, params: dict) -> StepResult
+Executor signature (data-dict pattern):
+    def execute(data: dict, params: dict) -> dict
 
-All executors must:
- - Accept BGR uint8 or grayscale uint8 (auto-converted by engine)
- - Return StepResult with primary_output as numpy array
- - Never raise — return StepResult(success=False) with warnings instead
+The data dict flows through the entire pipeline, accumulating images,
+results, metadata, and history.  Processing elements live in
+proc_elements/ and are wrapped here with parameter mapping.
 """
-import cv2
-import numpy as np
-import os
 from pipeline_types import (
-    DataType, ParamSchema, StepDefinition, StepResult,
+    DataType, ParamSchema, StepDefinition,
+)
+from proc_elements import (
+    load_image as _pe_load_image,
+    select_channel as _pe_select_channel,
+    apply_threshold as _pe_apply_threshold,
+    calculate_histograms as _pe_calculate_histograms,
+    apply_range_mask as _pe_apply_range_mask,
+    calculate_intensity_stats as _pe_calculate_intensity_stats,
+    add_sequence_values as _pe_add_sequence_values,
+    fit_curve as _pe_fit_curve,
+    predict_node as _pe_predict_node,
 )
 
 # ---------------------------------------------------------------------------
-# Step definitions (catalog)
+# Registry
 # ---------------------------------------------------------------------------
 
 STEP_DEFINITIONS: dict[str, StepDefinition] = {}
@@ -33,579 +40,327 @@ def _register(defn: StepDefinition, executor):
 
 
 # ---------------------------------------------------------------------------
-# 1. Load Image
+# 1. Load Image  (load_img.py)
 # ---------------------------------------------------------------------------
 _load_image_def = StepDefinition(
     id="load_image",
     name="Kép betöltése",
     category="io",
-    description="Kép betöltése fájlból. Ez az első lépés minden feldolgozási láncban.",
+    description="Kép(ek) betöltése fájlból vagy mappából. Ez az első lépés minden feldolgozási láncban.",
     icon="image",
     input_type=DataType.IMAGE,
     output_type=DataType.IMAGE,
     params=[
-        ParamSchema(name="source", label="Forrásfájl", type="file_path",
+        ParamSchema(name="source", label="Forrás útvonal", type="file_path",
                     default="", required=True,
-                    description="A betöltendő képfájl elérési útja"),
+                    description="Képfájl vagy mappa elérési útja"),
     ],
-    side_output_types={"width": "SCALAR", "height": "SCALAR", "channels": "SCALAR"},
+    side_output_types={"count": "SCALAR"},
 )
 
-def _exec_load_image(_input, params: dict) -> StepResult:
+
+def _exec_load_image(data: dict, params: dict) -> dict:
     path = params.get("source", "")
-    if not path or not os.path.isfile(path):
-        return StepResult(success=False, warnings=[f"A fájl nem található: {path}"])
-    img = cv2.imread(path, cv2.IMREAD_COLOR)
-    if img is None:
-        return StepResult(success=False, warnings=[f"A kép nem olvasható: {path}"])
-    h, w = img.shape[:2]
-    ch = img.shape[2] if img.ndim == 3 else 1
-    return StepResult(
-        success=True, primary_output=img, output_type=DataType.IMAGE,
-        side_outputs={"width": w, "height": h, "channels": ch},
-    )
+    if not path:
+        data["error"] = "E2002"
+        return data
+    return _pe_load_image(path)
+
 
 _register(_load_image_def, _exec_load_image)
 
 
 # ---------------------------------------------------------------------------
-# 2. Brightness / Gamma
+# 2. Select Channel  (select_channel.py)
 # ---------------------------------------------------------------------------
-_brightness_gamma_def = StepDefinition(
-    id="brightness_gamma",
-    name="Fényerő / Gamma",
+_select_channel_def = StepDefinition(
+    id="select_channel",
+    name="Csatorna kiválasztás",
     category="adjustment",
-    description="Fényerő és gamma korrekció. A fényerő hozzáadódik, a gamma hatványozással módosít.",
-    icon="brightness_6",
-    input_type=DataType.IMAGE,
-    output_type=DataType.IMAGE,
-    params=[
-        ParamSchema(name="brightness", label="Fényerő", type="int",
-                    default=0, min=-100, max=100, step=1),
-        ParamSchema(name="contrast", label="Kontraszt", type="float",
-                    default=1.0, min=0.1, max=3.0, step=0.1),
-        ParamSchema(name="gamma", label="Gamma", type="float",
-                    default=1.0, min=0.1, max=5.0, step=0.1),
-    ],
-)
-
-def _exec_brightness_gamma(img: np.ndarray, params: dict) -> StepResult:
-    brightness = int(params.get("brightness", 0))
-    contrast = float(params.get("contrast", 1.0))
-    gamma = float(params.get("gamma", 1.0))
-
-    # Contrast and brightness via convertScaleAbs
-    out = cv2.convertScaleAbs(img, alpha=contrast, beta=brightness)
-
-    # Gamma correction via LUT
-    if abs(gamma - 1.0) > 1e-3:
-        inv_gamma = 1.0 / max(gamma, 0.01)
-        table = np.array(
-            [(i / 255.0) ** inv_gamma * 255 for i in range(256)]
-        ).astype("uint8")
-        out = cv2.LUT(out, table)
-
-    return StepResult(success=True, primary_output=out, output_type=DataType.IMAGE)
-
-_register(_brightness_gamma_def, _exec_brightness_gamma)
-
-
-# ---------------------------------------------------------------------------
-# 3. Threshold
-# ---------------------------------------------------------------------------
-_threshold_def = StepDefinition(
-    id="threshold",
-    name="Küszöbölés",
-    category="analysis",
-    description="Bináris vagy adaptív küszöbölés. Az eredmény egy maszk (0/255).",
-    icon="tonality",
-    input_type=DataType.GRAYSCALE,
-    output_type=DataType.MASK,
-    params=[
-        ParamSchema(name="method", label="Módszer", type="enum",
-                    default="binary", options=["binary", "binary_inv", "otsu", "adaptive_mean", "adaptive_gaussian"]),
-        ParamSchema(name="thresh_value", label="Küszöbérték", type="int",
-                    default=128, min=0, max=255, step=1,
-                    description="Használatos binary/binary_inv esetén"),
-        ParamSchema(name="block_size", label="Blokk méret", type="int",
-                    default=11, min=3, max=255, step=2, odd_only=True,
-                    description="Adaptív módszerekhez (páratlan szám)"),
-        ParamSchema(name="c_value", label="C konstans", type="int",
-                    default=2, min=-50, max=50, step=1,
-                    description="Adaptív módszerekhez levonandó konstans"),
-    ],
-    side_output_types={"threshold_used": "SCALAR"},
-)
-
-def _exec_threshold(img: np.ndarray, params: dict) -> StepResult:
-    method = params.get("method", "binary")
-    thresh_val = int(params.get("thresh_value", 128))
-    block_size = int(params.get("block_size", 11))
-    c_val = int(params.get("c_value", 2))
-
-    # Ensure grayscale
-    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Ensure block_size is odd and >= 3
-    if block_size < 3:
-        block_size = 3
-    if block_size % 2 == 0:
-        block_size += 1
-
-    used_thresh = thresh_val
-
-    if method == "binary":
-        _, out = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
-    elif method == "binary_inv":
-        _, out = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY_INV)
-    elif method == "otsu":
-        used_thresh, out = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        used_thresh = float(used_thresh)
-    elif method == "adaptive_mean":
-        out = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                    cv2.THRESH_BINARY, block_size, c_val)
-    elif method == "adaptive_gaussian":
-        out = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                    cv2.THRESH_BINARY, block_size, c_val)
-    else:
-        return StepResult(success=False, warnings=[f"Ismeretlen küszöbölési módszer: {method}"])
-
-    return StepResult(
-        success=True, primary_output=out, output_type=DataType.MASK,
-        side_outputs={"threshold_used": used_thresh},
-    )
-
-_register(_threshold_def, _exec_threshold)
-
-
-# ---------------------------------------------------------------------------
-# 4. Histogram
-# ---------------------------------------------------------------------------
-_histogram_def = StepDefinition(
-    id="histogram",
-    name="Hisztogram",
-    category="analysis",
-    description="Hisztogram számítás csatornánként. A kép változatlan marad, az eredmény mellékadatként jelenik meg.",
-    icon="bar_chart",
-    input_type=DataType.IMAGE,
-    output_type=DataType.IMAGE,
-    params=[
-        ParamSchema(name="bins", label="Osztások száma", type="int",
-                    default=256, min=2, max=256, step=1),
-    ],
-    side_output_types={"histogram": "HISTOGRAM"},
-)
-
-def _exec_histogram(img: np.ndarray, params: dict) -> StepResult:
-    bins = int(params.get("bins", 256))
-    bins = max(2, min(256, bins))
-
-    histograms = {}
-    if img.ndim == 3 and img.shape[2] == 3:
-        for i, color in enumerate(["blue", "green", "red"]):
-            hist = cv2.calcHist([img], [i], None, [bins], [0, 256])
-            histograms[color] = hist.flatten().tolist()
-    else:
-        hist = cv2.calcHist([img], [0], None, [bins], [0, 256])
-        histograms["gray"] = hist.flatten().tolist()
-
-    return StepResult(
-        success=True, primary_output=img.copy(), output_type=DataType.IMAGE,
-        side_outputs={"histogram": histograms},
-    )
-
-_register(_histogram_def, _exec_histogram)
-
-
-# ---------------------------------------------------------------------------
-# 5. Color / Brightness Statistics
-# ---------------------------------------------------------------------------
-_color_stats_def = StepDefinition(
-    id="color_stats",
-    name="Színstatisztikák",
-    category="analysis",
-    description="Átlagos fényerő, szórás, min/max csatornánként. Numerikus eredmény, a kép nem változik.",
-    icon="analytics",
-    input_type=DataType.IMAGE,
-    output_type=DataType.IMAGE,
-    params=[],
-    side_output_types={
-        "mean_brightness": "SCALAR",
-        "std_brightness": "SCALAR",
-        "per_channel_mean": "HISTOGRAM",
-        "per_channel_std": "HISTOGRAM",
-    },
-)
-
-def _exec_color_stats(img: np.ndarray, params: dict) -> StepResult:
-    if img.ndim == 3 and img.shape[2] >= 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = img
-
-    mean_br = float(np.mean(gray))
-    std_br = float(np.std(gray))
-
-    per_ch_mean = {}
-    per_ch_std = {}
-    if img.ndim == 3 and img.shape[2] == 3:
-        for i, ch_name in enumerate(["blue", "green", "red"]):
-            per_ch_mean[ch_name] = round(float(np.mean(img[:, :, i])), 2)
-            per_ch_std[ch_name] = round(float(np.std(img[:, :, i])), 2)
-    else:
-        per_ch_mean["gray"] = round(mean_br, 2)
-        per_ch_std["gray"] = round(std_br, 2)
-
-    return StepResult(
-        success=True, primary_output=img.copy(), output_type=DataType.IMAGE,
-        side_outputs={
-            "mean_brightness": round(mean_br, 2),
-            "std_brightness": round(std_br, 2),
-            "per_channel_mean": per_ch_mean,
-            "per_channel_std": per_ch_std,
-        },
-    )
-
-_register(_color_stats_def, _exec_color_stats)
-
-
-# ---------------------------------------------------------------------------
-# 6. Blur
-# ---------------------------------------------------------------------------
-_blur_def = StepDefinition(
-    id="blur",
-    name="Elmosás",
-    category="filter",
-    description="Gauss, medián vagy bilaterális elmosás.",
-    icon="blur_on",
-    input_type=DataType.IMAGE,
-    output_type=DataType.IMAGE,
-    params=[
-        ParamSchema(name="method", label="Módszer", type="enum",
-                    default="gaussian", options=["gaussian", "median", "bilateral"]),
-        ParamSchema(name="kernel_size", label="Kernel méret", type="int",
-                    default=5, min=1, max=99, step=2, odd_only=True),
-        ParamSchema(name="sigma", label="Sigma", type="float",
-                    default=0.0, min=0.0, max=50.0, step=0.5,
-                    description="Gauss sigma (0 = automatikus)"),
-        ParamSchema(name="sigma_color", label="Szín sigma", type="float",
-                    default=75.0, min=1.0, max=300.0, step=1.0,
-                    description="Bilaterális szűrő szín sigma"),
-        ParamSchema(name="sigma_space", label="Tér sigma", type="float",
-                    default=75.0, min=1.0, max=300.0, step=1.0,
-                    description="Bilaterális szűrő térbeli sigma"),
-    ],
-)
-
-def _exec_blur(img: np.ndarray, params: dict) -> StepResult:
-    method = params.get("method", "gaussian")
-    ksize = int(params.get("kernel_size", 5))
-    sigma = float(params.get("sigma", 0.0))
-    sigma_color = float(params.get("sigma_color", 75.0))
-    sigma_space = float(params.get("sigma_space", 75.0))
-
-    # Ensure odd kernel
-    if ksize < 1:
-        ksize = 1
-    if ksize % 2 == 0:
-        ksize += 1
-
-    if method == "gaussian":
-        out = cv2.GaussianBlur(img, (ksize, ksize), sigma)
-    elif method == "median":
-        out = cv2.medianBlur(img, ksize)
-    elif method == "bilateral":
-        out = cv2.bilateralFilter(img, ksize, sigma_color, sigma_space)
-    else:
-        return StepResult(success=False, warnings=[f"Ismeretlen elmosási módszer: {method}"])
-
-    return StepResult(success=True, primary_output=out, output_type=DataType.IMAGE)
-
-_register(_blur_def, _exec_blur)
-
-
-# ---------------------------------------------------------------------------
-# 7. Edge Detection
-# ---------------------------------------------------------------------------
-_edge_detection_def = StepDefinition(
-    id="edge_detection",
-    name="Éldetektálás",
-    category="detection",
-    description="Canny, Sobel vagy Laplacian éldetektálás.",
-    icon="gradient",
-    input_type=DataType.GRAYSCALE,
-    output_type=DataType.GRAYSCALE,
-    params=[
-        ParamSchema(name="method", label="Módszer", type="enum",
-                    default="canny", options=["canny", "sobel", "laplacian"]),
-        ParamSchema(name="threshold1", label="Alsó küszöb", type="int",
-                    default=50, min=0, max=500, step=1,
-                    description="Canny alsó küszöb"),
-        ParamSchema(name="threshold2", label="Felső küszöb", type="int",
-                    default=150, min=0, max=500, step=1,
-                    description="Canny felső küszöb"),
-        ParamSchema(name="ksize", label="Kernel méret", type="int",
-                    default=3, min=1, max=31, step=2, odd_only=True,
-                    description="Sobel/Laplacian kernel méret"),
-    ],
-    side_output_types={"edge_pixel_count": "SCALAR", "edge_ratio": "SCALAR"},
-)
-
-def _exec_edge_detection(img: np.ndarray, params: dict) -> StepResult:
-    method = params.get("method", "canny")
-    t1 = int(params.get("threshold1", 50))
-    t2 = int(params.get("threshold2", 150))
-    ksize = int(params.get("ksize", 3))
-
-    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    if ksize < 1:
-        ksize = 1
-    if ksize % 2 == 0:
-        ksize += 1
-    ksize = min(ksize, 31)
-
-    if method == "canny":
-        out = cv2.Canny(gray, t1, t2)
-    elif method == "sobel":
-        sx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=ksize)
-        sy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=ksize)
-        mag = cv2.magnitude(sx, sy)
-        out = np.clip(mag, 0, 255).astype(np.uint8)
-    elif method == "laplacian":
-        lap = cv2.Laplacian(gray, cv2.CV_64F, ksize=ksize)
-        out = np.clip(np.abs(lap), 0, 255).astype(np.uint8)
-    else:
-        return StepResult(success=False, warnings=[f"Ismeretlen éldetektálási módszer: {method}"])
-
-    edge_count = int(np.count_nonzero(out))
-    total = out.shape[0] * out.shape[1]
-    edge_ratio = round(edge_count / max(total, 1), 4)
-
-    return StepResult(
-        success=True, primary_output=out, output_type=DataType.GRAYSCALE,
-        side_outputs={"edge_pixel_count": edge_count, "edge_ratio": edge_ratio},
-    )
-
-_register(_edge_detection_def, _exec_edge_detection)
-
-
-# ---------------------------------------------------------------------------
-# 8. Channel Operations
-# ---------------------------------------------------------------------------
-_channel_ops_def = StepDefinition(
-    id="channel_ops",
-    name="Csatorna műveletek",
-    category="adjustment",
-    description="Szín csatorna kiválasztása (B/G/R/H/S/V) vagy szürkeárnyalatossá alakítás.",
+    description="Színtér konverzió és csatorna kiválasztás (BGR, HSV, LAB, szürkeárnyalat).",
     icon="palette",
     input_type=DataType.IMAGE,
     output_type=DataType.GRAYSCALE,
     params=[
+        ParamSchema(name="space", label="Színtér", type="enum",
+                    default="GRAY",
+                    options=["BGR", "HSV", "LAB", "GRAY"]),
         ParamSchema(name="channel", label="Csatorna", type="enum",
-                    default="gray",
-                    options=["gray", "blue", "green", "red", "hue", "saturation", "value"]),
+                    default="GRAY",
+                    options=["R", "G", "B", "H", "S", "V", "L", "A", "GRAY"],
+                    description="A kiválasztott csatorna a megadott színtérből"),
     ],
 )
 
-def _exec_channel_ops(img: np.ndarray, params: dict) -> StepResult:
-    channel = params.get("channel", "gray")
 
-    if img.ndim == 2:
-        # Already grayscale — return as-is for most channels
-        return StepResult(success=True, primary_output=img.copy(), output_type=DataType.GRAYSCALE)
+def _exec_select_channel(data: dict, params: dict) -> dict:
+    space = params.get("space", "GRAY")
+    channel = params.get("channel", "GRAY")
+    return _pe_select_channel(data, space=space, channel=channel)
 
-    if channel == "gray":
-        out = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    elif channel == "blue":
-        out = img[:, :, 0]
-    elif channel == "green":
-        out = img[:, :, 1]
-    elif channel == "red":
-        out = img[:, :, 2]
-    elif channel in ("hue", "saturation", "value"):
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        idx = {"hue": 0, "saturation": 1, "value": 2}[channel]
-        out = hsv[:, :, idx]
-    else:
-        return StepResult(success=False, warnings=[f"Ismeretlen csatorna: {channel}"])
 
-    return StepResult(success=True, primary_output=out.copy(), output_type=DataType.GRAYSCALE)
-
-_register(_channel_ops_def, _exec_channel_ops)
+_register(_select_channel_def, _exec_select_channel)
 
 
 # ---------------------------------------------------------------------------
-# 9. Crop / ROI
+# 3. Apply Threshold  (apply_thresh.py)
 # ---------------------------------------------------------------------------
-_crop_roi_def = StepDefinition(
-    id="crop_roi",
-    name="Kivágás (ROI)",
-    category="adjustment",
-    description="Téglalap alakú kivágás a képből. A koordináták automatikusan a kép méretéhez igazodnak.",
-    icon="crop",
-    input_type=DataType.IMAGE,
-    output_type=DataType.IMAGE,
+_apply_threshold_def = StepDefinition(
+    id="apply_threshold",
+    name="Küszöbölés",
+    category="filter",
+    description="Bináris küszöbölés. A bemenet szürkeárnyalatos kép kell legyen.",
+    icon="tonality",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.MASK,
     params=[
-        ParamSchema(name="x", label="X kezdőpont", type="int", default=0, min=0, max=100000, step=1),
-        ParamSchema(name="y", label="Y kezdőpont", type="int", default=0, min=0, max=100000, step=1),
-        ParamSchema(name="width", label="Szélesség", type="int", default=100, min=1, max=100000, step=1),
-        ParamSchema(name="height", label="Magasság", type="int", default=100, min=1, max=100000, step=1),
+        ParamSchema(name="thresh", label="Küszöbérték", type="int",
+                    default=127, min=0, max=255, step=1),
+        ParamSchema(name="maxval", label="Max. érték", type="int",
+                    default=255, min=0, max=255, step=1),
+        ParamSchema(name="mode", label="Mód", type="enum",
+                    default="binary",
+                    options=["binary", "binary_inv", "trunc", "tozero", "tozero_inv"]),
     ],
-    side_output_types={"actual_width": "SCALAR", "actual_height": "SCALAR"},
 )
 
-def _exec_crop_roi(img: np.ndarray, params: dict) -> StepResult:
-    h, w = img.shape[:2]
-    x = int(params.get("x", 0))
-    y = int(params.get("y", 0))
-    cw = int(params.get("width", 100))
-    ch = int(params.get("height", 100))
 
-    # Clamp to image bounds
-    x = max(0, min(x, w - 1))
-    y = max(0, min(y, h - 1))
-    x2 = max(x + 1, min(x + cw, w))
-    y2 = max(y + 1, min(y + ch, h))
+def _exec_apply_threshold(data: dict, params: dict) -> dict:
+    thresh = int(params.get("thresh", 127))
+    maxval = int(params.get("maxval", 255))
+    mode = params.get("mode", "binary")
+    return _pe_apply_threshold(data, thresh=thresh, maxval=maxval, mode=mode)
 
-    out = img[y:y2, x:x2].copy()
-    return StepResult(
-        success=True, primary_output=out, output_type=DataType.IMAGE,
-        side_outputs={"actual_width": x2 - x, "actual_height": y2 - y},
-    )
 
-_register(_crop_roi_def, _exec_crop_roi)
+_register(_apply_threshold_def, _exec_apply_threshold)
 
 
 # ---------------------------------------------------------------------------
-# 10. Contour Detection
+# 4. Calculate Histograms  (generate_histogram.py)
 # ---------------------------------------------------------------------------
-_contour_detection_def = StepDefinition(
-    id="contour_detection",
-    name="Kontúr detektálás",
-    category="detection",
-    description="Kontúrok keresése és megjelenítése. Az eredmény a kontúrokat rárajzolja a képre.",
-    icon="polyline",
-    input_type=DataType.IMAGE,
-    output_type=DataType.IMAGE,
+_calculate_histograms_def = StepDefinition(
+    id="calculate_histograms",
+    name="Hisztogram",
+    category="analysis",
+    description="Hisztogram számítás szürkeárnyalatos képekhez. A kép változatlan marad, az eredmény mellékadatként jelenik meg.",
+    icon="bar_chart",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
     params=[
-        ParamSchema(name="mode", label="Keresési mód", type="enum",
-                    default="external", options=["external", "list", "tree"]),
-        ParamSchema(name="min_area", label="Min. terület", type="int",
-                    default=100, min=0, max=1000000, step=10,
-                    description="Kontúrok szűrése minimális terület alapján"),
-        ParamSchema(name="draw_color_b", label="Szín B", type="int", default=0, min=0, max=255, step=1),
-        ParamSchema(name="draw_color_g", label="Szín G", type="int", default=255, min=0, max=255, step=1),
-        ParamSchema(name="draw_color_r", label="Szín R", type="int", default=0, min=0, max=255, step=1),
-        ParamSchema(name="thickness", label="Vastagság", type="int", default=2, min=1, max=20, step=1),
+        ParamSchema(name="bins", label="Osztások száma", type="int",
+                    default=256, min=2, max=1024, step=1),
+        ParamSchema(name="range_min", label="Tartomány min", type="int",
+                    default=0, min=0, max=65535, step=1),
+        ParamSchema(name="range_max", label="Tartomány max", type="int",
+                    default=256, min=1, max=65536, step=1),
     ],
-    side_output_types={
-        "contour_count": "SCALAR",
-        "total_area": "SCALAR",
-        "areas": "HISTOGRAM",
-    },
+    side_output_types={"histograms": "HISTOGRAM"},
 )
 
-def _exec_contour_detection(img: np.ndarray, params: dict) -> StepResult:
-    mode_str = params.get("mode", "external")
-    min_area = int(params.get("min_area", 100))
-    color_b = int(params.get("draw_color_b", 0))
-    color_g = int(params.get("draw_color_g", 255))
-    color_r = int(params.get("draw_color_r", 0))
-    thickness = int(params.get("thickness", 2))
 
-    mode_map = {
-        "external": cv2.RETR_EXTERNAL,
-        "list": cv2.RETR_LIST,
-        "tree": cv2.RETR_TREE,
-    }
-    mode = mode_map.get(mode_str, cv2.RETR_EXTERNAL)
+def _exec_calculate_histograms(data: dict, params: dict) -> dict:
+    bins = int(params.get("bins", 256))
+    range_min = int(params.get("range_min", 0))
+    range_max = int(params.get("range_max", 256))
+    return _pe_calculate_histograms(data, bins=bins, hist_range=(range_min, range_max))
 
-    # Need a binary image for findContours
-    if img.ndim == 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = img
 
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    contours, _ = cv2.findContours(binary, mode, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Filter by area
-    filtered = [c for c in contours if cv2.contourArea(c) >= min_area]
-
-    # Draw on a copy (ensure BGR for colored drawing)
-    if img.ndim == 2:
-        canvas = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    else:
-        canvas = img.copy()
-
-    cv2.drawContours(canvas, filtered, -1, (color_b, color_g, color_r), thickness)
-
-    areas = [round(cv2.contourArea(c), 1) for c in filtered]
-    total_area = round(sum(areas), 1)
-
-    return StepResult(
-        success=True, primary_output=canvas, output_type=DataType.IMAGE,
-        side_outputs={
-            "contour_count": len(filtered),
-            "total_area": total_area,
-            "areas": areas,
-        },
-    )
-
-_register(_contour_detection_def, _exec_contour_detection)
+_register(_calculate_histograms_def, _exec_calculate_histograms)
 
 
 # ---------------------------------------------------------------------------
-# 11. Save / Export
+# 5. Apply Range Mask  (range_mask.py)
 # ---------------------------------------------------------------------------
-_save_export_def = StepDefinition(
-    id="save_export",
-    name="Mentés",
+_apply_range_mask_def = StepDefinition(
+    id="apply_range_mask",
+    name="Tartomány maszk",
+    category="filter",
+    description="Intenzitás tartomány alapú maszkolás. A tartományon kívüli pixelek nullázódnak.",
+    icon="filter_alt",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="low", label="Alsó határ", type="int",
+                    default=0, min=0, max=255, step=1),
+        ParamSchema(name="high", label="Felső határ", type="int",
+                    default=255, min=0, max=255, step=1),
+        ParamSchema(name="keep_mode", label="Megtartás", type="enum",
+                    default="inside",
+                    options=["inside", "outside"],
+                    description="Belső: tartományon belüli, Külső: tartományon kívüli pixelek"),
+    ],
+    side_output_types={"range_masks": "MASK"},
+)
+
+
+def _exec_apply_range_mask(data: dict, params: dict) -> dict:
+    low = int(params.get("low", 0))
+    high = int(params.get("high", 255))
+    keep_mode = params.get("keep_mode", "inside")
+    return _pe_apply_range_mask(data, low=low, high=high, keep_mode=keep_mode)
+
+
+_register(_apply_range_mask_def, _exec_apply_range_mask)
+
+
+# ---------------------------------------------------------------------------
+# 6. Calculate Intensity Stats  (calc_intensity.py)
+# ---------------------------------------------------------------------------
+_calculate_intensity_stats_def = StepDefinition(
+    id="calculate_intensity_stats",
+    name="Intenzitás statisztikák",
+    category="analysis",
+    description="Intenzitás statisztikák számítása a maszkolt területen (min, max, átlag, medián, szórás, percentilisek).",
+    icon="analytics",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="percentiles", label="Percentilisek", type="string",
+                    default="5,25,50,75,95", required=True,
+                    description="Vesszővel elválasztott percentilis értékek (0-100)"),
+    ],
+    side_output_types={"intensity_stats": "SCALAR"},
+)
+
+
+def _exec_calculate_intensity_stats(data: dict, params: dict) -> dict:
+    pct_str = params.get("percentiles", "5,25,50,75,95")
+    try:
+        percentiles = tuple(float(x.strip()) for x in str(pct_str).split(",") if x.strip())
+    except (ValueError, TypeError):
+        percentiles = (5, 25, 50, 75, 95)
+    return _pe_calculate_intensity_stats(data, percentiles=percentiles)
+
+
+_register(_calculate_intensity_stats_def, _exec_calculate_intensity_stats)
+
+
+# ---------------------------------------------------------------------------
+# 7. Add Sequence Values  (add_measured.py)
+# ---------------------------------------------------------------------------
+_add_sequence_values_def = StepDefinition(
+    id="add_sequence_values",
+    name="Szekvencia értékek",
     category="io",
-    description="Eredmény kép mentése fájlba. A kép változatlanul továbbhalad.",
-    icon="save",
+    description="Mért vagy generált értéksorozat hozzárendelése a képekhez (pl. expozíciós idő, hőmérséklet).",
+    icon="pin",
     input_type=DataType.IMAGE,
     output_type=DataType.IMAGE,
     params=[
-        ParamSchema(name="output_path", label="Kimeneti útvonal", type="file_path",
-                    default="", required=True,
-                    description="A mentendő fájl elérési útja"),
-        ParamSchema(name="quality", label="JPEG minőség", type="int",
-                    default=95, min=1, max=100, step=1),
+        ParamSchema(name="name", label="Változó neve", type="string",
+                    default="sequence_value", required=True,
+                    description="Az értéksorozat azonosítója"),
+        ParamSchema(name="mode", label="Generálás módja", type="enum",
+                    default="start_step",
+                    options=["start_step", "start_stop", "explicit"],
+                    description="start_step: kezdőérték+lépésköz, start_stop: egyenletes elosztás, explicit: kézi értékek"),
+        ParamSchema(name="start", label="Kezdőérték", type="float",
+                    default=0.0, min=-1e9, max=1e9, step=0.1),
+        ParamSchema(name="step_val", label="Lépésköz", type="float",
+                    default=1.0, min=-1e9, max=1e9, step=0.1,
+                    description="Használatos start_step módban"),
+        ParamSchema(name="stop", label="Végérték", type="float",
+                    default=100.0, min=-1e9, max=1e9, step=0.1,
+                    description="Használatos start_stop módban"),
+        ParamSchema(name="values", label="Explicit értékek", type="string",
+                    default="", required=False,
+                    description="Vesszővel elválasztott értékek (explicit módban)"),
     ],
-    side_output_types={"saved_path": "SCALAR"},
 )
 
-def _exec_save_export(img: np.ndarray, params: dict) -> StepResult:
-    path = params.get("output_path", "")
-    quality = int(params.get("quality", 95))
 
-    if not path:
-        return StepResult(success=False, warnings=["Nincs megadva kimeneti útvonal"])
+def _exec_add_sequence_values(data: dict, params: dict) -> dict:
+    name = params.get("name", "sequence_value")
+    mode = params.get("mode", "start_step")
+    start = float(params.get("start", 0.0))
+    step_val = float(params.get("step_val", 1.0))
+    stop = float(params.get("stop", 100.0))
+    values_str = params.get("values", "")
 
-    # Ensure directory exists
-    directory = os.path.dirname(path)
-    if directory and not os.path.isdir(directory):
+    if mode == "explicit":
         try:
-            os.makedirs(directory, exist_ok=True)
-        except OSError as e:
-            return StepResult(success=False, warnings=[f"Könyvtár létrehozása sikertelen: {e}"])
+            values = [float(x.strip()) for x in str(values_str).split(",") if x.strip()]
+        except (ValueError, TypeError):
+            data["error"] = "E2634"
+            return data
+        return _pe_add_sequence_values(data, name=name, values=values)
+    elif mode == "start_step":
+        return _pe_add_sequence_values(data, name=name, start=start, step=step_val)
+    elif mode == "start_stop":
+        return _pe_add_sequence_values(data, name=name, start=start, stop=stop)
+    else:
+        data["error"] = "E2638"
+        return data
 
-    ext = os.path.splitext(path)[1].lower()
-    encode_params = []
-    if ext in (".jpg", ".jpeg"):
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-    elif ext == ".png":
-        encode_params = [cv2.IMWRITE_PNG_COMPRESSION, max(0, min(9, (100 - quality) // 11))]
 
-    success = cv2.imwrite(path, img, encode_params)
-    if not success:
-        return StepResult(success=False, warnings=[f"Kép mentése sikertelen: {path}"])
+_register(_add_sequence_values_def, _exec_add_sequence_values)
 
-    return StepResult(
-        success=True, primary_output=img.copy(), output_type=DataType.IMAGE,
-        side_outputs={"saved_path": path},
-    )
 
-_register(_save_export_def, _exec_save_export)
+# ---------------------------------------------------------------------------
+# 8. Fit Curve  (curve_fitting.py)
+# ---------------------------------------------------------------------------
+_fit_curve_def = StepDefinition(
+    id="fit_curve",
+    name="Görbe illesztés",
+    category="analysis",
+    description="Lineáris vagy polinomiális görbe illesztése a szekvencia értékek és az intenzitás statisztikák alapján.",
+    icon="show_chart",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="x_name", label="X tengely (értéknév)", type="string",
+                    default="sequence_value", required=True,
+                    description="A results-ben tárolt szekvencia változó neve"),
+        ParamSchema(name="y_name", label="Y tengely (statisztika)", type="enum",
+                    default="mean",
+                    options=["mean", "median", "min", "max", "std", "p5", "p25", "p50", "p75", "p95", "dynamic_range"],
+                    description="Intenzitás statisztika mező neve"),
+        ParamSchema(name="model", label="Illesztési modell", type="enum",
+                    default="linear",
+                    options=["linear", "poly"]),
+        ParamSchema(name="degree", label="Polinom fok", type="int",
+                    default=2, min=1, max=10, step=1,
+                    description="Polinom illesztés fokszáma (poly módban)"),
+    ],
+    side_output_types={"r2": "SCALAR", "coefficients": "SCALAR"},
+)
+
+
+def _exec_fit_curve(data: dict, params: dict) -> dict:
+    x_name = params.get("x_name", "sequence_value")
+    y_name = params.get("y_name", "mean")
+    model = params.get("model", "linear")
+    degree = int(params.get("degree", 2))
+    return _pe_fit_curve(data, x_name=x_name, y_name=y_name, model=model, degree=degree)
+
+
+_register(_fit_curve_def, _exec_fit_curve)
+
+
+# ---------------------------------------------------------------------------
+# 9. Predict from Intensity  (pred_from_int.py)
+# ---------------------------------------------------------------------------
+_predict_node_def = StepDefinition(
+    id="predict_node",
+    name="Predikció",
+    category="analysis",
+    description="Előrejelzés a korábban illesztett görbe alapján. A pipeline saját curve_fits eredményét használja modellként.",
+    icon="trending_up",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="fit_index", label="Görbe illesztés index", type="int",
+                    default=0, min=0, max=100, step=1,
+                    description="Melyik korábban illesztett görbét használja (0-tól)"),
+    ],
+    side_output_types={"predictions": "SCALAR"},
+)
+
+
+def _exec_predict_node(data: dict, params: dict) -> dict:
+    fit_index = int(params.get("fit_index", 0))
+    # In a linear pipeline, model_data = data (same pipeline's curve_fits)
+    return _pe_predict_node(model_data=data, input_data=data, fit_index=fit_index)
+
+
+_register(_predict_node_def, _exec_predict_node)
