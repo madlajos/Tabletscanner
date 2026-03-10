@@ -4,6 +4,8 @@ import { HttpClient } from '@angular/common/http';
 import { map, switchMap, tap, catchError  } from 'rxjs/operators';
 import { BASE_URL } from './api-config';
 
+export type AppSection = 'scanner' | 'creator' | 'applier';
+
 //Older interface to store MeasurementResults, which are displayed on the control panel
 export interface MeasurementResult {
   label: string;
@@ -148,6 +150,18 @@ export class SharedService {
   private saveDirectory: string = '';
   private saveDirectorySubject = new BehaviorSubject<string>('');
   saveDirectory$ = this.saveDirectorySubject.asObservable();
+
+  // Active application section
+  private activeSectionSubject = new BehaviorSubject<AppSection>('scanner');
+  activeSection$ = this.activeSectionSubject.asObservable();
+
+  setActiveSection(section: AppSection): void {
+    this.activeSectionSubject.next(section);
+  }
+
+  getActiveSection(): AppSection {
+    return this.activeSectionSubject.value;
+  }
 
   constructor(private http: HttpClient) {}
 

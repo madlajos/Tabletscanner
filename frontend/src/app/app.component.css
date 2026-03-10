@@ -1,6 +1,7 @@
 :host {
-  display: contents;
-  height: 100vh;            /* full viewport height */
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   overflow: hidden;
 }
 
@@ -8,16 +9,54 @@ html,
 body {
   height: 100%;
   margin: 0;
-  background-color: #111827; /* your dark color */
+  background-color: #111827;
+}
+
+/* Navigation bar */
+.app-nav {
+  display: flex;
+  gap: 0;
+  background: #1e1e1e;
+  border-bottom: 1px solid #333;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+
+.nav-tab {
+  padding: 10px 20px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #888;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.nav-tab:hover {
+  color: #ccc;
+}
+
+.nav-tab.active {
+  color: #e0e0e0;
+  border-bottom-color: #3b82f6;
 }
 
 .app-grid {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   box-sizing: border-box;
-  padding: 12px;            /* small outer padding */
+  padding: 12px;
   display: grid;
-  grid-template-columns: 1fr 3fr 1fr; /* 1/5, 3/5, 1/5 */
-  gap: 12px;                /* small gap between columns */
+  grid-template-columns: 1fr 3fr 1fr;
+  gap: 12px;
+}
+
+.section-container {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Base styling for left, middle, and right panels */

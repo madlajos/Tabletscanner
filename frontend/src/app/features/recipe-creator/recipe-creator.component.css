@@ -1,0 +1,209 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
+.creator-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Toolbar */
+.creator-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #1e1e1e;
+  border-bottom: 1px solid #494949;
+  min-height: 40px;
+}
+
+.toolbar-title {
+  color: #e0e0e0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dirty-indicator {
+  color: #f59e0b;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.toolbar-actions button {
+  color: #b0b0b0;
+}
+
+.toolbar-actions button:hover {
+  color: #ffffff;
+}
+
+/* Main body */
+.creator-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 220px 1fr 280px;
+  gap: 8px;
+  padding: 8px;
+  min-height: 0;
+}
+
+/* Panels */
+.creator-panel {
+  background: #292929;
+  border: 1px solid #494949;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 8px 12px;
+  background-color: #3a3a3a;
+  text-align: center;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #ffffff;
+}
+
+/* Center */
+.creator-center {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.preview-area {
+  flex: 2;
+  background: #292929;
+  border: 1px solid #494949;
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.canvas-area {
+  flex: 1;
+  background: #292929;
+  border: 1px solid #494949;
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 120px;
+  max-height: 200px;
+}
+
+/* Dialogs */
+.save-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.save-dialog {
+  background: #2a2a2a;
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 20px;
+  min-width: 320px;
+  max-width: 400px;
+}
+
+.load-dialog {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.dialog-title {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin-bottom: 12px;
+}
+
+.dialog-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: #1e1e1e;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 14px;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.no-recipes {
+  color: #888;
+  font-size: 13px;
+  text-align: center;
+  padding: 20px;
+}
+
+.recipe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recipe-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.recipe-item:hover {
+  background: #333;
+}
+
+.recipe-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.recipe-name {
+  color: #e0e0e0;
+  font-size: 14px;
+}
+
+.recipe-meta {
+  color: #888;
+  font-size: 11px;
+}
+
+.recipe-delete {
+  color: #888;
+  transform: scale(0.8);
+}
+
+.recipe-delete:hover {
+  color: #ef4444;
+}

@@ -13,10 +13,13 @@ import { FormsModule } from '@angular/forms';
 import { ImageViewerComponent } from './features/image-viewer/image-viewer.component';
 import { CameraControlComponent } from './features/camera-control/camera-control.component';
 import { ErrorPopupListComponent } from './components/error-popup-list/error-popup-list.component';
-import { BackendReadyService } from './services/backend-ready.service'; // Adjust the path as needed
+import { BackendReadyService } from './services/backend-ready.service';
 import { ErrorNotificationService } from './services/error-notification.service';
 import { MotionControl } from './features/motion-control/motion-control';
 import { AutoMeasurementComponent } from './features/auto-measurement/auto-measurement.component';
+import { RecipeCreatorComponent } from './features/recipe-creator/recipe-creator.component';
+import { RecipeApplierComponent } from './features/recipe-applier/recipe-applier.component';
+import { SharedService, AppSection } from './shared.service';
 
 
 @Component({
@@ -35,7 +38,9 @@ import { AutoMeasurementComponent } from './features/auto-measurement/auto-measu
     MotionControl,
     CameraControlComponent,
     ErrorPopupListComponent,
-    AutoMeasurementComponent
+    AutoMeasurementComponent,
+    RecipeCreatorComponent,
+    RecipeApplierComponent,
   ],
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.css']
@@ -43,6 +48,7 @@ import { AutoMeasurementComponent } from './features/auto-measurement/auto-measu
 export class AppComponent implements OnInit, AfterViewInit {
   backendReady = false;
   title = 'Untitled';  
+  activeSection: AppSection = 'scanner';
   @ViewChild('sidenav') sidenav!: MatSidenav;
 
   constructor(
@@ -51,9 +57,15 @@ export class AppComponent implements OnInit, AfterViewInit {
     private errorNotificationService: ErrorNotificationService,
     private lightbox: Lightbox,
     private cdRef: ChangeDetectorRef,
+    public sharedService: SharedService,
   ) {}
 
   async ngOnInit(): Promise<void> {
+    // Subscribe to active section changes
+    this.sharedService.activeSection$.subscribe((section) => {
+      this.activeSection = section;
+    });
+
     // Wait for the backend readiness check.
     try {
       await this.backendReadyService.waitForBackendReady();
@@ -80,6 +92,10 @@ export class AppComponent implements OnInit, AfterViewInit {
       overlay.style.opacity = '0';
       setTimeout(() => overlay.remove(), 500);
     }
+  }
+
+  switchSection(section: AppSection): void {
+    this.sharedService.setActiveSection(section);
   }
 
   toggleSettingsPanel(): void {

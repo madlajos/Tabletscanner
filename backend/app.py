@@ -35,6 +35,11 @@ import manual_bgr_with_check
 import check_only
 import under_over
 import calc_color
+import pipeline_steps
+import pipeline_engine
+import pipeline_validators
+import recipe_manager
+from pipeline_types import PipelineDocument
 
 
 app = Flask(__name__)
@@ -2771,6 +2776,136 @@ def get_latest_images_status():
             'url': f'/api/latest_image/{image_type}' if img is not None else None
         }
     return jsonify(status), 200
+
+
+# =============================================================================
+# Pipeline / Recipe endpoints
+# =============================================================================
+
+@app.route('/api/pipeline/step-catalog', methods=['GET'])
+def get_step_catalog():
+    """Return all available step definitions for the toolbox."""
+    catalog = [d.to_dict() for d in pipeline_steps.STEP_DEFINITIONS.values()]
+    return jsonify({'steps': catalog}), 200
+
+
+@app.route('/api/pipeline/validate', methods=['POST'])
+def validate_pipeline():
+    """Validate a pipeline document without executing it."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Hiányzó JSON törzs', 'code': ErrorCode.PIPELINE_VALIDATION_FAILED, 'popup': True}), 400
+
+    try:
+        doc = PipelineDocument.from_dict(data)
+    except Exception as e:
+        return jsonify({'error': f'Érvénytelen dokumentum: {e}', 'code': ErrorCode.RECIPE_INVALID_FORMAT, 'popup': True}), 400
+
+    errors = pipeline_validators.validate_pipeline(doc)
+    if errors:
+        return jsonify({
+            'valid': False,
+            'errors': [e.to_dict() for e in errors],
+        }), 200
+
+    return jsonify({'valid': True, 'errors': []}), 200
+
+
+@app.route('/api/pipeline/preview', methods=['POST'])
+def preview_pipeline():
+    """Execute pipeline up to a selected step and return the result image + side outputs."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Hiányzó JSON törzs', 'code': ErrorCode.PIPELINE_VALIDATION_FAILED, 'popup': True}), 400
+
+    preview_step = data.get('preview_step_index', -1)
+    pipeline_data = data.get('pipeline')
+    if not pipeline_data:
+        return jsonify({'error': 'Hiányzó pipeline adat', 'code': ErrorCode.PIPELINE_VALIDATION_FAILED, 'popup': True}), 400
+
+    try:
+        doc = PipelineDocument.from_dict(pipeline_data)
+    except Exception as e:
+        return jsonify({'error': f'Érvénytelen dokumentum: {e}', 'code': ErrorCode.RECIPE_INVALID_FORMAT, 'popup': True}), 400
+
+    result = pipeline_engine.execute_pipeline(doc, up_to_step=preview_step)
+
+    if not result.success:
+        error_list = [e.to_dict() for e in result.errors]
+        return jsonify({
+            'success': False,
+            'errors': error_list,
+            'executed_up_to': result.executed_up_to,
+        }), 200
+
+    # Build response: JPEG image + side outputs for each executed step
+    last_result = result.step_results[-1] if result.step_results else None
+    side_outputs = {}
+    for i, sr in enumerate(result.step_results):
+        if sr.side_outputs:
+            side_outputs[str(i)] = sr.side_outputs
+
+    response_data = {
+        'success': True,
+        'executed_up_to': result.executed_up_to,
+        'side_outputs': side_outputs,
+    }
+
+    # Encode the preview image as base64 JPEG
+    if last_result and last_result.primary_output is not None:
+        img = last_result.primary_output
+        success_enc, jpeg_buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if success_enc:
+            import base64
+            response_data['image_base64'] = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
+            response_data['image_width'] = img.shape[1]
+            response_data['image_height'] = img.shape[0]
+
+    return jsonify(response_data), 200
+
+
+@app.route('/api/recipes', methods=['GET'])
+def list_recipes():
+    """List all saved recipes."""
+    recipes = recipe_manager.list_recipes()
+    return jsonify({'recipes': recipes}), 200
+
+
+@app.route('/api/recipes/<name>', methods=['GET'])
+def get_recipe(name):
+    """Load a recipe by name."""
+    doc, error = recipe_manager.load_recipe(name)
+    if error:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_NOT_FOUND, 'popup': True}), 404
+    return jsonify(doc.to_dict()), 200
+
+
+@app.route('/api/recipes', methods=['POST'])
+def save_recipe():
+    """Save a recipe."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Hiányzó JSON törzs', 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 400
+
+    try:
+        doc = PipelineDocument.from_dict(data)
+    except Exception as e:
+        return jsonify({'error': f'Érvénytelen recept: {e}', 'code': ErrorCode.RECIPE_INVALID_FORMAT, 'popup': True}), 400
+
+    success, error = recipe_manager.save_recipe(doc)
+    if not success:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 500
+
+    return jsonify({'message': 'Recept mentve', 'name': doc.name}), 200
+
+
+@app.route('/api/recipes/<name>', methods=['DELETE'])
+def delete_recipe(name):
+    """Delete a recipe by name."""
+    success, error = recipe_manager.delete_recipe(name)
+    if not success:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_NOT_FOUND, 'popup': True}), 404
+    return jsonify({'message': 'Recept törölve'}), 200
 
 
 # --- Compiled-mode route restriction ---

@@ -29,5 +29,13 @@
   "E2114": "Képelemzési hiba: E2114",
   "E2302": "Túl alacsony expozíciós idő (Súrlófény)",
   "E2303": "Túl magas expozíciós idő (Súrlófény)",
+  "E3001": "Feldolgozási lánc érvénytelen",
+  "E3002": "Lépések típus inkompatibilitása",
+  "E3003": "Paraméter tartományon kívül",
+  "E3004": "Forráskép nem található",
+  "E3005": "Feldolgozási lépés végrehajtási hiba",
+  "E3006": "Recept I/O hiba",
+  "E3007": "Recept nem található",
+  "E3008": "Érvénytelen recept formátum",
   "GENERIC": "Váratlan hiba lépett fel"
 }

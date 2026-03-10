@@ -1,0 +1,99 @@
+<div class="creator-layout">
+  <!-- Toolbar -->
+  <div class="creator-toolbar">
+    <span class="toolbar-title">
+      Recept: {{ recipeName || 'Új recept' }}
+      @if (isDirty) {
+        <span class="dirty-indicator">●</span>
+      }
+    </span>
+    <div class="toolbar-actions">
+      <button mat-icon-button (click)="onNew()" title="Új recept">
+        <mat-icon>note_add</mat-icon>
+      </button>
+      <button mat-icon-button (click)="onSave()" title="Mentés">
+        <mat-icon>save</mat-icon>
+      </button>
+      <button mat-icon-button (click)="onSaveAs()" title="Mentés másként">
+        <mat-icon>save_as</mat-icon>
+      </button>
+      <button mat-icon-button (click)="onLoad()" title="Betöltés">
+        <mat-icon>folder_open</mat-icon>
+      </button>
+    </div>
+  </div>
+
+  <!-- Save name input popup -->
+  @if (showSaveInput) {
+    <div class="save-dialog-overlay" (click)="cancelSave()">
+      <div class="save-dialog" (click)="$event.stopPropagation()">
+        <span class="dialog-title">Recept neve</span>
+        <input
+          class="dialog-input"
+          [(ngModel)]="saveInputName"
+          (keyup.enter)="confirmSave()"
+          placeholder="Recept neve..."
+          autofocus
+        />
+        <div class="dialog-actions">
+          <button mat-flat-button (click)="confirmSave()">Mentés</button>
+          <button mat-button (click)="cancelSave()">Mégse</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Load dialog -->
+  @if (showLoadDialog) {
+    <div class="save-dialog-overlay" (click)="onLoad()">
+      <div class="save-dialog load-dialog" (click)="$event.stopPropagation()">
+        <span class="dialog-title">Receptek betöltése</span>
+        @if (savedRecipes.length === 0) {
+          <p class="no-recipes">Nincsenek mentett receptek.</p>
+        }
+        <div class="recipe-list">
+          @for (recipe of savedRecipes; track recipe.name) {
+            <div class="recipe-item">
+              <div class="recipe-info" (click)="loadRecipe(recipe.name)">
+                <span class="recipe-name">{{ recipe.name }}</span>
+                <span class="recipe-meta">{{ recipe.step_count }} lépés</span>
+              </div>
+              <button mat-icon-button class="recipe-delete" (click)="deleteRecipe(recipe.name)" title="Törlés">
+                <mat-icon>delete</mat-icon>
+              </button>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Main content area -->
+  <div class="creator-body">
+    <!-- Left: Step toolbox -->
+    <section class="creator-panel toolbox-panel">
+      <div class="panel-header">
+        <span class="panel-title">Eszköztár</span>
+      </div>
+      <app-step-toolbox></app-step-toolbox>
+    </section>
+
+    <!-- Center: Preview + Pipeline canvas -->
+    <section class="creator-center">
+      <div class="preview-area">
+        <app-pipeline-preview></app-pipeline-preview>
+      </div>
+      <div class="canvas-area">
+        <app-pipeline-canvas></app-pipeline-canvas>
+      </div>
+    </section>
+
+    <!-- Right: Step inspector -->
+    <section class="creator-panel inspector-panel">
+      <div class="panel-header">
+        <span class="panel-title">Részletek</span>
+      </div>
+      <app-step-inspector></app-step-inspector>
+    </section>
+  </div>
+</div>

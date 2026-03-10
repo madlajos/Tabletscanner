@@ -1,38 +1,75 @@
-<main class="app-grid">
-  <!-- Left column (1/5): Camera Settings -->
-  <section class="panel">
-    <div class="side-section-header">
-      <span class="side-section-title">Vezérlőpult</span>
-    </div>
-    <app-motion-control></app-motion-control>
+<nav class="app-nav">
+  <button
+    class="nav-tab"
+    [class.active]="activeSection === 'scanner'"
+    (click)="switchSection('scanner')"
+  >
+    📷 Szkenner
+  </button>
+  <button
+    class="nav-tab"
+    [class.active]="activeSection === 'creator'"
+    (click)="switchSection('creator')"
+  >
+    🧪 Recept szerkesztő
+  </button>
+  <button
+    class="nav-tab"
+    [class.active]="activeSection === 'applier'"
+    (click)="switchSection('applier')"
+  >
+    ⚗️ Recept alkalmazás
+  </button>
+</nav>
 
-    <div class="side-section-header">
-      <span class="side-section-title">Beállítások</span>
-    </div>
-    <app-camera-control></app-camera-control>
-
-    <div class="side-panel-logo">
-      <img src="assets/logo.png" alt="Logo" />
-    </div>
-  </section>
-
-  <!-- Middle column (3/5): Live view -->
-  <section class="viewer">
-    <app-image-viewer></app-image-viewer>
-  </section>
-
-  <!-- Right column (1/5): Controls -->
-  <section class="controls-panel">
-    <div class="side-panel">
-
-      <div class="side-panel-content">
-        <div class="side-section-header">
-          <span class="side-section-title">Automata mérés</span>
-        </div>
-        <app-auto-measurement></app-auto-measurement>
+@if (activeSection === 'scanner') {
+  <main class="app-grid">
+    <!-- Left column (1/5): Camera Settings -->
+    <section class="panel">
+      <div class="side-section-header">
+        <span class="side-section-title">Vezérlőpult</span>
       </div>
-      <app-error-popup-list></app-error-popup-list>
-    </div>
-  </section>
+      <app-motion-control></app-motion-control>
 
-</main>
+      <div class="side-section-header">
+        <span class="side-section-title">Beállítások</span>
+      </div>
+      <app-camera-control></app-camera-control>
+
+      <div class="side-panel-logo">
+        <img src="assets/logo.png" alt="Logo" />
+      </div>
+    </section>
+
+    <!-- Middle column (3/5): Live view -->
+    <section class="viewer">
+      <app-image-viewer></app-image-viewer>
+    </section>
+
+    <!-- Right column (1/5): Controls -->
+    <section class="controls-panel">
+      <div class="side-panel">
+
+        <div class="side-panel-content">
+          <div class="side-section-header">
+            <span class="side-section-title">Automata mérés</span>
+          </div>
+          <app-auto-measurement></app-auto-measurement>
+        </div>
+        <app-error-popup-list></app-error-popup-list>
+      </div>
+    </section>
+  </main>
+}
+
+@if (activeSection === 'creator') {
+  <main class="section-container">
+    <app-recipe-creator></app-recipe-creator>
+  </main>
+}
+
+@if (activeSection === 'applier') {
+  <main class="section-container">
+    <app-recipe-applier></app-recipe-applier>
+  </main>
+}
