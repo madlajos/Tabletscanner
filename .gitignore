@@ -11,3 +11,7 @@ Firmware/Marlin/**
 !Firmware/Marlin/Configuration.h
 !Firmware/Marlin/Configuration_adv.h
 Firmware.rar
+release
+electron
+backend/build
+backend/dist

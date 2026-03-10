@@ -33,7 +33,8 @@ import traceback
 import bgr_main
 import manual_bgr_with_check
 import check_only
-
+import under_over
+import calc_color
 
 
 app = Flask(__name__)
@@ -58,7 +59,18 @@ ORIGIN_Y_DEFAULT = 20.0
 SPACING_DEFAULT = 20.0
 
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
+
 ### Error handling and logging ###
+@app.errorhandler(404)
+def handle_not_found(error):
+    """Return a clean 404 without polluting the error log."""
+    app.logger.debug(f"404 Not Found: {request.path}")
+    return jsonify({"error": "Not found"}), 404
+
 @app.errorhandler(Exception)
 def handle_global_exception(error):
     error_message = str(error)
@@ -670,6 +682,7 @@ def update_camera_settings_light():
         setting_name = data.get('setting_name')
         setting_value = data.get('setting_value')
         apply_to_camera = data.get('apply_to_camera', True)  # Default to True for backwards compatibility
+        persist = data.get('persist', True)  # Whether to save to settings.json (False = temporary/live-only change)
 
         if light not in ('dome', 'bar'):
             return jsonify({"error": "Invalid light. Must be 'dome' or 'bar'."}), 400
@@ -684,37 +697,46 @@ def update_camera_settings_light():
             camera = globals.camera
             camera_properties = globals.camera_properties
 
-            # Fallback: Refresh properties if missing
-            if not camera_properties or setting_name not in camera_properties:
-                app.logger.warning("camera_properties missing or incomplete; fetching fresh values...")
-                camera_properties = get_camera_properties(camera)
-                globals.camera_properties = camera_properties
+            # Skip hardware apply if camera is not connected/open
+            if not camera or not camera.IsOpen():
+                app.logger.warning(f"[CameraSettings] Camera not connected; skipping hardware apply for {light} {setting_name}")
+                apply_to_camera = False
+            else:
+                # Fallback: Refresh properties if missing
+                if not camera_properties or setting_name not in camera_properties:
+                    app.logger.warning("camera_properties missing or incomplete; fetching fresh values...")
+                    camera_properties = get_camera_properties(camera)
+                    globals.camera_properties = camera_properties
 
-            # Apply the setting to the camera
-            updated_value = validate_and_set_camera_param(
-                camera,
-                setting_name,
-                setting_value,
-                camera_properties
-            )
-            app.logger.info(f"[CameraSettings] \u2713 {light} {setting_name} applied to camera hardware: {updated_value}")
+                # Apply the setting to the camera
+                updated_value = validate_and_set_camera_param(
+                    camera,
+                    setting_name,
+                    setting_value,
+                    camera_properties
+                )
+                app.logger.info(f"[CameraSettings] \u2713 {light} {setting_name} applied to camera hardware: {updated_value}")
         else:
             app.logger.info(f"[CameraSettings] \u2713 {light} {setting_name} skipped camera hardware (only saved to settings.json)")
 
-        # Always persist the value in settings.json under the light-specific section
-        settings_data = get_settings()
-        category = f'camera_params_{light}'
-        if category not in settings_data:
-            settings_data[category] = {}
-        settings_data[category][setting_name] = updated_value
-        save_settings()
-
-        app.logger.info(f"{light} camera setting {setting_name} updated and saved to settings.json")
+        # Only persist to settings.json if persist=True (preset loads).
+        # Manual user edits (persist=False) are live-only and discarded on restart.
+        if persist:
+            settings_data = get_settings()
+            category = f'camera_params_{light}'
+            if category not in settings_data:
+                settings_data[category] = {}
+            settings_data[category][setting_name] = updated_value
+            save_settings()
+            app.logger.info(f"{light} camera setting {setting_name} updated and saved to settings.json")
+        else:
+            app.logger.info(f"{light} camera setting {setting_name} applied live only (not persisted to settings.json)")
 
         return jsonify({
-            "message": f"{light.capitalize()} camera {setting_name} updated and saved.",
+            "message": f"{light.capitalize()} camera {setting_name} updated.",
             "updated_value": updated_value,
-            "applied_to_camera": apply_to_camera
+            "applied_to_camera": apply_to_camera,
+            "persisted": persist
         }), 200
 
     except Exception as e:
@@ -868,8 +890,37 @@ def autofocus_coarse():
                 'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
                 'popup': True
             }), 503
-        
-        resp = autofocus_main.autofocus_coarse(motion_platform)
+
+        # --- Bar-light exposure safeguard ---
+        # When the bar light is active, run an under/over-exposure gate
+        # before starting the (blocking) autofocus sweep.
+        if globals.lamp_bar_on_time is not None:
+            cam = globals.camera
+            if cam and cam.IsOpen():
+                from cameracontrol import grab_and_convert_frame
+                try:
+                    with globals.grab_lock:
+                        frame_bgr = grab_and_convert_frame(cam, timeout_ms=3000)
+                    exp_result = under_over.exposure_gate_from_frame(frame_bgr)
+                    exp_code = exp_result.get('code')  # None when OK, "E2302"/"E2303" on error
+                    exp_metrics = {k: v for k, v in exp_result.items() if k not in ('status', 'code')}
+                    app.logger.info(
+                        f"[BAR-LIGHT GATE] status={exp_result['status']} code={exp_code} "
+                        f"p95={exp_metrics.get('p95', 0):.1f} dr={exp_metrics.get('dr', 0):.1f} "
+                        f"white={exp_metrics.get('white', 0):.3f}"
+                    )
+                    if exp_result['status'] != 'OK':
+                        return jsonify({
+                            'status': 'ERROR',
+                            'code': exp_code,
+                            **exp_metrics,
+                        })
+                except Exception as gate_err:
+                    app.logger.warning(f"Bar-light exposure gate failed, proceeding: {gate_err}")
+
+        data = request.get_json(silent=True) or {}
+        skip_empty = bool(data.get('skip_empty_check', False))
+        resp = autofocus_main.autofocus_coarse(motion_platform, do_frame_touch_check=False, skip_empty_check=skip_empty)
         return jsonify(resp)
     except (OSError, PermissionError) as e:
         return _handle_motion_usb_disconnect(motion_platform, "autofocus")
@@ -1128,7 +1179,44 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     # Convert BGR -> RGB for Pillow
     img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(img_rgb)
-    pil_img.save(full_path, format='JPEG', quality=95)
+
+    # Build EXIF metadata from settings + live camera values
+    try:
+        settings_data = get_settings()
+        other = settings_data.get('other_settings', {})
+        cam = globals.camera
+        current_exposure = None
+        current_gamma = None
+        if cam and cam.IsOpen():
+            try:
+                current_exposure = cam.ExposureTime.GetValue()
+            except Exception:
+                pass
+            try:
+                current_gamma = cam.Gamma.GetValue()
+            except Exception:
+                pass
+        meta_fields = {
+            'objective': other.get('objective'),
+            'spacer_rings': other.get('spacer_rings'),
+            'camera_settings_file': other.get('camera_settings_file'),
+            'exposure_time': current_exposure,
+            'gamma': current_gamma,
+        }
+        meta_fields = {k: v for k, v in meta_fields.items() if v is not None}
+        meta_json = json.dumps(meta_fields, ensure_ascii=False) if meta_fields else None
+    except Exception:
+        meta_json = None
+
+    if meta_json:
+        exif_obj = Image.Exif()
+        try:
+            exif_obj[0x010E] = meta_json  # ImageDescription
+        except Exception:
+            pass
+        pil_img.save(full_path, format='JPEG', quality=95, exif=exif_obj)
+    else:
+        pil_img.save(full_path, format='JPEG', quality=95)
     
     saved_paths = [full_path]
     
@@ -1219,7 +1307,7 @@ def _check_devices_connected():
 
 
 def _format_capture_timestamp(dt: datetime) -> str:
-    return dt.strftime("%m%d_%H%M")
+    return dt.strftime("%m%d_%H%M%S")
 
 
 def _tablet_index_to_label(tablet_index: int, grid_size: int = 10) -> str:
@@ -1406,13 +1494,30 @@ def auto_measurement_step():
             _apply_camera_settings_for_light('dome')
             time.sleep(0.3)  # Let light and camera settings stabilize
             
-            try:
+            if autofocus_enabled:
+                # ---- User selected autofocus ----
+                # For the first tablet, calculate reference color values before autofocus
                 if is_first_tablet:
-                    # First tablet: full coarse+fine scan to find the focal plane
-                    af_result = autofocus_main.autofocus_coarse(motion_platform)
-                else:
-                    # Subsequent tablets: fine-only around previous best Z
-                    af_result = autofocus_main.autofocus_coarse(motion_platform)
+                    try:
+                        color_result = calc_color.calculate_median_and_span(
+                            motion_platform, needed=True
+                        )
+                        if color_result.get('status') == 'OK':
+                            ref = {k: v for k, v in color_result.items() if k != 'status'}
+                            globals.color_values = ref
+                            app.logger.info(f"Tablet {tablet_index}: Reference color values stored: {ref}")
+                        else:
+                            app.logger.warning(f"Tablet {tablet_index}: calc_color returned {color_result}")
+                    except Exception as e:
+                        app.logger.warning(f"Tablet {tablet_index}: calc_color error: {e}")
+            
+            try:
+                if autofocus_enabled:
+                    # Autofocus selected: run with before_auto=True for every tablet
+                    af_result = autofocus_main.autofocus_coarse(motion_platform, do_frame_touch_check=True, before_auto=True)
+                elif is_first_tablet:
+                    # Autofocus unselected, first tablet: find focal plane with skip_empty_check + no color check
+                    af_result = autofocus_main.autofocus_coarse(motion_platform, skip_empty_check=True, before_auto=False)
                 
                 af_status = af_result.get('status', 'ERROR')
                 af_error_code = af_result.get('code')  # e.g. "E2000", "E2002", "E2003"
@@ -1420,6 +1525,22 @@ def auto_measurement_step():
                     contour = af_result.get("final_contour") or af_result.get("contour")
                     globals.last_autofocus_contour = contour if contour else None
                     app.logger.info(f"Tablet {tablet_index}: Autofocus OK at Z={af_result.get('z_rel', '?')}")
+                    
+                    # When autofocus is unselected and first tablet just finished AF,
+                    # calculate reference color values (camera already at focused Z)
+                    if not autofocus_enabled and is_first_tablet:
+                        try:
+                            color_result = calc_color.calculate_median_and_span(
+                                motion_platform, needed=False
+                            )
+                            if color_result.get('status') == 'OK':
+                                ref = {k: v for k, v in color_result.items() if k != 'status'}
+                                globals.color_values = ref
+                                app.logger.info(f"Tablet {tablet_index}: Post-AF reference color values stored: {ref}")
+                            else:
+                                app.logger.warning(f"Tablet {tablet_index}: calc_color (post-AF) returned {color_result}")
+                        except Exception as e:
+                            app.logger.warning(f"Tablet {tablet_index}: calc_color (post-AF) error: {e}")
                 elif af_status == 'ABORTED':
                     app.logger.info(f"Tablet {tablet_index}: Autofocus aborted")
                     _turn_off_all_lights()
@@ -1680,10 +1801,43 @@ def auto_measurement_step():
         
         if lamp_side:
             try:
-                app.logger.info(f"Tablet {tablet_index}: Capturing bar image")
-                saved_paths = _capture_image_with_light('bar', measurement_folder, measurement_name, tablet_index, background_subtraction=background_subtraction)
-                saved_images.extend(saved_paths)
-                app.logger.info(f"Tablet {tablet_index}: Saved bar image(s): {saved_paths}")
+                # --- Bar-light exposure gate ---
+                _turn_on_bar_light()
+                _apply_camera_settings_for_light('bar')
+                time.sleep(0.3)
+
+                bar_gate_passed = True
+                bar_gate_error_code = None
+                cam = globals.camera
+                if cam and cam.IsOpen():
+                    from cameracontrol import grab_and_convert_frame
+                    try:
+                        with globals.grab_lock:
+                            gate_frame = grab_and_convert_frame(cam, timeout_ms=3000)
+                        gate_result = under_over.exposure_gate_from_frame(gate_frame)
+                        gate_code = gate_result.get('code')
+                        gate_metrics = {k: v for k, v in gate_result.items() if k not in ('status', 'code')}
+                        app.logger.info(
+                            f"Tablet {tablet_index}: [BAR-LIGHT GATE] status={gate_result['status']} "
+                            f"code={gate_code} p95={gate_metrics.get('p95', 0):.1f} "
+                            f"dr={gate_metrics.get('dr', 0):.1f} white={gate_metrics.get('white', 0):.3f}"
+                        )
+                        if gate_result['status'] != 'OK':
+                            bar_gate_passed = False
+                            bar_gate_error_code = gate_code
+                            app.logger.warning(
+                                f"Tablet {tablet_index}: Bar-light exposure gate failed ({gate_code}), skipping bar capture"
+                            )
+                    except Exception as gate_err:
+                        app.logger.warning(f"Tablet {tablet_index}: Bar-light exposure gate error, proceeding: {gate_err}")
+
+                if bar_gate_passed:
+                    app.logger.info(f"Tablet {tablet_index}: Capturing bar image")
+                    saved_paths = _capture_image_with_light('bar', measurement_folder, measurement_name, tablet_index, background_subtraction=background_subtraction)
+                    saved_images.extend(saved_paths)
+                    app.logger.info(f"Tablet {tablet_index}: Saved bar image(s): {saved_paths}")
+                elif bar_gate_error_code:
+                    af_error_code = bar_gate_error_code
             except (OSError, PermissionError) as e:
                 try:
                     _turn_off_all_lights()
@@ -1716,6 +1870,9 @@ def auto_measurement_step():
             'tablet_index': tablet_index,
             'saved_images': saved_images
         }
+        if af_error_code:
+            response_data['af_error_code'] = af_error_code
+            response_data['af_error_message'] = ERROR_MESSAGES.get(af_error_code, af_error_code)
         return jsonify(response_data), 200
         
     except (OSError, PermissionError) as e:
@@ -2617,8 +2774,10 @@ def get_latest_images_status():
 
 
 # --- Compiled-mode route restriction ---
-# When running as a PyInstaller .exe, only the latest_image endpoints
-# (and health) are accessible. All other API routes are blocked.
+# When running as a standalone PyInstaller .exe (without Electron),
+# only the latest_image endpoints (and health) are accessible.
+# When launched by Electron, the TABLETSCANNER_FULL environment variable
+# is set, enabling all routes.
 _COMPILED_ALLOWED_PREFIXES = (
     '/api/latest_image/',
     '/api/latest_images',
@@ -2627,15 +2786,18 @@ _COMPILED_ALLOWED_PREFIXES = (
 
 @app.before_request
 def _restrict_routes_in_compiled_mode():
-    """In compiled (frozen) mode, block all endpoints except image serving."""
+    """In compiled (frozen) mode without TABLETSCANNER_FULL, block most endpoints."""
     if not getattr(sys, 'frozen', False):
         return None  # Development mode — allow everything
-    
+
+    if os.environ.get('TABLETSCANNER_FULL', '') == '1':
+        return None  # Launched by Electron — allow everything
+
     path = request.path
     for prefix in _COMPILED_ALLOWED_PREFIXES:
         if path.startswith(prefix) or path == prefix:
             return None  # Allowed
-    
+
     return jsonify({
         'error': 'This endpoint is not available in standalone mode.',
     }), 403

@@ -46,6 +46,7 @@ export class MotionControl implements OnInit, OnDestroy {
   private motionPositionSub?: Subscription;
   private lightsOffSub?: Subscription;
   private lampAutoOffPolling?: Subscription;
+  private externalConnectionSub?: Subscription;
   isConnected: boolean = false;
 
   // Flag to lock controls during auto-measurement
@@ -68,6 +69,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
   isAutofocusing = false;
   autofocusDone = false;
+  private autofocusAbortedByUser = false;
 
   constructor(
     private http: HttpClient,
@@ -117,6 +119,24 @@ export class MotionControl implements OnInit, OnDestroy {
 
     // Start polling for lamp auto-off status (5-minute inactivity timeout)
     this.startLampAutoOffPolling();
+
+    // Listen for external reconnections (e.g., auto-measurement reconnects the platform).
+    // Without this, the error popup can stay visible because only motion-control's
+    // own reconnection polling would clear it, which is a race condition.
+    this.externalConnectionSub = this.sharedService.motionPlatformConnectionStatus$.subscribe(
+      (connected) => {
+        if (connected && !this.isConnected) {
+          console.info('Motion platform connection restored externally – syncing state.');
+          this.isConnected = true;
+          this.errorNotificationService.removeError('E1201');
+          this.stopReconnectionPolling();
+          if (!this.connectionPolling) {
+            this.startConnectionPolling();
+          }
+          this.startPollingPosition();
+        }
+      }
+    );
   }
 
   ngOnDestroy(): void {
@@ -127,6 +147,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.measurementActiveSub?.unsubscribe();
     this.motionPositionSub?.unsubscribe();
     this.lightsOffSub?.unsubscribe();
+    this.externalConnectionSub?.unsubscribe();
   }
 
   // Check if controls should be disabled
@@ -680,8 +701,21 @@ export class MotionControl implements OnInit, OnDestroy {
 
 
   async autoFocusCoarse(): Promise<void> {
+    // If autofocus is already running, abort it
+    if (this.isAutofocusing) {
+      console.log('[MotionControl] Aborting autofocus...');
+      this.autofocusAbortedByUser = true;
+      this.http.post(`${BASE_URL}/abort-autofocus`, {}).subscribe({
+        next: () => console.log('[MotionControl] Autofocus abort signaled'),
+        error: (err) => console.error('Failed to signal autofocus abort', err),
+      });
+      return;
+    }
+
     this.isAutofocusing = true;
     this.autofocusDone = false;
+    this.autofocusAbortedByUser = false;
+    this.sharedService.setAutofocusActive(true);
 
     // If neither light is on, turn on the dome light before autofocus
     if (!this.ringLightOn && !this.barLightOn) {
@@ -699,15 +733,19 @@ export class MotionControl implements OnInit, OnDestroy {
 
     this.sharedService.setAutofocusError(null);
 
-    this.http.post(`${BASE_URL}/autofocus_coarse`, {}).subscribe({
+    this.http.post(`${BASE_URL}/autofocus_coarse`, { skip_empty_check: true }).subscribe({
       next: (resp: any) => {
         console.log('Autofocus response:', resp);
         this.isAutofocusing = false;
+        this.sharedService.setAutofocusActive(false);
         if (resp.status === 'ERROR' && resp.code) {
           this.autofocusDone = false;
-          this.sharedService.setAutofocusError(
-            this.errorNotificationService.getMessage(resp.code)
-          );
+          // Suppress error when the user manually aborted
+          if (!(this.autofocusAbortedByUser && resp.code === 'E2007')) {
+            this.sharedService.setAutofocusError(
+              this.errorNotificationService.getMessage(resp.code)
+            );
+          }
         } else {
           this.autofocusDone = true;
           this.sharedService.setAutofocusError(null);
@@ -716,6 +754,7 @@ export class MotionControl implements OnInit, OnDestroy {
       error: (error) => {
         console.error('Autofocus error:', error);
         this.isAutofocusing = false;
+        this.sharedService.setAutofocusActive(false);
         this.autofocusDone = false;
       },
     });

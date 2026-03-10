@@ -48,7 +48,14 @@ def sobel_topk_score(gray_u8, top_k=500):
     return float(np.mean(np.partition(vals, -kk)[-kk:]))
 
 
+# ---------------------------------------------------------------------
+# Square helpers
+# ---------------------------------------------------------------------
 def largest_inscribed_square_from_mask(mask_u8):
+    """
+    Eredeti: distTransform maxLoc köré rak egy négyzetet, és ha belelóg 0-ba,
+    max 14 pixelt zsugorít. (marad, mert jó amikor működik)
+    """
     if mask_u8 is None or mask_u8.size == 0:
         return None
 
@@ -95,7 +102,6 @@ def largest_inscribed_square_from_mask(mask_u8):
     if x2 - x1 < 2 or y2 - y1 < 2:
         return None
 
-    # ha belelóg 0, akkor kicsit zsugorítsunk
     if np.any(m[y1:y2, x1:x2] == 0):
         for shrink in range(1, 15):
             nx1, ny1 = x1 + shrink, y1 + shrink
@@ -109,6 +115,115 @@ def largest_inscribed_square_from_mask(mask_u8):
     return (x1, y1, x2, y2)
 
 
+def centered_square_inside_mask(mask_u8, contour=None, min_side=2, max_shrink_steps=300):
+    """
+    Négyzet az objektum "közepére" (centroid) úgy, hogy TELJESEN a maszkon belül legyen.
+    Ha centroid kívülre esik -> distTransform maxLoc.
+    Ha elsőre kilóg -> zsugorítjuk, amíg befér.
+    """
+    if mask_u8 is None or mask_u8.size == 0:
+        return None
+
+    m = (mask_u8 > 0).astype(np.uint8)
+    if int(m.sum()) == 0:
+        return None
+
+    H, W = m.shape[:2]
+
+    dist = cv2.distanceTransform(m, cv2.DIST_L2, 5)
+    _minVal, maxVal, _minLoc, maxLoc = cv2.minMaxLoc(dist)
+    if float(maxVal) <= 1e-6:
+        return None
+
+    # centroid a kontúrból, ha lehet
+    cx = cy = None
+    if contour is not None:
+        try:
+            M = cv2.moments(contour)
+            if abs(float(M.get("m00", 0.0))) > 1e-9:
+                cx = int(round(M["m10"] / M["m00"]))
+                cy = int(round(M["m01"] / M["m00"]))
+        except Exception:
+            cx = cy = None
+
+    # fallback: maszk centroid
+    if cx is None or cy is None:
+        ys, xs = np.where(m > 0)
+        if xs.size == 0:
+            return None
+        cx = int(round(xs.mean()))
+        cy = int(round(ys.mean()))
+
+    cx = int(np.clip(cx, 0, W - 1))
+    cy = int(np.clip(cy, 0, H - 1))
+
+    # ha centroid nem belül van, maxLoc
+    if m[cy, cx] == 0:
+        cx, cy = int(maxLoc[0]), int(maxLoc[1])
+
+    # induló oldalhossz: dist alapján
+    r = float(dist[cy, cx])
+    if r <= 1e-6:
+        cx, cy = int(maxLoc[0]), int(maxLoc[1])
+        r = float(dist[cy, cx])
+
+    side = int(np.floor(np.sqrt(2.0) * max(r, 0.0)))
+    side = max(int(min_side), side)
+
+    def bounds_from_center(cx_, cy_, side_):
+        x1_ = int(cx_ - side_ // 2)
+        y1_ = int(cy_ - side_ // 2)
+        x2_ = x1_ + int(side_)
+        y2_ = y1_ + int(side_)
+
+        # klipp a képre
+        if x1_ < 0:
+            x2_ -= x1_
+            x1_ = 0
+        if y1_ < 0:
+            y2_ -= y1_
+            y1_ = 0
+        if x2_ > W:
+            x1_ -= (x2_ - W)
+            x2_ = W
+        if y2_ > H:
+            y1_ -= (y2_ - H)
+            y2_ = H
+
+        x1_ = max(0, x1_)
+        y1_ = max(0, y1_)
+        x2_ = min(W, x2_)
+        y2_ = min(H, y2_)
+
+        return x1_, y1_, x2_, y2_
+
+    # zsugorítunk, míg teljesen maszkban van
+    cur_side = int(side)
+    for _ in range(int(max_shrink_steps)):
+        x1, y1, x2, y2 = bounds_from_center(cx, cy, cur_side)
+        if (x2 - x1) < int(min_side) or (y2 - y1) < int(min_side):
+            break
+
+        patch = m[y1:y2, x1:x2]
+        if patch.size > 0 and np.all(patch > 0):
+            return (x1, y1, x2, y2)
+
+        cur_side -= 2
+
+    # végső fallback: maxLoc körül kis négyzet
+    cx, cy = int(maxLoc[0]), int(maxLoc[1])
+    for s in range(max(int(min_side), 8), int(min_side) - 1, -1):
+        x1, y1, x2, y2 = bounds_from_center(cx, cy, s)
+        patch = m[y1:y2, x1:x2]
+        if patch.size > 0 and np.all(patch > 0):
+            return (x1, y1, x2, y2)
+
+    return None
+
+
+# ---------------------------------------------------------------------
+# Laplace
+# ---------------------------------------------------------------------
 def laplacian_mean_abs(gray_u8):
     g = cv2.GaussianBlur(gray_u8, (5, 5), 0)
     lap = cv2.Laplacian(g, cv2.CV_32F, ksize=3)
@@ -116,6 +231,16 @@ def laplacian_mean_abs(gray_u8):
 
 
 def lap_sq_from_bbox_gray(gray_bbox_u8):
+    """
+    ÚJ viselkedés:
+      - kontúr/négyzet hiány esetén NEM 0.0-val tér vissza, hanem fallback metrikával
+      - első próbálkozás: largest_inscribed_square_from_mask()
+      - ha az None: centered_square_inside_mask() (centroid körül, maszkon belül)
+      - ha az is None: laplacian_mean_abs a teljes bbox-on
+    """
+    if gray_bbox_u8 is None or gray_bbox_u8.size == 0:
+        return 0.0, None
+
     g = cv2.GaussianBlur(gray_bbox_u8, (5, 5), 0)
     _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
@@ -126,15 +251,23 @@ def lap_sq_from_bbox_gray(gray_bbox_u8):
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        return 0.0, None
+        # nincs kontúr -> fallback: bbox laplace
+        return laplacian_mean_abs(gray_bbox_u8), None
 
     c = max(contours, key=cv2.contourArea)
     mask = np.zeros_like(bw)
     cv2.drawContours(mask, [c], -1, 255, thickness=cv2.FILLED)
 
+    # 1) eredeti maxLoc-os inscribed square
     sq = largest_inscribed_square_from_mask(mask)
+
+    # 2) ha az nincs (kilógós / vágott / lyukas), középre tett négyzet (maszkon belül)
     if sq is None:
-        return 0.0, None
+        sq = centered_square_inside_mask(mask, contour=c, min_side=2)
+
+    # 3) végső fallback: bbox laplace
+    if sq is None:
+        return laplacian_mean_abs(gray_bbox_u8), None
 
     x1, y1, x2, y2 = sq
     sq_gray = gray_bbox_u8[y1:y2, x1:x2]

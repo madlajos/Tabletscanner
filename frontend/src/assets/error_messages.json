@@ -27,5 +27,7 @@
   "E2110": "Képelemzési hiba: E2110",
   "E2113": "Képelemzési hiba: E2113",
   "E2114": "Képelemzési hiba: E2114",
+  "E2302": "Túl alacsony expozíciós idő (Súrlófény)",
+  "E2303": "Túl magas expozíciós idő (Súrlófény)",
   "GENERIC": "Váratlan hiba lépett fel"
 }

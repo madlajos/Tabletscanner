@@ -39,6 +39,16 @@ body {
   font-family: var(--font-family-base);
   font-size: var(--font-size-base);
   color: var(--color-text-main);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Remove default focus outline (orange ring) on all inputs */
+input:focus,
+textarea:focus,
+select:focus,
+button:focus {
+  outline: none;
 }
 
 /* Generic panel container */

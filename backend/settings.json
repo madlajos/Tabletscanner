@@ -1,6 +1,6 @@
 {
     "camera_params_dome": {
-        "ExposureTime": 1000.0,
+        "ExposureTime": 500.0,
         "Gain": 0.0,
         "Gamma": 1.0
     },
@@ -10,7 +10,7 @@
         "Gamma": 1.0
     },
     "other_settings": {
-        "objective": "50x",
+        "objective": "1.0x",
         "save_location": "D:/",
         "background_subtraction": true,
         "save_settings": false,

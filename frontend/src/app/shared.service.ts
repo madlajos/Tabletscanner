@@ -94,6 +94,18 @@ export class SharedService {
     this.autofocusInvalidateSubject.next();
   }
 
+  // Track whether autofocus is actively running (shared across components)
+  private autofocusActiveSubject = new BehaviorSubject<boolean>(false);
+  autofocusActive$ = this.autofocusActiveSubject.asObservable();
+
+  setAutofocusActive(active: boolean): void {
+    this.autofocusActiveSubject.next(active);
+  }
+
+  getAutofocusActive(): boolean {
+    return this.autofocusActiveSubject.value;
+  }
+
   // Autofocus error from manual autofocus (motion-control → auto-measurement)
   private autofocusErrorSubject = new Subject<string | null>();
   autofocusError$ = this.autofocusErrorSubject.asObservable();

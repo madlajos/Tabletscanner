@@ -26,6 +26,7 @@ toolhead_homed = False
 last_best_z = None
 autofocus_abort = False  # Flag to abort autofocus if measurement is stopped
 last_autofocus_contour = None  # Contour from autofocus or manual_bgr for background subtraction
+color_values = None  # Reference color values from calc_color (used by autofocus before_auto check)
 
 motion_limits = {
     "x": (0.0, 175.0),

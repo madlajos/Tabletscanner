@@ -16,6 +16,7 @@ declare global {
     electronAPI?: {
       selectFolder: () => Promise<string>;
       selectFile: () => Promise<string>;
+      saveTssFile: (suggestedName: string, jsonContent: string) => Promise<{ canceled: boolean; fileName?: string }>;
     };
     showSaveFilePicker?: (options?: any) => Promise<any>;
   }
@@ -80,7 +81,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   private settingsLoaded: boolean = false;
 
   measurementActive: boolean = false;
+  isAutofocusing: boolean = false;
   private measurementActiveSub!: Subscription;
+  private autofocusActiveSub?: Subscription;
   private activeLightSub?: Subscription;
   currentActiveLight: 'dome' | 'bar' | null = null;
   private numericFocusValues: Record<string, number | null | undefined> = {};
@@ -113,6 +116,10 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // Subscribe to shared observables.
     this.measurementActiveSub = this.sharedService.measurementActive$.subscribe(active => {
       this.measurementActive = active;
+    });
+
+    this.autofocusActiveSub = this.sharedService.autofocusActive$.subscribe(active => {
+      this.isAutofocusing = active;
     });
 
     this.sharedService.cameraConnectionStatus$.subscribe(status => {
@@ -175,6 +182,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
     if (this.measurementActiveSub) {
       this.measurementActiveSub.unsubscribe();
+    }
+    if (this.autofocusActiveSub) {
+      this.autofocusActiveSub.unsubscribe();
     }
     if (this.activeLightSub) {
       this.activeLightSub.unsubscribe();
@@ -540,9 +550,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       });
   }
 
-  applySetting(setting: string): void {
+  applySetting(setting: string, persist: boolean = false): void {
     const value = this.cameraSettings[setting];
-    console.log(`Applying setting ${setting}: ${value}`);
+    console.log(`Applying setting ${setting}: ${value} (persist=${persist})`);
 
     // Check if this is a light-specific setting (e.g., ExposureTime_Dome, Gamma_Dome)
     const lightMatch = setting.match(/(ExposureTime|Gamma)_(Dome|Bar)/);
@@ -571,7 +581,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         light: lightName,
         setting_name: settingName,
         setting_value: value,
-        apply_to_camera: shouldApplyToCamera
+        apply_to_camera: shouldApplyToCamera,
+        persist: persist
       }).subscribe(
         (response: any) => {
           if (shouldApplyToCamera) {
@@ -616,6 +627,11 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   applyLightSpecificSettings(lightSuffix: 'Dome' | 'Bar'): void {
+    // Skip if camera is not connected
+    if (!this.isConnected) {
+      console.log(`[CameraControl] Camera not connected, skipping ${lightSuffix} light settings`);
+      return;
+    }
     // Apply the light-specific settings (e.g., ExposureTime_Dome, Gamma_Dome)
     const lightName = lightSuffix.toLowerCase();
     const settings = [
@@ -631,7 +647,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         this.http.post(`${BASE_URL}/update-camera-settings-light`, {
           light: lightName,
           setting_name: setting.name,
-          setting_value: value
+          setting_value: value,
+          persist: false
         }).subscribe(
           (response: any) => {
             console.log(`Setting applied successfully:`, response);
@@ -829,9 +846,25 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     }
 
     const fileNameBase = this.sanitizeFileName(this.settingsPresetName || 'camera-settings-preset');
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const jsonContent = JSON.stringify(payload, null, 2);
+    const blob = new Blob([jsonContent], { type: 'application/json' });
     const suggestedName = fileNameBase; // show textbox without extension
     const downloadName = `${fileNameBase}.tss`;
+
+    // Electron path: save via IPC so the main process can set the file read-only
+    if (window.electronAPI?.saveTssFile) {
+      try {
+        const result = await window.electronAPI.saveTssFile(suggestedName, jsonContent);
+        if (result.canceled) return;
+        const pickedName = this.stripExtension(result.fileName || suggestedName);
+        this.settingsPresetName = pickedName;
+        this.otherSettings.settings_preset_name = pickedName;
+        this.applyOtherSetting('settings_preset_name');
+        return;
+      } catch (err) {
+        console.error('Electron save failed, falling back:', err);
+      }
+    }
 
     try {
       // Use native file save picker when available (Edge/Chrome/Win11) so user can choose path/name.
@@ -942,7 +975,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       'ExposureTime_Dome', 'ExposureTime_Bar',
       'Gamma_Dome', 'Gamma_Bar'
     ];
-    keysToApply.forEach(k => this.applySetting(k));
+    keysToApply.forEach(k => this.applySetting(k, true));
     this.applyOtherSetting('camera_settings_file');
 
     // Load .pfs profile onto camera

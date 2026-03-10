@@ -33,7 +33,14 @@ def setup_logger():
     root.addHandler(ch)
 
     # File handler (WARNING+)
-    log_path = os.path.join(get_base_path(), 'tabletscanner_backend.log')
+    # In frozen mode, write log to a 'logs' folder next to the main .exe
+    # (i.e. win-unpacked/logs/) so it's easy for users to find.
+    if getattr(sys, 'frozen', False):
+        log_dir = os.path.join(os.path.dirname(sys.executable), '..', '..', 'logs')
+    else:
+        log_dir = get_base_path()
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, 'tabletscanner_backend.log')
     fh = RotatingFileHandler(log_path, maxBytes=10_485_760, backupCount=1, encoding="utf-8")
     fh.setLevel(logging.WARNING)
     fh.setFormatter(formatter)

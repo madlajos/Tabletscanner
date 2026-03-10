@@ -36,6 +36,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   private cameraSub?: Subscription;
   private motionSub?: Subscription;
   private autofocusErrorSub?: Subscription;
+  private autofocusActiveSub?: Subscription;
+  isAutofocusing = false;
 
   // Tablet IDs, bottom-left = 1, top-right = gridSize^2
   readonly tablets = Array.from(
@@ -137,6 +139,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       console.log('Auto-measurement received homed state:', homed);
     });
 
+    // Subscribe to manual autofocus active state
+    this.autofocusActiveSub = this.sharedService.autofocusActive$.subscribe(active => {
+      this.isAutofocusing = active;
+    });
+
     // Subscribe to manual autofocus errors from motion-control
     this.autofocusErrorSub = this.sharedService.autofocusError$.subscribe(msg => {
       if (!this.measurementActive) {
@@ -172,6 +179,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.motionSub?.unsubscribe();
     this.homedSub?.unsubscribe();
     this.autofocusErrorSub?.unsubscribe();
+    this.autofocusActiveSub?.unsubscribe();
     
     // Ensure measurement is marked inactive on destroy
     if (this.measurementActive) {
@@ -219,6 +227,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   canStart(): boolean {
     if (this.measurementActive) {
       return true; // allow stopping
+    }
+
+    if (this.isAutofocusing) {
+      return false;
     }
 
     // Update validation message
@@ -949,6 +961,12 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           this.clearReconnectState();
           // Reset cycle counter on successful reconnection
           this.reconnectAttemptCount = 0;
+
+          // Remove the disconnect error popup immediately so it doesn't linger.
+          // Without this, the motion-control component's reconnection polling
+          // must independently discover the reconnection to clear the error,
+          // which is a race condition that sometimes fails.
+          this.errorNotificationService.removeError(errorCode);
 
           // Update shared service so UI reflects the reconnected state
           if (device === 'motion') {

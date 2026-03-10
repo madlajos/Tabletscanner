@@ -1,3 +1,4 @@
+
 import time
 import os
 from datetime import datetime
@@ -9,89 +10,13 @@ import globals
 from cameracontrol import converter
 
 from autofocus_back import (
-    grayscale_difference_score,
-    edge_ring_strength_from_roi_gray,
     rounded_by_curvature_ignore_border,
     largest_contour_from_gray_otsu,
 )
 
-# ==========================================================
-# BBOX helpers
-# ==========================================================
-def init_bbox_state(first_frame_bgr, pad=20):
-    if first_frame_bgr is None or first_frame_bgr.size == 0:
-        return None
-    H, W = first_frame_bgr.shape[:2]
-
-    if first_frame_bgr.ndim == 2:
-        gray = first_frame_bgr
-    elif first_frame_bgr.ndim == 3 and first_frame_bgr.shape[2] == 3:
-        gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGR2GRAY)
-    elif first_frame_bgr.ndim == 3 and first_frame_bgr.shape[2] == 4:
-        gray = cv2.cvtColor(first_frame_bgr, cv2.COLOR_BGRA2GRAY)
-    else:
-        return None
-
-    g = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    fg = np.mean(gray[bw == 255]) if np.any(bw == 255) else 0
-    bg = np.mean(gray[bw == 0]) if np.any(bw == 0) else 0
-    if fg < bg:
-        bw = 255 - bw
-
-    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
-    c = max(contours, key=cv2.contourArea)
-    x, y, ww, hh = cv2.boundingRect(c)
-
-    x1 = max(0, x - int(pad))
-    y1 = max(0, y - int(pad))
-    x2 = min(W, x + ww + int(pad))
-    y2 = min(H, y + hh + int(pad))
-
-    return {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)}
-
-
-def crop_bbox(frame_bgr, bbox):
-    x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
-    roi = frame_bgr[y1:y2, x1:x2]
-    if roi.size == 0:
-        return None
-    return roi
-
-
-def bbox_roi_gray(frame_bgr, bbox_state):
-    roi = crop_bbox(frame_bgr, bbox_state)
-    if roi is None:
-        return None
-    if roi.ndim == 2:
-        return roi
-    return cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-
-# ==========================================================
-# Small utils
-# ==========================================================
-def _err(code: str, **extra):
-    d = {"status": "ERROR", "code": str(code)}
-    if extra:
-        d.update(extra)
-    return d
-
-
-def _ok(**extra):
-    d = {"status": "OK"}
-    if extra:
-        d.update(extra)
-    return d
-
-
-def safe_float_str(x, nd=3) -> str:
-    return f"{float(x):.{nd}f}".replace(".", "p").replace("-", "m")
-
-
+# ---------------------------------------------------------------------
+# Small utils (SCRIPT-STYLE)
+# ---------------------------------------------------------------------
 def contour_to_points_list(c):
     """OpenCV contour -> [[x,y], ...] (JSON/barátságos)."""
     if c is None:
@@ -106,200 +31,59 @@ def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
-# ==========================================================
-# Exposure gate
-# ==========================================================
-def exposure_gate(gray_u8,
-                  white_thr=250,
-                  frac_white_thr=0.20,
-                  under_p95_thr=30,
-                  under_dr_thr=30):
 
-    if gray_u8 is None or gray_u8.size == 0:
-        return "E_UNDER", {"p95": 0.0, "dr": 0.0, "white": 0.0}
-
-    g = gray_u8.astype(np.float32)
-
-    p1, p95, p99 = np.percentile(g, [1, 95, 99])
-    dr = float(p99 - p1)
-
-    frac_white = float((gray_u8 >= int(white_thr)).mean())
-
-    metrics = {"p95": float(p95), "dr": dr, "white": frac_white}
-
-    # OVER
-    if frac_white > float(frac_white_thr) or p95 > 250:
-        return "E_OVER", metrics
-
-    # UNDER
-    if (p95 < float(under_p95_thr)) and (dr < float(under_dr_thr)):
-        return "E_UNDER", metrics
-
-    return "EXP_OK", metrics
-
-# ==========================================================
-# EMPTY vs PATTERN logic (beemelve)
-# ==========================================================
-def preprocess_gray(gray_u8, scale=0.5, blur_ksize=3):
-    g = gray_u8
-    if scale is not None and float(scale) < 1.0:
-        g = cv2.resize(g, None, fx=float(scale), fy=float(scale), interpolation=cv2.INTER_AREA)
-
-    if blur_ksize and int(blur_ksize) > 0:
-        k = int(blur_ksize)
-        if k % 2 == 0:
-            k += 1
-        if k < 3:
-            k = 3
-        g = cv2.GaussianBlur(g, (k, k), 0)
-
-    return g
+def safe_float_str(x, nd=3) -> str:
+    return f"{float(x):.{nd}f}".replace(".", "p").replace("-", "m")
 
 
-def percentile_span(gray_u8, p_low=10, p_high=90):
-    g = gray_u8.astype(np.float32)
-    pl, ph = np.percentile(g, [p_low, p_high])
-    return float(pl), float(ph), float(ph - pl)
+def _err(code: str, **extra):
+    d = {"status": "ERROR", "code": str(code)}
+    if extra:
+        d.update(extra)
+    return d
 
 
-def robust_texture_and_edge_activity(gray_u8,
-                                     hp_sigma=12.0,
-                                     hp_clip_lo=5, hp_clip_hi=95,
-                                     act_k=6.0):
-    g = gray_u8.astype(np.float32)
-
-    low = cv2.GaussianBlur(g, (0, 0), float(hp_sigma))
-    hp = g - low
-    lo, hi = np.percentile(hp, [float(hp_clip_lo), float(hp_clip_hi)])
-    hp_w = np.clip(hp, lo, hi)
-
-    hp_med = float(np.median(hp_w))
-    hp_mad = float(np.median(np.abs(hp_w - hp_med)))
-    hp_rstd = float(1.4826 * hp_mad)
-
-    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
-    mag = cv2.magnitude(gx, gy)
-
-    sobel_med = float(np.median(mag))
-    sobel_mad = float(np.median(np.abs(mag - sobel_med)))
-    sobel_p90 = float(np.percentile(mag, 90))
-
-    thr = sobel_med + float(act_k) * (1.4826 * sobel_mad + 1e-6)
-    edge_act = float((mag > thr).mean())
-
-    return {
-        "hp_rstd": hp_rstd,
-        "sobel_p90": sobel_p90,
-        "edge_act": edge_act,
-    }
+def _ok(**extra):
+    d = {"status": "OK"}
+    if extra:
+        d.update(extra)
+    return d
 
 
-def vignette_profile_metrics(gray_u8, blur_ksize=11, bins=24):
-    k = int(blur_ksize)
-    if k % 2 == 0:
-        k += 1
-    if k < 31:
-        k = 31
-
-    g = cv2.GaussianBlur(gray_u8, (k, k), 0).astype(np.float32)
-
-    H, W = g.shape[:2]
-    cy, cx = H / 2.0, W / 2.0
-    yy, xx = np.indices((H, W))
-    r = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
-    r = r / (r.max() + 1e-9)
-
-    edges = np.linspace(0.0, 1.0, int(bins) + 1)
-    means = []
-    for i in range(int(bins)):
-        m = (r >= edges[i]) & (r < edges[i + 1])
-        means.append(float(g[m].mean()) if np.any(m) else float(np.mean(g)))
-
-    center = float(means[0])
-    edge = float(np.mean(means[-2:]))
-    dEC = float(edge - center)
-    dAbs = float(abs(dEC))
-
-    diffs = np.diff(np.array(means, dtype=np.float32))
-    mono = float(max((diffs > 0).mean(), (diffs < 0).mean()))
-
-    radii = np.linspace(0.0, 1.0, int(bins)).astype(np.float32)
-    corr = float(np.corrcoef(radii, np.array(means, dtype=np.float32))[0, 1])
-
-    return {
-        "center": center,
-        "edge": edge,
-        "dEC": dEC,
-        "dAbs": dAbs,
-        "mono": mono,
-        "corr": corr,
-    }
+def _to_gray_u8(frame_bgr):
+    if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+        return None
+    if frame_bgr.ndim == 2:
+        return frame_bgr
+    if frame_bgr.ndim == 3 and frame_bgr.shape[2] == 3:
+        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    if frame_bgr.ndim == 3 and frame_bgr.shape[2] == 4:
+        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGRA2GRAY)
+    return None
 
 
-def decide_pattern(gray_u8,
-                   exp_code,
-                   # zoom védelem
-                   p10_zoom_thr=60.0,
-                   # üres-gyanú (közép–szél különbség kicsi)
-                   dabs_sus_thr=10.0,
-                   # klasszikus üres (dinamika)
-                   span_thr=25.0,
+def full_frame_points_from_gray(gray_u8):
+    """Full-frame 'contour' pontok a returnbe."""
+    if gray_u8 is None or getattr(gray_u8, "size", 0) == 0:
+        return None
+    H, W = gray_u8.shape[:2]
+    return [
+        [0, 0],
+        [int(W - 1), 0],
+        [int(W - 1), int(H - 1)],
+        [0, int(H - 1)],
+    ]
 
-                   # textúra erősség (de csak ha kiterjedt!)
-                   hp_thr=2.5,
-                   sobel_p90_thr=10.0,
 
-                   # kiterjedtség küszöbök
-                   edge_act_empty_thr=0.002,
-                   edge_act_tex_thr=0.010,
+# ---------------------------------------------------------------------
+# Debug dump gating (csak bizonyos hibáknál)
+# ---------------------------------------------------------------------
+def should_dump_debug_for_error(error_code: str) -> bool:
+    code = str(error_code)
+    rounded_fail_codes = {"E2015"}
+    return code in rounded_fail_codes
 
-                   # vignetta “rendezettség”
-                   v_corr_abs_thr=0.55,
-                   v_mono_thr=0.60):
 
-    p10, p90, span = percentile_span(gray_u8, 10, 90)
-    tm = robust_texture_and_edge_activity(gray_u8, hp_sigma=12.0, hp_clip_lo=5, hp_clip_hi=95, act_k=6.0)
-    vm = vignette_profile_metrics(gray_u8, blur_ksize=11, bins=24)
-
-    info = {"p10": p10, "p90": p90, "span": span, **tm, **vm}
-
-    if exp_code == "E_OVER":
-        return "PATTERN_UNKNOWN_OVER", info
-    if exp_code == "E_UNDER":
-        return "PATTERN_UNKNOWN_UNDER", info
-
-    # zoom: ha p10 magas, nem üres
-    if p10 >= float(p10_zoom_thr):
-        return "PATTERN_PRESENT_ZOOM", info
-
-    # ha dAbs nagy: mintás
-    if vm["dAbs"] > float(dabs_sus_thr):
-        return "PATTERN_PRESENT", info
-
-    radial_ok = (abs(vm["corr"]) >= float(v_corr_abs_thr)) and (vm["mono"] >= float(v_mono_thr))
-    info["radial_ok"] = bool(radial_ok)
-
-    if tm["edge_act"] <= float(edge_act_empty_thr):
-        return "E_EMPTY", info
-
-    if (span < float(span_thr)) and radial_ok:
-        return "E_EMPTY", info
-
-    has_texture = (
-        ((tm["hp_rstd"] >= float(hp_thr)) or (tm["sobel_p90"] >= float(sobel_p90_thr)))
-        and (tm["edge_act"] >= float(edge_act_tex_thr))
-    )
-    info["has_texture"] = bool(has_texture)
-
-    if has_texture:
-        return "PATTERN_PRESENT_ZOOM", info
-
-    return "E_EMPTY", info
-
-# ==========================================================
-# Debug dump
-# ==========================================================
 def dump_debug_buffer_to_error(debug_buffer, error_code: str) -> str:
     if not debug_buffer:
         return None
@@ -336,10 +120,285 @@ def dump_debug_buffer_to_error(debug_buffer, error_code: str) -> str:
     return out_dir
 
 
-# ==========================================================
-# Camera grab
-# ==========================================================
-def acquire_frame_manual(timeout_ms=2000, retries=2):
+def maybe_dump_debug(debug: bool, debug_buffer, error_code: str) -> None:
+    if debug and debug_buffer is not None and should_dump_debug_for_error(error_code):
+        dump_debug_buffer_to_error(debug_buffer, str(error_code))
+
+
+# ---------------------------------------------------------------------
+# Exposure gate (ugyanaz a logika, mint a másik scriptedben)
+# ---------------------------------------------------------------------
+def exposure_gate(
+    gray_u8,
+    white_thr=250,
+    frac_white_thr=0.20,
+    under_p95_thr=30,
+    under_dr_thr=30,
+    # extra "nagyon sötét" kapu (a.jpg-hez), de d-t ne vigye el
+    under_p10_thr=10,
+    under_p95_hi=55,
+    under_p99_thr=90,
+):
+    """
+    Returns:
+      exp_code: "EXP_OK" | "E_OVER" | "E_UNDER"
+      metrics:  dict(p95, dr, white)
+    """
+    if gray_u8 is None or gray_u8.size == 0:
+        return "E_UNDER", {"p95": 0.0, "dr": 0.0, "white": 0.0}
+
+    g = gray_u8.astype(np.float32)
+    p1, p10, p95, p99 = np.percentile(g, [1, 10, 95, 99])
+    dr = float(p99 - p1)
+
+    frac_white = float((gray_u8 >= int(white_thr)).mean())
+    metrics = {"p95": float(p95), "dr": dr, "white": frac_white}
+
+    if frac_white > float(frac_white_thr) or p95 > 240:
+        return "E_OVER", metrics
+
+    # eredeti under (nagyon sötét + lapos)
+    if (p95 < float(under_p95_thr)) and (dr < float(under_dr_thr)):
+        return "E_UNDER", metrics
+
+    # extra under (nagyon sötét összkép), de csak ha p10 is extrém alacsony
+    if (p10 < float(under_p10_thr)) and (p95 < float(under_p95_hi)) and (p99 < float(under_p99_thr)):
+        return "E_UNDER", metrics
+
+    return "EXP_OK", metrics
+
+
+# ---------------------------------------------------------------------
+# PATTERN / EMPTY gate (átvéve a másik scripted stílusára)
+#   - csak uniform (std < thr) és EXP_OK esetén fut
+# ---------------------------------------------------------------------
+def _preprocess_gray(gray_u8, scale=0.10, blur_ksize=11):
+    g = gray_u8
+    if scale is not None and float(scale) < 1.0:
+        g = cv2.resize(g, None, fx=float(scale), fy=float(scale), interpolation=cv2.INTER_AREA)
+
+    if blur_ksize and int(blur_ksize) > 0:
+        k = int(blur_ksize)
+        if k % 2 == 0:
+            k += 1
+        if k < 3:
+            k = 3
+        g = cv2.GaussianBlur(g, (k, k), 0)
+
+    return g
+
+
+def _percentile_span(gray_u8, p_low=10, p_high=90):
+    g = gray_u8.astype(np.float32)
+    pl, ph = np.percentile(g, [p_low, p_high])
+    return float(pl), float(ph), float(ph - pl)
+
+
+def _robust_texture_and_edge_activity(gray_u8, hp_sigma=12.0, hp_clip_lo=5, hp_clip_hi=95, act_k=6.0):
+    g = gray_u8.astype(np.float32)
+
+    low = cv2.GaussianBlur(g, (0, 0), float(hp_sigma))
+    hp = g - low
+    lo, hi = np.percentile(hp, [float(hp_clip_lo), float(hp_clip_hi)])
+    hp_w = np.clip(hp, lo, hi)
+
+    hp_med = float(np.median(hp_w))
+    hp_mad = float(np.median(np.abs(hp_w - hp_med)))
+    hp_rstd = float(1.4826 * hp_mad)
+
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+
+    sobel_med = float(np.median(mag))
+    sobel_mad = float(np.median(np.abs(mag - sobel_med)))
+    sobel_p90 = float(np.percentile(mag, 90))
+
+    thr = sobel_med + float(act_k) * (1.4826 * sobel_mad + 1e-6)
+    edge_act = float((mag > thr).mean())
+
+    return {"hp_rstd": hp_rstd, "sobel_p90": sobel_p90, "edge_act": edge_act}
+
+
+def _vignette_profile_metrics(gray_u8, blur_ksize=11, bins=24):
+    k = int(blur_ksize)
+    if k % 2 == 0:
+        k += 1
+    if k < 31:
+        k = 31
+
+    g = cv2.GaussianBlur(gray_u8, (k, k), 0).astype(np.float32)
+
+    H, W = g.shape[:2]
+    cy, cx = H / 2.0, W / 2.0
+    yy, xx = np.indices((H, W))
+    r = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+    r = r / (r.max() + 1e-9)
+
+    edges = np.linspace(0.0, 1.0, int(bins) + 1)
+    means = []
+    for i in range(int(bins)):
+        m = (r >= edges[i]) & (r < edges[i + 1])
+        means.append(float(g[m].mean()) if np.any(m) else float(np.mean(g)))
+
+    center = float(means[0])
+    edge = float(np.mean(means[-2:]))
+    dEC = float(edge - center)
+    dAbs = float(abs(dEC))
+
+    diffs = np.diff(np.array(means, dtype=np.float32))
+    mono = float(max((diffs > 0).mean(), (diffs < 0).mean()))
+
+    radii = np.linspace(0.0, 1.0, int(bins)).astype(np.float32)
+    corr = float(np.corrcoef(radii, np.array(means, dtype=np.float32))[0, 1])
+
+    return {"center": center, "edge": edge, "dEC": dEC, "dAbs": dAbs, "mono": mono, "corr": corr}
+
+
+def _colorfulness_metric(frame_bgr: np.ndarray, sample_stride: int = 4) -> float:
+    """
+    OpenCV frame is BGR. Gyors:
+      cf = átlag(|R-G| + |R-B| + |G-B|)/3
+    """
+    if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+        return 0.0
+    if frame_bgr.ndim != 3 or frame_bgr.shape[2] < 3:
+        return 0.0
+
+    b = frame_bgr[::sample_stride, ::sample_stride, 0].astype(np.float32)
+    g = frame_bgr[::sample_stride, ::sample_stride, 1].astype(np.float32)
+    r = frame_bgr[::sample_stride, ::sample_stride, 2].astype(np.float32)
+
+    return float(np.mean(np.abs(r - g) + np.abs(r - b) + np.abs(g - b)) / 3.0)
+
+
+def _decide_pattern(
+    gray_u8,
+    # color-only split
+    cf=None,
+    cf_thr=5.5,
+    cf_apply_span_max=20.0,
+    cf_apply_dabs_max=10.0,
+    p10_zoom_thr=60.0,
+    p10_bright_empty_max=68.5,
+    dabs_sus_thr=10.0,
+    span_thr=25.0,
+    hp_thr=2.5,
+    sobel_p90_thr=10.0,
+    edge_act_empty_thr=0.002,
+    edge_act_tex_thr=0.010,
+    edge_act_bright_empty_thr=0.020,
+    edge_act_classic_empty_max=0.012,
+    edge_act_anti_zero_thr=0.0005,
+    v_corr_abs_thr=0.55,
+    v_mono_thr=0.60,
+):
+    p10, p90, span = _percentile_span(gray_u8, 10, 90)
+    tm = _robust_texture_and_edge_activity(gray_u8, hp_sigma=12.0, hp_clip_lo=5, hp_clip_hi=95, act_k=6.0)
+    vm = _vignette_profile_metrics(gray_u8, blur_ksize=11, bins=24)
+
+    info = {"p10": p10, "p90": p90, "span": span, **tm, **vm}
+
+    # 1) color-only decision FIRST, only in near-uniform regime
+    if cf is not None:
+        cfv = float(cf)
+        info["cf"] = cfv
+        if (span <= float(cf_apply_span_max)) and (vm["dAbs"] <= float(cf_apply_dabs_max)):
+            if cfv >= float(cf_thr):
+                return "PATTERN_PRESENT_ZOOM", info
+            else:
+                return "E_EMPTY", info
+
+    # 2) strong vignette diff => PATTERN
+    if vm["dAbs"] > float(dabs_sus_thr):
+        return "PATTERN_PRESENT", info
+
+    radial_ok = (abs(vm["corr"]) >= float(v_corr_abs_thr)) and (vm["mono"] >= float(v_mono_thr))
+    info["radial_ok"] = bool(radial_ok)
+
+    # 3) anti-a1 guard
+    if (p10 >= float(p10_zoom_thr)) and (p10 <= float(p10_bright_empty_max)) \
+       and (span < float(span_thr)) and radial_ok \
+       and (tm["edge_act"] < float(edge_act_anti_zero_thr)):
+        return "PATTERN_PRESENT_ZOOM", info
+
+    # 4) empty via edge_act
+    if tm["edge_act"] <= float(edge_act_empty_thr):
+        return "E_EMPTY", info
+
+    if (span < float(span_thr)) and radial_ok and (tm["edge_act"] <= float(edge_act_classic_empty_max)):
+        return "E_EMPTY", info
+
+    if (p10 >= float(p10_zoom_thr)) and (p10 <= float(p10_bright_empty_max)) \
+       and (span < float(span_thr)) and radial_ok \
+       and (tm["edge_act"] <= float(edge_act_bright_empty_thr)):
+        return "E_EMPTY", info
+
+    has_texture = (
+        ((tm["hp_rstd"] >= float(hp_thr)) or (tm["sobel_p90"] >= float(sobel_p90_thr)))
+        and (tm["edge_act"] >= float(edge_act_tex_thr))
+    )
+    info["has_texture"] = bool(has_texture)
+
+    if has_texture:
+        return "PATTERN_PRESENT_ZOOM", info
+
+    if p10 >= float(p10_zoom_thr):
+        return "PATTERN_PRESENT_ZOOM", info
+
+    return "E_EMPTY", info
+
+
+def pattern_empty_gate_from_frame(
+    first_frame_bgr,
+    uniform_std_thr=10.0,
+    pattern_scale=0.10,
+    pattern_pre_blur_ksize=11,
+    cf_stride=4,
+    cf_thr=5.5,
+):
+    """
+    Csak akkor fut:
+      - std_gray < uniform_std_thr
+      - exposure EXP_OK
+    """
+    if first_frame_bgr is None or getattr(first_frame_bgr, "size", 0) == 0:
+        return {"run": False, "pattern_code": None, "is_empty": None, "info": {}}
+
+    gray_u8 = _to_gray_u8(first_frame_bgr)
+    if gray_u8 is None:
+        return {"run": False, "pattern_code": None, "is_empty": None, "info": {}}
+
+    std_gray = float(gray_u8.std())
+    is_uniform = bool(std_gray < float(uniform_std_thr))
+
+    exp_code, exp_m = exposure_gate(gray_u8, white_thr=250, frac_white_thr=0.20, under_p95_thr=30, under_dr_thr=30)
+
+    if (not is_uniform) or (exp_code != "EXP_OK"):
+        return {
+            "run": False,
+            "pattern_code": None,
+            "is_empty": None,
+            "info": {"std_gray": std_gray, "exp_code": exp_code, **exp_m},
+        }
+
+    cf = _colorfulness_metric(first_frame_bgr, sample_stride=int(cf_stride))
+
+    gray_pat = _preprocess_gray(gray_u8, scale=float(pattern_scale), blur_ksize=int(pattern_pre_blur_ksize))
+    pattern_code, info = _decide_pattern(gray_pat, cf=cf, cf_thr=float(cf_thr))
+
+    return {
+        "run": True,
+        "pattern_code": pattern_code,
+        "is_empty": bool(pattern_code == "E_EMPTY"),
+        "info": {"std_gray": std_gray, "exp_code": exp_code, "cf": float(cf), **exp_m, **info},
+    }
+
+
+# ---------------------------------------------------------------------
+# Camera (manual) - ugyanaz a stílus, mint a másik scriptedben
+# ---------------------------------------------------------------------
+def acquire_frame(timeout_ms=2000, retries=2):
     from pypylon import pylon
 
     cam = globals.camera
@@ -367,8 +426,10 @@ def acquire_frame_manual(timeout_ms=2000, retries=2):
 
                 frame_bgr = converter.Convert(grab_result).GetArray()
                 return frame_bgr.copy()
+
             except Exception as e:
                 last_error = e
+
             finally:
                 try:
                     if grab_result is not None:
@@ -384,216 +445,158 @@ def acquire_frame_manual(timeout_ms=2000, retries=2):
     raise RuntimeError("Grab failed")
 
 
-# ==========================================================
-# Manual out-of-frame check (same logic as AF final check)
-#   MÓDOSÍTÁS: std_gray < 10 ágban EMPTY/PATTERN döntés
-# ==========================================================
+# ---------------------------------------------------------------------
+# Final manual check (EDGE NÉLKÜL) - SCRIPT-STYLE szerkezetben
+# ---------------------------------------------------------------------
 def final_out_of_frame_check_manual(
-        frame_scale,
-        grab_timeout_ms,
-        debug,
-        debug_buffer,
-        margin_px=2,
-        min_area_ratio=0.001,
-
-        # --- kötelező edge check paramok ---
-        min_edge_strength=10.0,     # <- állítsd be amit használsz
-        edge_ring_width=5,
-        bbox_pad=20,
-
-        # --- kötelező rounded check paramok (AF defaultok) ---
-        rounded_margin_px=15,
-        rounded_step=12,
-        rounded_angle_threshold_deg=55.0,
-        rounded_max_sharp=20,
-        rounded_min_used=20,
-        rounded_downsample=4,
+    frame_scale,
+    grab_timeout_ms,
+    debug,
+    debug_buffer,
+    min_area_ratio=0.001,
+    # pattern gate
+    uniform_std_thr=10.0,
+    # rounded
+    do_rounded_check=True,
+    rounded_margin_px=15,
+    rounded_step=12,
+    rounded_angle_threshold_deg=55.0,
+    rounded_max_sharp=20,
+    rounded_min_used=20,
+    rounded_downsample=4,
+    rounded_error_code="E2015",
 ):
     # --- grab ---
     try:
-        frame = acquire_frame_manual(timeout_ms=grab_timeout_ms)
+        frame = acquire_frame(timeout_ms=grab_timeout_ms)
     except Exception:
         return False, "E2200", None  # grab fail
 
     # --- resize ---
     if frame_scale is not None and float(frame_scale) != 1.0:
         try:
-            frame = cv2.resize(
-                frame, None,
-                fx=float(frame_scale),
-                fy=float(frame_scale),
-                interpolation=cv2.INTER_AREA
-            )
+            frame = cv2.resize(frame, None, fx=float(frame_scale), fy=float(frame_scale), interpolation=cv2.INTER_AREA)
         except Exception:
             return False, "E2201", None  # resize fail
 
-    # --- exposure gate (UNDER / OVER) ---
-    if frame.ndim == 2:
-        gray_gate = frame
-    elif frame.ndim == 3 and frame.shape[2] == 3:
-        gray_gate = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    elif frame.ndim == 3 and frame.shape[2] == 4:
-        gray_gate = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-    else:
+    if debug and debug_buffer is not None:
+        debug_buffer.append({"stage": "final_check_manual", "z": 0.0, "idx": 0, "frame": frame.copy()})
+
+    gray_gate = _to_gray_u8(frame)
+    if gray_gate is None:
         return False, "E2206", None
 
+    # --- exposure gate ---
     exp_code, exp_m = exposure_gate(
         gray_gate,
         white_thr=250,
         frac_white_thr=0.20,
         under_p95_thr=30,
-        under_dr_thr=30
+        under_dr_thr=30,
     )
-
-    print(f"[EXPOSURE_GATE] exp={exp_code} "
-          f"p95={exp_m['p95']:.1f} dr={exp_m['dr']:.1f} white={exp_m['white']:.3f}")
+    print(f"[EXPOSURE_GATE] exp={exp_code} p95={exp_m['p95']:.1f} dr={exp_m['dr']:.1f} white={exp_m['white']:.3f}")
 
     if exp_code == "E_OVER":
-        return False, "E2003", None  # túl világos
-
+        return False, "E2003", None
     if exp_code == "E_UNDER":
-        return False, "E2002", None  # túl sötét
+        return False, "E2002", None
 
-    # --- uniformity check (egyszínűség) ---
+    # --- uniformity ---
     std_gray = float(gray_gate.std())
-    print(f"[UNIFORM_CHECK] std_gray={std_gray:.2f}")
+    print(f"[UNIFORM_CHECK] std_gray={std_gray:.2f} uniform_mode={std_gray < float(uniform_std_thr)}")
 
-    # ==========================================================
-    # MÓDOSÍTOTT RÉSZ: ha std_gray < 10, akkor decide_pattern
-    # ==========================================================
-    if std_gray < 10.0:
-        # gyors preprocess a pattern/empty döntéshez
-        gray_pat = preprocess_gray(gray_gate, scale=0.10, blur_ksize=11)
-
-        pat_code, pat_info = decide_pattern(
-            gray_pat,
-            exp_code="EXP_OK",   # ide már csak UNDER/OVER kizárása után jutunk
-            p10_zoom_thr=60.0,
-            dabs_sus_thr=10.0,
-            span_thr=25.0,
-            hp_thr=2.5,
-            sobel_p90_thr=10.0,
-            edge_act_empty_thr=0.002,
-            edge_act_tex_thr=0.010,
-            v_corr_abs_thr=0.55,
-            v_mono_thr=0.60
+    # -----------------------------------------------------------------
+    # UNIFORM MODE => PATTERN/EMPTY gate
+    # -----------------------------------------------------------------
+    if std_gray < float(uniform_std_thr):
+        gate = pattern_empty_gate_from_frame(
+            frame,
+            uniform_std_thr=float(uniform_std_thr),
+            pattern_scale=0.10,
+            pattern_pre_blur_ksize=11,
+            cf_stride=4,
+            cf_thr=5.5,
         )
 
-        print(f"[PATTERN_GATE@LOW_STD] pat={pat_code} "
-              f"p10={pat_info.get('p10', 0):.1f} span={pat_info.get('span', 0):.1f} "
-              f"dAbs={pat_info.get('dAbs', 0):.1f} act={pat_info.get('edge_act', 0):.4f} "
-              f"mono={pat_info.get('mono', 0):.2f} corr={pat_info.get('corr', 0):.2f}")
+        if gate.get("run", False):
+            pat_code = str(gate.get("pattern_code") or "")
+            is_empty = bool(gate.get("is_empty"))
+            info = gate.get("info", {}) or {}
 
-        # ha empty -> E2000 és leáll
-        if pat_code == "E_EMPTY":
-            return False, "E2000", None
+            print(f"[PATTERN_GATE] pattern_code={pat_code} is_empty={is_empty}")
 
-        # ha nem empty -> a teljes kép kontúrja, és leáll (nem fut edge/otsu/rounded)
-        H, W = gray_gate.shape[:2]
-        full_contour = np.array([[[0, 0]],
-                                 [[W - 1, 0]],
-                                 [[W - 1, H - 1]],
-                                 [[0, H - 1]]], dtype=np.int32)
-        return True, None, full_contour
+            if is_empty:
+                return False, "E2000", None
 
-    # --- Debug buffer ---
-    if debug and debug_buffer is not None:
-        debug_buffer.append({
-            "stage": "final_check_manual",
-            "z": 0.0,
-            "idx": 0,
-            "frame": frame.copy()
-        })
+            # uniform + pattern => full frame "contour"
+            return True, None, np.array(
+                [[[0, 0]],
+                 [[gray_gate.shape[1] - 1, 0]],
+                 [[gray_gate.shape[1] - 1, gray_gate.shape[0] - 1]],
+                 [[0, gray_gate.shape[0] - 1]]],
+                dtype=np.int32
+            )
 
-    # --- Debug buffer --- (szándékosan változatlanul hagyva, mert az eredetiben is így volt)
-    if debug and debug_buffer is not None:
-        debug_buffer.append({
-            "stage": "final_check_manual",
-            "z": 0.0,
-            "idx": 0,
-            "frame": frame.copy()
-        })
+        # ha gate nem futott (elvileg itt fut), de legyen stabil fallback
+        return True, None, np.array(
+            [[[0, 0]],
+             [[gray_gate.shape[1] - 1, 0]],
+             [[gray_gate.shape[1] - 1, gray_gate.shape[0] - 1]],
+             [[0, gray_gate.shape[0] - 1]]],
+            dtype=np.int32
+        )
 
-    # -----------------------------
-    # Kötelező EDGE RING check
-    # -----------------------------
-    bbox_state = init_bbox_state(frame, pad=int(bbox_pad))
-    if bbox_state is None:
-        return False, "E2006", None  # ROI/bbox fail (AF-ben is ez)
-
-    roi_g = bbox_roi_gray(frame, bbox_state)
-    edge_strength = edge_ring_strength_from_roi_gray(roi_g, ring_w=int(edge_ring_width))
-    print(f"[FINAL_EDGE] edge_strength={edge_strength:.4f} (min={float(min_edge_strength):.4f})")
-    if edge_strength < float(min_edge_strength):
-        return False, "E2012", None  # AF kód
-
-    # -----------------------------
-    # Grayscale + OTSU largest contour
-    # -----------------------------
-    if frame.ndim == 2:
-        gray = frame
-    elif frame.ndim == 3 and frame.shape[2] == 3:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    elif frame.ndim == 3 and frame.shape[2] == 4:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-    else:
-        return False, "E2206", None
-
+    # -----------------------------------------------------------------
+    # NON-UNIFORM MODE => OTSU contour + (opcionális) rounded check
+    # -----------------------------------------------------------------
+    gray = gray_gate
     H, W = gray.shape[:2]
 
     c = largest_contour_from_gray_otsu(gray)
     if c is None:
         return False, "E2207", None
 
-    # -----------------------------
-    # Area check + frame-touch (AF logika)
-    # -----------------------------
     area = float(cv2.contourArea(c))
     if area < (float(min_area_ratio) * H * W):
         return True, None, c
 
-    x, y, w, h = cv2.boundingRect(c)
+    if bool(do_rounded_check):
+        ok_round, info = rounded_by_curvature_ignore_border(
+            c, W, H,
+            margin_px=int(rounded_margin_px),
+            step=int(rounded_step),
+            angle_threshold_deg=float(rounded_angle_threshold_deg),
+            max_sharp=int(rounded_max_sharp),
+            min_used=int(rounded_min_used),
+            downsample=int(rounded_downsample),
+        )
+        print(f"[ROUNDED_CHECK] ok={ok_round} info={info}")
 
-    # -----------------------------
-    # Kötelező ROUNDED check
-    # -----------------------------
-    ok_round, info = rounded_by_curvature_ignore_border(
-        c, W, H,
-        margin_px=int(rounded_margin_px),
-        step=int(rounded_step),
-        angle_threshold_deg=float(rounded_angle_threshold_deg),
-        max_sharp=int(rounded_max_sharp),
-        min_used=int(rounded_min_used),
-        downsample=int(rounded_downsample),
-    )
-    print(f"[ROUNDED_CHECK] ok={ok_round} info={info}")
-
-    if (ok_round is None) or (ok_round is False):
-        return False, "E2015", c  # AF kód
+        if (ok_round is None) or (ok_round is False):
+            return False, str(rounded_error_code), c
 
     return True, None, c
 
 
-# ==========================================================
-# Wrapper: run check and return AF-style dict
-# ==========================================================
+# ---------------------------------------------------------------------
+# Wrapper (manual_return) - ugyanúgy, mint a scriptedben
+# ---------------------------------------------------------------------
 def manual_return(
-        frame_scale=0.1,
-        grab_timeout_ms=2000,
-        margin_px=2,
-        min_area_ratio=0.001,
-        debug=True,
-
-        # kötelező edge + rounded paramok továbbadva
-        min_edge_strength=10.0,
-        edge_ring_width=5,
-
-        rounded_margin_px=15,
-        rounded_step=12,
-        rounded_angle_threshold_deg=55.0,
-        rounded_max_sharp=20,
-        rounded_min_used=20,
-        rounded_downsample=4,
+    frame_scale=0.1,
+    grab_timeout_ms=2000,
+    min_area_ratio=0.001,
+    debug=True,
+    # pattern gate
+    uniform_std_thr=10.0,
+    # rounded
+    do_rounded_check=True,
+    rounded_margin_px=15,
+    rounded_step=12,
+    rounded_angle_threshold_deg=55.0,
+    rounded_max_sharp=20,
+    rounded_min_used=20,
+    rounded_downsample=4,
+    rounded_error_code="E2015",
 ):
     debug_buffer = [] if debug else None
 
@@ -602,24 +605,20 @@ def manual_return(
         grab_timeout_ms=grab_timeout_ms,
         debug=debug,
         debug_buffer=debug_buffer,
-        margin_px=margin_px,
         min_area_ratio=min_area_ratio,
-
-        min_edge_strength=min_edge_strength,
-        edge_ring_width=edge_ring_width,
-
+        uniform_std_thr=uniform_std_thr,
+        do_rounded_check=bool(do_rounded_check),
         rounded_margin_px=rounded_margin_px,
         rounded_step=rounded_step,
         rounded_angle_threshold_deg=rounded_angle_threshold_deg,
         rounded_max_sharp=rounded_max_sharp,
         rounded_min_used=rounded_min_used,
         rounded_downsample=rounded_downsample,
+        rounded_error_code=str(rounded_error_code),
     )
 
     if not ok:
-        # ha akarsz: csak ezeknél dump
-        if debug and debug_buffer is not None and str(err_code) in {"E2012", "E2015"}:
-            dump_debug_buffer_to_error(debug_buffer, str(err_code))
+        maybe_dump_debug(debug, debug_buffer, str(err_code))
         return _err(str(err_code))
 
     final_contour_pts = contour_to_points_list(final_contour)

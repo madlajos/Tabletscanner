@@ -193,7 +193,7 @@
 /* Clear button: faint red -> normal red on hover */
 .clear-button {
   border-radius: 4px;
-  border: 1px solid rgba(200, 60, 60, 0.6);
+  border: 1px solid rgba(255, 0, 0, 0.6);
   background-color: rgba(200, 60, 60, 0.1);
   color: #f0b0b0;
 
@@ -209,8 +209,8 @@
 }
 
 .clear-button:hover:not(:disabled) {
-  background-color: #c62828; /* normal red */
-  border-color: #c62828;
+  background-color: #fa0000; /* normal red */
+  border-color: #ff0000;
   color: #fff;
   transform: translateY(-1px);
 }
@@ -329,13 +329,13 @@
 
 /* Completed state (green) – tablets that have been measured */
 .tablet-dot.completed {
-  background-color: #2e7d32;
-  box-shadow: 0 0 8px rgba(46, 125, 50, 0.9);
+  background-color: #00b809;
+  box-shadow: 0 0 8px rgba(0, 161, 8, 0.9);
 }
 
 .tablet-dot.completed:hover {
   background-color: #388e3c;
-  box-shadow: 0 0 10px rgba(46, 125, 50, 0.9);
+  box-shadow: 0 0 10px rgba(0, 156, 8, 0.9);
   transform: scale(1.1);
 }
 
@@ -396,7 +396,7 @@
 
 /* Red variant when measurementActive = true */
 .start-button.stop {
-  background-color: #c62828;
+  background-color: #f80000;
 }
 
 .start-button:hover:not(:disabled) {
