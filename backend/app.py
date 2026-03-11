@@ -2811,6 +2811,36 @@ def validate_pipeline():
     return jsonify({'valid': True, 'errors': []}), 200
 
 
+@app.route('/api/pipeline/browse-file', methods=['GET'])
+def browse_for_file():
+    """Open a native file dialog for image file selection (via subprocess to avoid Tkinter thread issues)."""
+    try:
+        result = subprocess.run(
+            ['python', 'browse_dialog.py', 'file'],
+            capture_output=True, text=True, timeout=120
+        )
+        output = json.loads(result.stdout.strip())
+        return jsonify({"path": output.get("path", "")}), 200
+    except Exception as e:
+        app.logger.exception("Browse file dialog failed")
+        return jsonify({"path": ""}), 200
+
+
+@app.route('/api/pipeline/browse-folder', methods=['GET'])
+def browse_for_folder():
+    """Open a native folder dialog for image folder selection (via subprocess to avoid Tkinter thread issues)."""
+    try:
+        result = subprocess.run(
+            ['python', 'browse_dialog.py', 'folder'],
+            capture_output=True, text=True, timeout=120
+        )
+        output = json.loads(result.stdout.strip())
+        return jsonify({"path": output.get("path", "")}), 200
+    except Exception as e:
+        app.logger.exception("Browse folder dialog failed")
+        return jsonify({"path": ""}), 200
+
+
 @app.route('/api/pipeline/preview', methods=['POST'])
 def preview_pipeline():
     """Execute pipeline up to a selected step and return the result image + side outputs."""
@@ -2819,6 +2849,7 @@ def preview_pipeline():
         return jsonify({'error': 'Hiányzó JSON törzs', 'code': ErrorCode.PIPELINE_VALIDATION_FAILED, 'popup': True}), 400
 
     preview_step = data.get('preview_step_index', -1)
+    preview_image_index = data.get('preview_image_index', 0)
     pipeline_data = data.get('pipeline')
     if not pipeline_data:
         return jsonify({'error': 'Hiányzó pipeline adat', 'code': ErrorCode.PIPELINE_VALIDATION_FAILED, 'popup': True}), 400
@@ -2847,9 +2878,10 @@ def preview_pipeline():
         'side_outputs': side_outputs,
     }
 
-    # Encode the first image from the data dict as preview
+    # Encode the requested image from the data dict as preview
     if result.data and result.data.get("images"):
-        img = result.data["images"][0]
+        img_idx = max(0, min(preview_image_index, len(result.data["images"]) - 1))
+        img = result.data["images"][img_idx]
         if img is not None and hasattr(img, 'shape'):
             # Convert single-channel to BGR for JPEG encoding
             if img.ndim == 2:

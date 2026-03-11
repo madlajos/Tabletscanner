@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 import os
 
 
@@ -57,7 +58,12 @@ def load_image(paths, debug=False):
 
     for path in expanded_paths:
 
-        img = cv2.imread(path, cv2.IMREAD_COLOR)
+        # Use np.fromfile + imdecode to support non-ASCII (Unicode) file paths
+        try:
+            buf = np.fromfile(path, dtype=np.uint8)
+            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+        except Exception:
+            img = None
 
         if img is None:
             print(f"skip: {path}")

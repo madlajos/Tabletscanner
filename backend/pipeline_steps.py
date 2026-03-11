@@ -24,6 +24,16 @@ from proc_elements import (
     add_sequence_values as _pe_add_sequence_values,
     fit_curve as _pe_fit_curve,
     predict_node as _pe_predict_node,
+    apply_blur as _pe_apply_blur,
+    histogram_equalization as _pe_histogram_equalization,
+    apply_clahe as _pe_apply_clahe,
+    normalize_images as _pe_normalize_images,
+    adjust_brightness_contrast as _pe_adjust_brightness_contrast,
+    gamma_correction as _pe_gamma_correction,
+    flat_field_correction as _pe_flat_field_correction,
+    robust_stretch_gamma as _pe_robust_stretch_gamma,
+    advanced_illumin_corr as _pe_advanced_illumin_corr,
+    mask_rect_roi as _pe_mask_rect_roi,
 )
 
 # ---------------------------------------------------------------------------
@@ -54,17 +64,35 @@ _load_image_def = StepDefinition(
         ParamSchema(name="source", label="Forrás útvonal", type="file_path",
                     default="", required=True,
                     description="Képfájl vagy mappa elérési útja"),
+        ParamSchema(name="file_order", label="Sorrend", type="string",
+                    default="", required=False,
+                    description="Képek egyéni sorrendje (vesszővel elválasztott indexek)"),
     ],
-    side_output_types={"count": "SCALAR"},
+    side_output_types={"count": "SCALAR", "loaded_paths": "SCALAR"},
 )
 
 
 def _exec_load_image(data: dict, params: dict) -> dict:
     path = params.get("source", "")
     if not path:
+        from proc_elements import create_data
+        data = create_data()
         data["error"] = "E2002"
         return data
-    return _pe_load_image(path)
+    result = _pe_load_image(path)
+    # Apply custom image order if specified
+    order_str = params.get("file_order", "")
+    if order_str and result.get("images") and not result.get("error"):
+        try:
+            indices = [int(x.strip()) for x in order_str.split(",") if x.strip()]
+            n = len(result["images"])
+            # Validate indices
+            if indices and all(0 <= i < n for i in indices) and len(indices) == n:
+                result["images"] = [result["images"][i] for i in indices]
+                result["paths"] = [result["paths"][i] for i in indices]
+        except (ValueError, IndexError):
+            pass  # Ignore invalid order, keep original
+    return result
 
 
 _register(_load_image_def, _exec_load_image)
@@ -75,7 +103,7 @@ _register(_load_image_def, _exec_load_image)
 # ---------------------------------------------------------------------------
 _select_channel_def = StepDefinition(
     id="select_channel",
-    name="Csatorna kiválasztás",
+    name="Színtér konverzió",
     category="adjustment",
     description="Színtér konverzió és csatorna kiválasztás (BGR, HSV, LAB, szürkeárnyalat).",
     icon="palette",
@@ -364,3 +392,393 @@ def _exec_predict_node(data: dict, params: dict) -> dict:
 
 
 _register(_predict_node_def, _exec_predict_node)
+
+
+# ---------------------------------------------------------------------------
+# 10. Apply Blur  (apply_blur.py)
+# ---------------------------------------------------------------------------
+_apply_blur_def = StepDefinition(
+    id="apply_blur",
+    name="Elmosás",
+    category="filter",
+    description="Gauss, medián, átlag vagy bilaterális elmosás.",
+    icon="blur_on",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="method", label="Módszer", type="enum",
+                    default="gaussian",
+                    options=["gaussian", "median", "bilateral", "average"]),
+        ParamSchema(name="ksize", label="Kernel méret", type="int",
+                    default=5, min=1, max=99, step=2, odd_only=True),
+        ParamSchema(name="sigma", label="Sigma", type="float",
+                    default=0.0, min=0.0, max=50.0, step=0.5,
+                    description="Gauss sigma (0 = automatikus)"),
+        ParamSchema(name="sigma_color", label="Szín sigma", type="float",
+                    default=75.0, min=1.0, max=300.0, step=1.0,
+                    description="Bilaterális szűrő szín sigma"),
+        ParamSchema(name="sigma_space", label="Tér sigma", type="float",
+                    default=75.0, min=1.0, max=300.0, step=1.0,
+                    description="Bilaterális szűrő térbeli sigma"),
+    ],
+)
+
+
+def _exec_apply_blur(data: dict, params: dict) -> dict:
+    method = params.get("method", "gaussian")
+    ksize = int(params.get("ksize", 5))
+    sigma = float(params.get("sigma", 0.0))
+    sigma_color = float(params.get("sigma_color", 75.0))
+    sigma_space = float(params.get("sigma_space", 75.0))
+    return _pe_apply_blur(data, method=method, ksize=ksize, sigma=sigma,
+                          sigma_color=sigma_color, sigma_space=sigma_space)
+
+
+_register(_apply_blur_def, _exec_apply_blur)
+
+
+# ---------------------------------------------------------------------------
+# 11. Histogram Equalization  (histogram_eq.py)
+# ---------------------------------------------------------------------------
+_histogram_eq_def = StepDefinition(
+    id="histogram_equalization",
+    name="Hisztogram kiegyenlítés",
+    category="adjustment",
+    description="Hisztogram kiegyenlítés szürkeárnyalatos képekhez. Javítja a kontrasztot.",
+    icon="equalizer",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[],
+)
+
+
+def _exec_histogram_eq(data: dict, params: dict) -> dict:
+    return _pe_histogram_equalization(data)
+
+
+_register(_histogram_eq_def, _exec_histogram_eq)
+
+
+# ---------------------------------------------------------------------------
+# 12. CLAHE  (clahe.py)
+# ---------------------------------------------------------------------------
+_clahe_def = StepDefinition(
+    id="apply_clahe",
+    name="CLAHE",
+    category="adjustment",
+    description="Kontrasztkorlátos adaptív hisztogram kiegyenlítés (CLAHE). Szürkeárnyalatos képekhez.",
+    icon="auto_fix_high",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="clip_limit", label="Levágási határ", type="float",
+                    default=2.0, min=0.1, max=40.0, step=0.1),
+        ParamSchema(name="tile_x", label="Rács X", type="int",
+                    default=8, min=1, max=64, step=1,
+                    description="Csempe rács vízszintes mérete"),
+        ParamSchema(name="tile_y", label="Rács Y", type="int",
+                    default=8, min=1, max=64, step=1,
+                    description="Csempe rács függőleges mérete"),
+    ],
+)
+
+
+def _exec_clahe(data: dict, params: dict) -> dict:
+    clip_limit = float(params.get("clip_limit", 2.0))
+    tile_x = int(params.get("tile_x", 8))
+    tile_y = int(params.get("tile_y", 8))
+    return _pe_apply_clahe(data, clip_limit=clip_limit, tile_grid_size=(tile_x, tile_y))
+
+
+_register(_clahe_def, _exec_clahe)
+
+
+# ---------------------------------------------------------------------------
+# 13. Normalize  (normalization.py)
+# ---------------------------------------------------------------------------
+_normalize_def = StepDefinition(
+    id="normalize_images",
+    name="Normalizálás",
+    category="adjustment",
+    description="Kép normalizálás (MinMax, L1, L2). Az intenzitás tartományt az alpha-beta közé skálázza.",
+    icon="tune",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="alpha", label="Alpha (min)", type="float",
+                    default=0.0, min=0.0, max=255.0, step=1.0),
+        ParamSchema(name="beta", label="Beta (max)", type="float",
+                    default=255.0, min=0.0, max=255.0, step=1.0),
+        ParamSchema(name="norm_type", label="Típus", type="enum",
+                    default="minmax",
+                    options=["minmax", "l1", "l2"]),
+    ],
+)
+
+
+def _exec_normalize(data: dict, params: dict) -> dict:
+    alpha = float(params.get("alpha", 0.0))
+    beta = float(params.get("beta", 255.0))
+    norm_type = params.get("norm_type", "minmax")
+    return _pe_normalize_images(data, alpha=alpha, beta=beta, norm_type=norm_type)
+
+
+_register(_normalize_def, _exec_normalize)
+
+
+# ---------------------------------------------------------------------------
+# 14. Brightness / Contrast  (bright_contr.py)
+# ---------------------------------------------------------------------------
+_brightness_contrast_def = StepDefinition(
+    id="brightness_contrast",
+    name="Fényerő / Kontraszt",
+    category="adjustment",
+    description="Fényerő és kontraszt beállítás. A kontraszt szorzóként, a fényerő hozzáadásként hat.",
+    icon="brightness_6",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="brightness", label="Fényerő", type="int",
+                    default=0, min=-255, max=255, step=1),
+        ParamSchema(name="contrast", label="Kontraszt", type="float",
+                    default=1.0, min=0.1, max=5.0, step=0.1),
+    ],
+)
+
+
+def _exec_brightness_contrast(data: dict, params: dict) -> dict:
+    brightness = int(params.get("brightness", 0))
+    contrast = float(params.get("contrast", 1.0))
+    return _pe_adjust_brightness_contrast(data, brightness=brightness, contrast=contrast)
+
+
+_register(_brightness_contrast_def, _exec_brightness_contrast)
+
+
+# ---------------------------------------------------------------------------
+# 15. Gamma Correction  (gamma_corr.py)
+# ---------------------------------------------------------------------------
+_gamma_corr_def = StepDefinition(
+    id="gamma_correction",
+    name="Gamma korrekció",
+    category="adjustment",
+    description="Gamma korrekció LUT táblával. Gamma < 1 világosít, > 1 sötétít.",
+    icon="contrast",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="gamma", label="Gamma", type="float",
+                    default=1.0, min=0.1, max=5.0, step=0.05),
+    ],
+)
+
+
+def _exec_gamma_corr(data: dict, params: dict) -> dict:
+    gamma = float(params.get("gamma", 1.0))
+    return _pe_gamma_correction(data, gamma=gamma)
+
+
+_register(_gamma_corr_def, _exec_gamma_corr)
+
+
+# ---------------------------------------------------------------------------
+# 16. Flat-Field Correction  (flat_field_corr.py)
+# ---------------------------------------------------------------------------
+_flat_field_def = StepDefinition(
+    id="flat_field_correction",
+    name="Flat-field korrekció",
+    category="filter",
+    description="Megvilágítás egyenetlenség korrekció szürkeárnyalatos képekhez. Háttérbecslés + flat-field osztás.",
+    icon="wb_sunny",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="method", label="Háttér módszer", type="enum",
+                    default="downsampled",
+                    options=["gaussian", "downsampled"]),
+        ParamSchema(name="alpha", label="Korrekció erősség", type="float",
+                    default=1.0, min=0.1, max=5.0, step=0.1),
+        ParamSchema(name="use_nlm", label="NLM zajszűrés", type="bool",
+                    default=False,
+                    description="fastNlMeansDenoising alkalmazása a korrekció előtt"),
+        ParamSchema(name="nlm_h", label="NLM erősség (h)", type="float",
+                    default=3.0, min=0.0, max=30.0, step=0.5),
+        ParamSchema(name="sigma_bg", label="Háttér sigma", type="float",
+                    default=80.0, min=1.0, max=500.0, step=1.0,
+                    description="Gaussian módszer sigma értéke"),
+        ParamSchema(name="down", label="Lekicsinyítési arány", type="float",
+                    default=0.1, min=0.01, max=1.0, step=0.01,
+                    description="Downsampled módszer kicsinyítési aránya"),
+        ParamSchema(name="sigma_small", label="Kis kép sigma", type="float",
+                    default=8.0, min=0.5, max=100.0, step=0.5),
+        ParamSchema(name="final_blur", label="Végső simítás", type="float",
+                    default=3.0, min=0.0, max=50.0, step=0.5),
+        ParamSchema(name="percentile_low", label="Percentilis alsó", type="float",
+                    default=1.0, min=0.0, max=49.0, step=0.5),
+        ParamSchema(name="percentile_high", label="Percentilis felső", type="float",
+                    default=99.0, min=51.0, max=100.0, step=0.5),
+    ],
+    side_output_types={"background_images": "IMAGE"},
+)
+
+
+def _exec_flat_field(data: dict, params: dict) -> dict:
+    return _pe_flat_field_correction(
+        data,
+        method=params.get("method", "downsampled"),
+        alpha=float(params.get("alpha", 1.0)),
+        use_nlm=bool(params.get("use_nlm", False)),
+        nlm_h=float(params.get("nlm_h", 3.0)),
+        sigma_bg=float(params.get("sigma_bg", 80.0)),
+        down=float(params.get("down", 0.1)),
+        sigma_small=float(params.get("sigma_small", 8.0)),
+        final_blur=float(params.get("final_blur", 3.0)),
+        percentile_low=float(params.get("percentile_low", 1.0)),
+        percentile_high=float(params.get("percentile_high", 99.0)),
+    )
+
+
+_register(_flat_field_def, _exec_flat_field)
+
+
+# ---------------------------------------------------------------------------
+# 17. Robust Stretch + Gamma  (robust_stretch.py)
+# ---------------------------------------------------------------------------
+_robust_stretch_def = StepDefinition(
+    id="robust_stretch_gamma",
+    name="Robusztus nyújtás + Gamma",
+    category="adjustment",
+    description="Percentilis alapú kontraszt nyújtás opcionális gamma korrekcióval. Szürkeárnyalatos képekhez.",
+    icon="expand",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="percentile_low", label="Alsó percentilis", type="float",
+                    default=2.0, min=0.0, max=49.0, step=0.5),
+        ParamSchema(name="percentile_high", label="Felső percentilis", type="float",
+                    default=98.0, min=51.0, max=100.0, step=0.5),
+        ParamSchema(name="gamma", label="Gamma", type="float",
+                    default=1.0, min=0.1, max=5.0, step=0.05),
+    ],
+)
+
+
+def _exec_robust_stretch(data: dict, params: dict) -> dict:
+    percentile_low = float(params.get("percentile_low", 2.0))
+    percentile_high = float(params.get("percentile_high", 98.0))
+    gamma = float(params.get("gamma", 1.0))
+    return _pe_robust_stretch_gamma(data, percentile_low=percentile_low,
+                                    percentile_high=percentile_high, gamma=gamma)
+
+
+_register(_robust_stretch_def, _exec_robust_stretch)
+
+
+# ---------------------------------------------------------------------------
+# 18. Advanced Illumination Correction  (advanced_ill_corr.py)
+# ---------------------------------------------------------------------------
+_advanced_illum_def = StepDefinition(
+    id="advanced_illumin_corr",
+    name="Haladó megvilágítás korrekció",
+    category="filter",
+    description="Komplex megvilágítás korrekció: NLM zajszűrés + flat-field + normalizálás + percentilis skálázás + gamma.",
+    icon="auto_awesome",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="bg_method", label="Háttér módszer", type="enum",
+                    default="downsampled",
+                    options=["gaussian", "downsampled"]),
+        ParamSchema(name="alpha", label="Korrekció erősség", type="float",
+                    default=1.0, min=0.1, max=5.0, step=0.1),
+        ParamSchema(name="use_nlm", label="NLM zajszűrés", type="bool",
+                    default=False),
+        ParamSchema(name="nlm_h", label="NLM erősség (h)", type="float",
+                    default=3.0, min=0.0, max=30.0, step=0.5),
+        ParamSchema(name="sigma_bg", label="Háttér sigma", type="float",
+                    default=80.0, min=1.0, max=500.0, step=1.0),
+        ParamSchema(name="down", label="Lekicsinyítési arány", type="float",
+                    default=0.1, min=0.01, max=1.0, step=0.01),
+        ParamSchema(name="sigma_small", label="Kis kép sigma", type="float",
+                    default=8.0, min=0.5, max=100.0, step=0.5),
+        ParamSchema(name="final_blur", label="Végső simítás", type="float",
+                    default=3.0, min=0.0, max=50.0, step=0.5),
+        ParamSchema(name="percentile_low", label="Percentilis alsó", type="float",
+                    default=1.0, min=0.0, max=49.0, step=0.5),
+        ParamSchema(name="percentile_high", label="Percentilis felső", type="float",
+                    default=99.0, min=51.0, max=100.0, step=0.5),
+        ParamSchema(name="use_gamma", label="Gamma használata", type="bool",
+                    default=False),
+        ParamSchema(name="gamma", label="Gamma", type="float",
+                    default=1.0, min=0.1, max=5.0, step=0.05),
+    ],
+    side_output_types={"advanced_illum_backgrounds": "IMAGE", "advanced_illum_denoised": "IMAGE"},
+)
+
+
+def _exec_advanced_illum(data: dict, params: dict) -> dict:
+    return _pe_advanced_illumin_corr(
+        data,
+        bg_method=params.get("bg_method", "downsampled"),
+        alpha=float(params.get("alpha", 1.0)),
+        use_nlm=bool(params.get("use_nlm", False)),
+        nlm_h=float(params.get("nlm_h", 3.0)),
+        sigma_bg=float(params.get("sigma_bg", 80.0)),
+        down=float(params.get("down", 0.1)),
+        sigma_small=float(params.get("sigma_small", 8.0)),
+        final_blur=float(params.get("final_blur", 3.0)),
+        percentile_low=float(params.get("percentile_low", 1.0)),
+        percentile_high=float(params.get("percentile_high", 99.0)),
+        use_gamma=bool(params.get("use_gamma", False)),
+        gamma=float(params.get("gamma", 1.0)),
+    )
+
+
+_register(_advanced_illum_def, _exec_advanced_illum)
+
+
+# ---------------------------------------------------------------------------
+# 19. Mask Rect ROI  (draw_roi.py)
+# ---------------------------------------------------------------------------
+_mask_roi_def = StepDefinition(
+    id="mask_rect_roi",
+    name="Téglalap ROI maszk",
+    category="filter",
+    description="Téglalap alakú érdeklődési terület (ROI) maszkolás. A területen kívüli pixelek a háttérszínnel töltődnek.",
+    icon="crop",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="roi_x", label="X kezdőpont", type="int",
+                    default=0, min=0, max=100000, step=1),
+        ParamSchema(name="roi_y", label="Y kezdőpont", type="int",
+                    default=0, min=0, max=100000, step=1),
+        ParamSchema(name="roi_width", label="Szélesség", type="int",
+                    default=100, min=1, max=100000, step=1),
+        ParamSchema(name="roi_height", label="Magasság", type="int",
+                    default=100, min=1, max=100000, step=1),
+        ParamSchema(name="background_color", label="Háttérszín", type="int",
+                    default=0, min=0, max=255, step=1),
+        ParamSchema(name="keep_outside", label="Külső megtartása", type="bool",
+                    default=False,
+                    description="True: a ROI-n kívüli rész marad; False: a ROI-n belüli rész marad"),
+    ],
+    side_output_types={"roi_masks": "MASK"},
+)
+
+
+def _exec_mask_roi(data: dict, params: dict) -> dict:
+    roi = {
+        "type": "rect",
+        "x": int(params.get("roi_x", 0)),
+        "y": int(params.get("roi_y", 0)),
+        "width": int(params.get("roi_width", 100)),
+        "height": int(params.get("roi_height", 100)),
+    }
+    background_color = int(params.get("background_color", 0))
+    keep_outside = bool(params.get("keep_outside", False))
+    return _pe_mask_rect_roi(data, roi=roi, background_color=background_color,
+                             keep_outside=keep_outside)
+
+
+_register(_mask_roi_def, _exec_mask_roi)

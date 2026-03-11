@@ -30,12 +30,24 @@ export class RecipeService {
   /** Execute pipeline up to a step and get preview image + side outputs. */
   previewStep(
     pipeline: PipelineDocument,
-    previewStepIndex: number
+    previewStepIndex: number,
+    previewImageIndex: number = 0
   ): Observable<PreviewResponse> {
     return this.http.post<PreviewResponse>(`${BASE_URL}/pipeline/preview`, {
       pipeline,
       preview_step_index: previewStepIndex,
+      preview_image_index: previewImageIndex,
     });
+  }
+
+  /** Open native file dialog for image selection. */
+  browseFile(): Observable<{ path: string }> {
+    return this.http.get<{ path: string }>(`${BASE_URL}/pipeline/browse-file`);
+  }
+
+  /** Open native folder dialog for image folder selection. */
+  browseFolder(): Observable<{ path: string }> {
+    return this.http.get<{ path: string }>(`${BASE_URL}/pipeline/browse-folder`);
   }
 
   /** List saved recipes. */

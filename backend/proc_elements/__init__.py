@@ -20,3 +20,13 @@ from proc_elements.calc_intensity import calculate_intensity_stats
 from proc_elements.add_measured import add_sequence_values
 from proc_elements.curve_fitting import fit_curve
 from proc_elements.pred_from_int import predict_node
+from proc_elements.apply_blur import apply_blur
+from proc_elements.histogram_eq import histogram_equalization
+from proc_elements.clahe import apply_clahe
+from proc_elements.normalization import normalize_images
+from proc_elements.bright_contr import adjust_brightness_contrast
+from proc_elements.gamma_corr import gamma_correction
+from proc_elements.flat_field_corr import flat_field_correction
+from proc_elements.robust_stretch import robust_stretch_gamma
+from proc_elements.advanced_ill_corr import advanced_illumin_corr
+from proc_elements.draw_roi import mask_rect_roi

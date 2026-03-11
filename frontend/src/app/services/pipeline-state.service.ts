@@ -41,6 +41,14 @@ export class PipelineStateService {
   private sideOutputsSubject = new BehaviorSubject<Record<string, any>>({});
   sideOutputs$ = this.sideOutputsSubject.asObservable();
 
+  /** Preview image index (which image to show when multiple loaded). */
+  private previewImageIndexSubject = new BehaviorSubject<number>(0);
+  previewImageIndex$ = this.previewImageIndexSubject.asObservable();
+
+  /** Total image count from last preview. */
+  private imageCountSubject = new BehaviorSubject<number>(0);
+  imageCount$ = this.imageCountSubject.asObservable();
+
   /** Emitted when pipeline changes (debounced for preview). */
   private pipelineChangedSubject = new Subject<void>();
 
@@ -137,6 +145,7 @@ export class PipelineStateService {
 
   selectStep(index: number): void {
     this.selectedStepIndexSubject.next(index);
+    this.previewImageIndexSubject.next(0);
     // Trigger preview for the newly selected step
     this.pipelineChangedSubject.next();
   }
@@ -183,15 +192,17 @@ export class PipelineStateService {
   requestPreview(): void {
     const pipeline = this.getPipeline();
     const stepIndex = this.selectedStepIndexSubject.value;
+    const imageIndex = this.previewImageIndexSubject.value;
 
     if (pipeline.steps.length === 0 || stepIndex < 0) {
       this.previewImageSubject.next(null);
       this.sideOutputsSubject.next({});
+      this.imageCountSubject.next(0);
       return;
     }
 
     this.previewLoadingSubject.next(true);
-    this.recipeService.previewStep(pipeline, stepIndex).subscribe({
+    this.recipeService.previewStep(pipeline, stepIndex, imageIndex).subscribe({
       next: (res: PreviewResponse) => {
         this.previewLoadingSubject.next(false);
         if (res.success) {
@@ -202,9 +213,11 @@ export class PipelineStateService {
             this.previewImageSubject.next(null);
           }
           this.sideOutputsSubject.next(res.side_outputs || {});
+          this.imageCountSubject.next(res.image_count ?? 0);
         } else {
           this.validationErrorsSubject.next(res.errors || []);
           this.previewImageSubject.next(null);
+          this.imageCountSubject.next(0);
         }
       },
       error: (err) => {
@@ -229,5 +242,34 @@ export class PipelineStateService {
   /** Get validation errors for a specific step. */
   getStepErrors(stepIndex: number): StepError[] {
     return this.validationErrorsSubject.value.filter((e) => e.step_index === stepIndex);
+  }
+
+  // --- Image navigation ---
+
+  setPreviewImageIndex(index: number): void {
+    const count = this.imageCountSubject.value;
+    const clamped = Math.max(0, Math.min(index, count - 1));
+    if (clamped !== this.previewImageIndexSubject.value) {
+      this.previewImageIndexSubject.next(clamped);
+      this.requestPreview();
+    }
+  }
+
+  getPreviewImageIndex(): number {
+    return this.previewImageIndexSubject.value;
+  }
+
+  resetPreviewImageIndex(): void {
+    this.previewImageIndexSubject.next(0);
+  }
+
+  /** Reorder images in the load_image step by setting an explicit file_order param. */
+  reorderLoadedImages(newOrder: number[]): void {
+    const pipeline = this.getPipeline();
+    const loadStepIdx = pipeline.steps.findIndex(s => s.step_def_id === 'load_image');
+    if (loadStepIdx < 0) return;
+    const step = pipeline.steps[loadStepIdx];
+    const updated = { ...step.param_values, file_order: newOrder.join(',') };
+    this.updateParams(loadStepIdx, updated);
   }
 }

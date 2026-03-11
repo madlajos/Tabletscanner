@@ -89,6 +89,83 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2805": "Hiányzó intenzitás statisztikák a bemeneti adatokban.",
     "E2806": "Predikció számítás sikertelen.",
     "E2808": "Váratlan hiba a predikció során.",
+    # apply_blur
+    "E3041": "Nincsenek feldolgozandó képek.",
+    "E3042": "Érvénytelen elmosási módszer.",
+    "E3043": "Érvénytelen kernel méret.",
+    "E3044": "A kernel méretnek páratlannak kell lennie.",
+    "E3045": "Érvénytelen sigma érték.",
+    "E3046": "Érvénytelen szín sigma érték.",
+    "E3047": "Érvénytelen tér sigma érték.",
+    "E3048": "Üres kép az elmosás bemeneteként.",
+    # histogram_equalization
+    "E3111": "Nincsenek feldolgozandó képek.",
+    "E3112": "Üres kép a hisztogram kiegyenlítés bemeneteként.",
+    "E3113": "A képeknek szürkeárnyalatosnak kell lenniük.",
+    # apply_clahe
+    "E3121": "Nincsenek feldolgozandó képek.",
+    "E3122": "Érvénytelen levágási határ (clip_limit).",
+    "E3123": "Érvénytelen csempe rács méret.",
+    "E3124": "A csempe méreteknek pozitív egész számnak kell lenniük.",
+    "E3125": "Üres kép a CLAHE bemeneteként.",
+    "E3126": "A képeknek szürkeárnyalatosnak kell lenniük.",
+    # normalize_images
+    "E3131": "Nincsenek feldolgozandó képek.",
+    "E3132": "Érvénytelen normalizálási típus.",
+    "E3133": "Érvénytelen alpha vagy beta érték.",
+    "E3134": "Üres kép a normalizálás bemeneteként.",
+    # adjust_brightness_contrast
+    "E3141": "Nincsenek feldolgozandó képek.",
+    "E3142": "Érvénytelen fényerő érték.",
+    "E3143": "Érvénytelen kontraszt érték.",
+    "E3144": "Üres kép a fényerő/kontraszt bemeneteként.",
+    # gamma_correction
+    "E3151": "Nincsenek feldolgozandó képek.",
+    "E3152": "Érvénytelen gamma érték.",
+    "E3153": "Üres kép a gamma korrekció bemeneteként.",
+    # flat_field_correction
+    "E3201": "Nincsenek feldolgozandó képek.",
+    "E3202": "Érvénytelen háttérbecslési módszer.",
+    "E3203": "Érvénytelen korrekció erősség (alpha).",
+    "E3204": "Érvénytelen NLM erősség (h).",
+    "E3205": "Érvénytelen háttér sigma.",
+    "E3206": "Érvénytelen lekicsinyítési arány.",
+    "E3207": "Érvénytelen kis kép sigma.",
+    "E3208": "Érvénytelen végső simítás érték.",
+    "E3209": "Érvénytelen percentilis értékek.",
+    "E3210": "Percentilis tartomány hiba (alsó >= felső).",
+    "E3211": "Üres kép a flat-field korrekció bemeneteként.",
+    "E3212": "A képeknek szürkeárnyalatosnak kell lenniük.",
+    "E3213": "Robusztus skálázás sikertelen (hi <= lo).",
+    # robust_stretch_gamma
+    "E3221": "Nincsenek feldolgozandó képek.",
+    "E3222": "Érvénytelen percentilis tartomány.",
+    "E3223": "Érvénytelen gamma érték.",
+    "E3224": "Üres kép a robusztus nyújtás bemeneteként.",
+    "E3225": "A képeknek szürkeárnyalatosnak kell lenniük.",
+    "E3226": "Nyújtás sikertelen (hi <= lo).",
+    # advanced_illumin_corr
+    "E3301": "Nincsenek feldolgozandó képek.",
+    "E3302": "Érvénytelen háttérbecslési módszer.",
+    "E3303": "Érvénytelen korrekció erősség (alpha).",
+    "E3304": "Érvénytelen NLM kapcsoló.",
+    "E3305": "Érvénytelen NLM erősség (h).",
+    "E3306": "Érvénytelen háttér sigma.",
+    "E3307": "Érvénytelen lekicsinyítési arány.",
+    "E3308": "Érvénytelen kis kép sigma.",
+    "E3309": "Érvénytelen végső simítás érték.",
+    "E3310": "Érvénytelen percentilis értékek.",
+    "E3311": "Percentilis tartomány hiba (alsó >= felső).",
+    "E3312": "Érvénytelen gamma kapcsoló.",
+    "E3313": "Érvénytelen gamma érték.",
+    "E3314": "Üres kép a haladó megvilágítás korrekció bemeneteként.",
+    "E3315": "A képeknek szürkeárnyalatosnak kell lenniük.",
+    "E3316": "Üres képadat.",
+    "E3317": "Robusztus skálázás sikertelen (hi <= lo).",
+    # mask_rect_roi
+    "E3521": "Nincsenek feldolgozandó képek.",
+    "E3522": "Érvénytelen ROI típus (csak 'rect' támogatott).",
+    "E3523": "Üres kép a ROI maszkolás bemeneteként.",
 }
 
 
@@ -173,6 +250,13 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
     # Image count
     images = data.get("images", [])
     side["image_count"] = len(images)
+
+    # Loaded file paths (basenames for UI)
+    paths = data.get("paths", [])
+    if paths:
+        import os
+        side["loaded_paths"] = [os.path.basename(p) for p in paths]
+        side["loaded_full_paths"] = paths
 
     # History
     history = data.get("history", [])

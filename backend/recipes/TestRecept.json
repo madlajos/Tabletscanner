@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "name": "TestRecept",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "88210745-7030-4b40-88a8-0ec95b06f416",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/madlajos/Downloads/test",
+        "file_order": ""
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "ae404c44-c834-4dc5-8103-59301d0a8a16",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "space": "GRAY",
+        "channel": "GRAY"
+      },
+      "order": 1
+    },
+    {
+      "instance_id": "7279219c-8059-469b-8ee0-70f15c252304",
+      "step_def_id": "apply_range_mask",
+      "param_values": {
+        "low": 114,
+        "high": 186,
+        "keep_mode": "inside"
+      },
+      "order": 2
+    },
+    {
+      "instance_id": "7235451f-cf3d-470a-a3fd-5258515127ea",
+      "step_def_id": "calculate_intensity_stats",
+      "param_values": {
+        "percentiles": "5,25,50,75,95"
+      },
+      "order": 3
+    },
+    {
+      "instance_id": "13093056-9b99-4d28-ba15-691659314807",
+      "step_def_id": "normalize_images",
+      "param_values": {
+        "alpha": 0,
+        "beta": 255,
+        "norm_type": "minmax"
+      },
+      "order": 4
+    }
+  ],
+  "created_at": "2026-03-11T12:57:17.492752+00:00",
+  "modified_at": "2026-03-11T12:57:17.492752+00:00"
+}
