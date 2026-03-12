@@ -31,12 +31,16 @@ export class RecipeService {
   previewStep(
     pipeline: PipelineDocument,
     previewStepIndex: number,
-    previewImageIndex: number = 0
+    previewImageIndex: number = 0,
+    singleImageOnly: boolean = false,
+    omittedIndices: number[] = [],
   ): Observable<PreviewResponse> {
     return this.http.post<PreviewResponse>(`${BASE_URL}/pipeline/preview`, {
       pipeline,
       preview_step_index: previewStepIndex,
       preview_image_index: previewImageIndex,
+      single_image_only: singleImageOnly,
+      omitted_indices: omittedIndices,
     });
   }
 
@@ -48,6 +52,19 @@ export class RecipeService {
   /** Open native folder dialog for image folder selection. */
   browseFolder(): Observable<{ path: string }> {
     return this.http.get<{ path: string }>(`${BASE_URL}/pipeline/browse-folder`);
+  }
+
+  /** Open native file dialog for explicit values CSV/TXT import. */
+  browseValuesFile(): Observable<{ path: string }> {
+    return this.http.get<{ path: string }>(`${BASE_URL}/pipeline/browse-values-file`);
+  }
+
+  /** Import and validate explicit values from CSV/TXT file. */
+  importExplicitValues(path: string): Observable<{ values: number[]; values_csv: string }> {
+    return this.http.post<{ values: number[]; values_csv: string }>(
+      `${BASE_URL}/pipeline/import-explicit-values`,
+      { path }
+    );
   }
 
   /** List saved recipes. */

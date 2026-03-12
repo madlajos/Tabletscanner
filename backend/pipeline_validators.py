@@ -40,6 +40,34 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
             ))
             continue
 
+        # Validate required preceding steps
+        if defn.required_preceding_steps:
+            preceding_ids = {s.step_def_id for s in doc.steps[:i]}
+            for req_id in defn.required_preceding_steps:
+                if req_id not in preceding_ids:
+                    req_defn = STEP_DEFINITIONS.get(req_id)
+                    req_name = req_defn.name if req_defn else req_id
+                    errors.append(StepError(
+                        step_index=i,
+                        step_def_id=step_inst.step_def_id,
+                        error_code="E3004",
+                        message=f"A(z) '{defn.name}' lépéshez szükséges egy '{req_name}' lépés előtte.",
+                    ))
+
+        # Validate secondary inputs (must also precede)
+        if defn.secondary_inputs:
+            preceding_ids = preceding_ids if defn.required_preceding_steps else {s.step_def_id for s in doc.steps[:i]}
+            for sec_id in defn.secondary_inputs:
+                if sec_id not in preceding_ids:
+                    sec_defn = STEP_DEFINITIONS.get(sec_id)
+                    sec_name = sec_defn.name if sec_defn else sec_id
+                    errors.append(StepError(
+                        step_index=i,
+                        step_def_id=step_inst.step_def_id,
+                        error_code="E3004",
+                        message=f"A(z) '{defn.name}' lépéshez szükséges egy '{sec_name}' lépés előtte.",
+                    ))
+
         # Validate parameters
         param_errors = _validate_params(i, step_inst, defn)
         errors.extend(param_errors)

@@ -1,7 +1,39 @@
 import numpy as np
+import re
+import os
 
 
-def fit_curve(data, x_name, y_name, model="linear", degree=2, debug=False):
+def _safe_float(v):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_sample_key_from_path(path):
+    name = os.path.splitext(os.path.basename(str(path)))[0]
+    m = re.match(r"^(.*?)(?:_([abAB]))$", name)
+    if m:
+        return m.group(1)
+    return name
+
+
+def _lookup_group_color(colors_map, x_raw, x_float):
+    candidates = [str(x_raw), str(x_float)]
+    try:
+        xf = float(x_float)
+        if xf.is_integer():
+            candidates.append(str(int(xf)))
+        candidates.append(str(round(xf, 6)).rstrip('0').rstrip('.'))
+    except Exception:
+        pass
+    for c in candidates:
+        if c in colors_map:
+            return colors_map[c]
+    return None
+
+
+def fit_curve(data, x_name, y_name, model="linear", degree=2, aggregate=False, agg_method="mean", merge_ab_pairs=False, debug=False):
 
     if data["error"] is not None:
         return data
@@ -18,6 +50,10 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, debug=False):
         data["error"] = "E2703"
         return data
 
+    if agg_method not in ("mean", "median"):
+        data["error"] = "E2712"
+        return data
+
     x_values = data["results"][x_name]
     stats = data["results"]["intensity_stats"]
 
@@ -25,10 +61,18 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, debug=False):
         data["error"] = "E2704"
         return data
 
-    filtered_x = []
-    filtered_y = []
+    omitted = data.get("_omitted_indices", set())
+    paths = data.get("_original_paths", data.get("paths", []))
+    colors_map = data["results"].get(f"{x_name}_group_colors", {})
+    if not isinstance(colors_map, dict):
+        colors_map = {}
 
-    for x_val, stat in zip(x_values, stats):
+    records = []
+    all_x = []
+    all_y = []
+    all_colors = []
+
+    for idx, (x_val, stat) in enumerate(zip(x_values, stats)):
         if stat is None:
             continue
 
@@ -36,15 +80,101 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, debug=False):
             data["error"] = "E2705"
             return data
 
-        filtered_x.append(float(x_val))
-        filtered_y.append(float(stat[y_name]))
+        xf = _safe_float(x_val)
+        if xf is None:
+            data["error"] = "E2713"
+            return data
+        yf = float(stat[y_name])
+        group_color = _lookup_group_color(colors_map, x_val, xf)
+        sample_path = paths[idx] if idx < len(paths) else str(idx)
+        sample_key = _parse_sample_key_from_path(sample_path)
 
-    if len(filtered_x) < 2:
+        all_x.append(xf)
+        all_y.append(yf)
+        all_colors.append(group_color)
+
+        if idx not in omitted:
+            records.append({
+                "index": idx,
+                "x": xf,
+                "y": yf,
+                "path": sample_path,
+                "sample_key": sample_key,
+                "color": group_color,
+            })
+
+    if len(records) < 2:
         data["error"] = "E2706"
         return data
 
-    x = np.array(filtered_x, dtype=np.float64)
-    y = np.array(filtered_y, dtype=np.float64)
+    aggregation_info = None
+    merged_records = records
+
+    if merge_ab_pairs:
+        by_sample = {}
+        for rec in records:
+            by_sample.setdefault(rec["sample_key"], []).append(rec)
+        merged_records = []
+        for sample_key, vals in by_sample.items():
+            # Use first record's x (both sides should have the same assigned x)
+            x_out = vals[0]["x"]
+            y_out = float(np.mean([v["y"] for v in vals]))
+            color_out = next((v.get("color") for v in vals if v.get("color")), None)
+            merged_records.append({
+                "x": x_out,
+                "y": y_out,
+                "sample_key": sample_key,
+                "members": vals,
+                "order": min(v.get("index", 0) for v in vals),
+                "color": color_out,
+            })
+        merged_records.sort(key=lambda r: r.get("order", 0))
+
+    result_records = merged_records
+    samples_per_value = data.get("meta", {}).get("sequence_values", {}).get(x_name, {}).get("samples_per_value")
+    try:
+        samples_per_value = int(samples_per_value) if samples_per_value is not None else 1
+    except (ValueError, TypeError):
+        samples_per_value = 1
+    if samples_per_value < 1:
+        samples_per_value = 1
+
+    if aggregate:
+        chunk_size = samples_per_value
+        chunked = []
+        for i in range(0, len(merged_records), chunk_size):
+            chunk = merged_records[i:i + chunk_size]
+            if not chunk:
+                continue
+            x_out = float(np.mean([r["x"] for r in chunk]))
+            y_vals = [r["y"] for r in chunk]
+            if agg_method == "mean":
+                y_out = float(np.mean(y_vals))
+            else:
+                y_out = float(np.median(y_vals))
+            color_out = next((r.get("color") for r in chunk if r.get("color")), None)
+            chunked.append({
+                "x": x_out,
+                "y": y_out,
+                "members": chunk,
+                "color": color_out,
+                "member_count": len(chunk),
+            })
+        result_records = chunked
+
+    if len(result_records) < 2:
+        data["error"] = "E2706"
+        return data
+
+    x = np.array([r["x"] for r in result_records], dtype=np.float64)
+    y = np.array([r["y"] for r in result_records], dtype=np.float64)
+    point_colors = [r.get("color") for r in result_records]
+
+    try:
+        x_all = np.array([float(v) for v in all_x], dtype=np.float64)
+    except (ValueError, TypeError):
+        x_all = x
+    y_all = np.array(all_y, dtype=np.float64)
 
     unique_x = np.unique(x)
 
@@ -54,7 +184,6 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, debug=False):
             return data
 
         coeffs = np.polyfit(x, y, 1)
-        fitted_y = np.polyval(coeffs, x)
 
     elif model == "poly":
         if not isinstance(degree, int) or degree < 1:
@@ -70,19 +199,31 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, debug=False):
             return data
 
         coeffs = np.polyfit(x, y, degree)
-        fitted_y = np.polyval(coeffs, x)
 
     else:
         data["error"] = "E2709"
         return data
 
-    ss_res = np.sum((y - fitted_y) ** 2)
+    # R² computed on filtered/aggregated data only
+    fitted_y_filtered = np.polyval(coeffs, x)
+    ss_res = np.sum((y - fitted_y_filtered) ** 2)
     ss_tot = np.sum((y - np.mean(y)) ** 2)
 
-    if ss_tot == 0:
-        r2 = 1.0
-    else:
-        r2 = 1.0 - (ss_res / ss_tot)
+    r2 = 1.0 if ss_tot == 0 else 1.0 - (ss_res / ss_tot)
+
+    result_x = x.tolist()
+    result_y = y.tolist()
+    result_fitted = fitted_y_filtered.tolist()
+
+    aggregation_info = {
+        "enabled": bool(aggregate or merge_ab_pairs),
+        "aggregate": bool(aggregate),
+        "merge_ab_pairs": bool(merge_ab_pairs),
+        "method": agg_method,
+        "samples_per_value": int(samples_per_value),
+        "result_count": int(len(result_records)),
+        "input_count": int(len(records)),
+    }
 
     fit_result = {
         "x_name": x_name,
@@ -90,15 +231,17 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, debug=False):
         "model": model,
         "degree": degree if model == "poly" else 1,
         "coefficients": coeffs.tolist(),
-        "x_values": x.tolist(),
-        "y_values": y.tolist(),
-        "fitted_y": fitted_y.tolist(),
+        "x_values": result_x,
+        "y_values": result_y,
+        "fitted_y": result_fitted,
         "x_min": float(np.min(x)),
         "x_max": float(np.max(x)),
         "y_min": float(np.min(y)),
         "y_max": float(np.max(y)),
         "sample_count": int(len(x)),
-        "r2": float(r2)
+        "r2": float(r2),
+        "aggregation": aggregation_info,
+        "point_colors": point_colors,
     }
 
     if "curve_fits" not in data["results"]:

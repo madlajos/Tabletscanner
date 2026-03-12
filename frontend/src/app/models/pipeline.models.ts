@@ -30,6 +30,8 @@ export interface StepDefinition {
   output_type: DataType;
   params: ParamSchema[];
   side_output_types: Record<string, string>;
+  required_preceding_steps?: string[];
+  secondary_inputs?: string[];
 }
 
 export interface StepInstance {

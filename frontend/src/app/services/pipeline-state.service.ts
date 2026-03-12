@@ -41,6 +41,10 @@ export class PipelineStateService {
   private sideOutputsSubject = new BehaviorSubject<Record<string, any>>({});
   sideOutputs$ = this.sideOutputsSubject.asObservable();
 
+  /** Omitted data point indices (from graph viewer). */
+  private omittedPointsSubject = new BehaviorSubject<{ indices: Set<number>; imageNames: string[] }>({ indices: new Set(), imageNames: [] });
+  omittedPoints$ = this.omittedPointsSubject.asObservable();
+
   /** Preview image index (which image to show when multiple loaded). */
   private previewImageIndexSubject = new BehaviorSubject<number>(0);
   previewImageIndex$ = this.previewImageIndexSubject.asObservable();
@@ -52,6 +56,10 @@ export class PipelineStateService {
   /** Emitted when pipeline changes (debounced for preview). */
   private pipelineChangedSubject = new Subject<void>();
 
+  /** Emitted when a chart should be maximized in the preview area. */
+  private maximizeGraphSubject = new Subject<{ data: any; omittedIndices: Set<number> }>();
+  maximizeGraph$ = this.maximizeGraphSubject.asObservable();
+
   /** Recipe dirty flag. */
   private dirtySubject = new BehaviorSubject<boolean>(false);
   dirty$ = this.dirtySubject.asObservable();
@@ -60,9 +68,20 @@ export class PipelineStateService {
   private recipeNameSubject = new BehaviorSubject<string>('');
   recipeName$ = this.recipeNameSubject.asObservable();
 
+  /** Steps that aggregate across all images and must not use single-image mode. */
+  private readonly AGGREGATING_STEPS = new Set([
+    'fit_curve', 'predict_node', 'add_sequence_values',
+  ]);
+
   constructor(private recipeService: RecipeService) {
     // Auto-preview on pipeline change (debounced)
     this.pipelineChangedSubject.pipe(debounceTime(400)).subscribe(() => {
+      // Skip auto-preview for fit_curve (manual play button)
+      const idx = this.selectedStepIndexSubject.value;
+      const pipeline = this.getPipeline();
+      if (idx >= 0 && idx < pipeline.steps.length && pipeline.steps[idx].step_def_id === 'fit_curve') {
+        return;
+      }
       this.requestPreview();
     });
   }
@@ -93,12 +112,29 @@ export class PipelineStateService {
     }
 
     const idx = atIndex ?? pipeline.steps.length;
-    const inst = createStepInstance(stepDefId, idx, defaults);
-
     const steps = [...pipeline.steps];
-    steps.splice(idx, 0, inst);
+
+    // Auto-add secondary input steps before this step
+    let insertOffset = 0;
+    if (defn.secondary_inputs?.length) {
+      for (const secId of defn.secondary_inputs) {
+        const secDefn = this.getStepDefinition(secId);
+        if (secDefn) {
+          const secDefaults: Record<string, any> = {};
+          for (const p of secDefn.params) {
+            secDefaults[p.name] = p.default;
+          }
+          const secInst = createStepInstance(secId, idx + insertOffset, secDefaults);
+          steps.splice(idx + insertOffset, 0, secInst);
+          insertOffset++;
+        }
+      }
+    }
+
+    const inst = createStepInstance(stepDefId, idx + insertOffset, defaults);
+    steps.splice(idx + insertOffset, 0, inst);
     this.updateSteps(steps);
-    this.selectStep(idx);
+    this.selectStep(idx + insertOffset);
   }
 
   removeStep(index: number): void {
@@ -106,15 +142,35 @@ export class PipelineStateService {
     if (index < 0 || index >= pipeline.steps.length) return;
 
     const steps = [...pipeline.steps];
-    steps.splice(index, 1);
+    const stepToRemove = steps[index];
+    const defn = this.getStepDefinition(stepToRemove.step_def_id);
+
+    // Collect indices to remove (main step + its secondary inputs)
+    const indicesToRemove = new Set<number>([index]);
+    if (defn?.secondary_inputs?.length) {
+      for (const secId of defn.secondary_inputs) {
+        for (let j = index - 1; j >= 0; j--) {
+          if (steps[j].step_def_id === secId && !indicesToRemove.has(j)) {
+            indicesToRemove.add(j);
+            break;
+          }
+        }
+      }
+    }
+
+    // Remove from highest index first to preserve lower indices
+    const sortedIndices = Array.from(indicesToRemove).sort((a, b) => b - a);
+    for (const idx of sortedIndices) {
+      steps.splice(idx, 1);
+    }
     this.updateSteps(steps);
 
     // Adjust selection
     const selected = this.selectedStepIndexSubject.value;
     if (selected >= steps.length) {
       this.selectStep(steps.length - 1);
-    } else if (selected === index) {
-      this.selectStep(Math.min(index, steps.length - 1));
+    } else if (indicesToRemove.has(selected)) {
+      this.selectStep(Math.min(Math.min(...indicesToRemove), steps.length - 1));
     }
   }
 
@@ -123,11 +179,39 @@ export class PipelineStateService {
     if (fromIndex < 0 || fromIndex >= pipeline.steps.length) return;
     if (toIndex < 0 || toIndex >= pipeline.steps.length) return;
 
+    const defn = this.getStepDefinition(pipeline.steps[fromIndex].step_def_id);
     const steps = [...pipeline.steps];
-    const [moved] = steps.splice(fromIndex, 1);
-    steps.splice(toIndex, 0, moved);
+
+    // Collect the main step and its secondary inputs as a group
+    const groupIndices = [fromIndex];
+    if (defn?.secondary_inputs?.length) {
+      const secondarySet = new Set(defn.secondary_inputs);
+      for (let j = fromIndex - 1; j >= 0; j--) {
+        if (secondarySet.has(steps[j].step_def_id)) {
+          groupIndices.unshift(j);
+          secondarySet.delete(steps[j].step_def_id);
+          if (secondarySet.size === 0) break;
+        }
+      }
+    }
+
+    // Extract the group (in order)
+    const group = groupIndices.map(i => steps[i]);
+    // Remove from highest index first
+    for (let k = groupIndices.length - 1; k >= 0; k--) {
+      steps.splice(groupIndices[k], 1);
+    }
+
+    // Adjust target index for removed items before it
+    let adjustedTo = toIndex;
+    for (const gi of groupIndices) {
+      if (gi < toIndex) adjustedTo--;
+    }
+
+    // Insert group (secondaries first, then main)
+    steps.splice(adjustedTo, 0, ...group);
     this.updateSteps(steps);
-    this.selectStep(toIndex);
+    this.selectStep(adjustedTo + group.length - 1); // Select the main step
   }
 
   updateParams(index: number, paramValues: Record<string, any>): void {
@@ -160,6 +244,10 @@ export class PipelineStateService {
     return this.selectedStepIndexSubject.value;
   }
 
+  getImageCount(): number {
+    return this.imageCountSubject.value;
+  }
+
   newPipeline(): void {
     this.pipelineSubject.next(createEmptyPipeline());
     this.selectedStepIndexSubject.next(-1);
@@ -189,7 +277,7 @@ export class PipelineStateService {
 
   // --- Preview ---
 
-  requestPreview(): void {
+  requestPreview(forceAllImages: boolean = false): void {
     const pipeline = this.getPipeline();
     const stepIndex = this.selectedStepIndexSubject.value;
     const imageIndex = this.previewImageIndexSubject.value;
@@ -201,8 +289,15 @@ export class PipelineStateService {
       return;
     }
 
+    const step = pipeline.steps[stepIndex];
+    const isAggregating = this.AGGREGATING_STEPS.has(step.step_def_id);
+    const singleImageOnly = !forceAllImages && !isAggregating;
+
+    // Pass omitted indices for curve fitting
+    const omittedArr = Array.from(this.omittedPointsSubject.value.indices);
+
     this.previewLoadingSubject.next(true);
-    this.recipeService.previewStep(pipeline, stepIndex, imageIndex).subscribe({
+    this.recipeService.previewStep(pipeline, stepIndex, imageIndex, singleImageOnly, omittedArr).subscribe({
       next: (res: PreviewResponse) => {
         this.previewLoadingSubject.next(false);
         if (res.success) {
@@ -271,5 +366,19 @@ export class PipelineStateService {
     const step = pipeline.steps[loadStepIdx];
     const updated = { ...step.param_values, file_order: newOrder.join(',') };
     this.updateParams(loadStepIdx, updated);
+  }
+
+  /** Notify about omitted data points from the graph viewer. */
+  notifyOmittedPoints(indices: Set<number>, imageNames: string[]): void {
+    this.omittedPointsSubject.next({ indices: new Set(indices), imageNames: [...imageNames] });
+  }
+
+  getOmittedPoints(): { indices: Set<number>; imageNames: string[] } {
+    return this.omittedPointsSubject.value;
+  }
+
+  /** Request maximizing a chart in the preview area. */
+  requestMaximizeGraph(data: any, omittedIndices: Set<number>): void {
+    this.maximizeGraphSubject.next({ data, omittedIndices });
   }
 }

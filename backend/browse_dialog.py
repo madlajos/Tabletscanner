@@ -1,7 +1,8 @@
 # browse_dialog.py — Subprocess-based file/folder browser dialogs.
 # Invoked by Flask endpoints to avoid Tkinter main-thread issues.
 # Usage:
-#   python browse_dialog.py file    — opens file selection dialog
+#   python browse_dialog.py file    — opens image file selection dialog
+#   python browse_dialog.py values  — opens CSV/TXT values file selection dialog
 #   python browse_dialog.py folder  — opens folder selection dialog
 import tkinter as tk
 from tkinter import filedialog
@@ -21,6 +22,12 @@ if mode == "file":
         parent=root,
         title="Képfájl kiválasztása",
         filetypes=[("Képfájlok", "*.png *.jpg *.jpeg *.bmp *.tiff"), ("Minden fájl", "*.*")]
+    )
+elif mode == "values":
+    path = filedialog.askopenfilename(
+        parent=root,
+        title="Értékfájl kiválasztása",
+        filetypes=[("Értékfájlok", "*.csv *.txt"), ("CSV", "*.csv"), ("Szövegfájl", "*.txt")]
     )
 else:
     path = filedialog.askdirectory(parent=root, title="Képek mappája")

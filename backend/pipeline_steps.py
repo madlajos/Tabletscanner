@@ -11,6 +11,8 @@ The data dict flows through the entire pipeline, accumulating images,
 results, metadata, and history.  Processing elements live in
 proc_elements/ and are wrapped here with parameter mapping.
 """
+import json
+
 from pipeline_types import (
     DataType, ParamSchema, StepDefinition,
 )
@@ -34,6 +36,7 @@ from proc_elements import (
     robust_stretch_gamma as _pe_robust_stretch_gamma,
     advanced_illumin_corr as _pe_advanced_illumin_corr,
     mask_rect_roi as _pe_mask_rect_roi,
+    resize_images as _pe_resize_images,
 )
 
 # ---------------------------------------------------------------------------
@@ -268,7 +271,7 @@ _register(_calculate_intensity_stats_def, _exec_calculate_intensity_stats)
 # ---------------------------------------------------------------------------
 _add_sequence_values_def = StepDefinition(
     id="add_sequence_values",
-    name="Szekvencia értékek",
+    name="Referencia értékek",
     category="io",
     description="Mért vagy generált értéksorozat hozzárendelése a képekhez (pl. expozíciós idő, hőmérséklet).",
     icon="pin",
@@ -278,47 +281,73 @@ _add_sequence_values_def = StepDefinition(
         ParamSchema(name="name", label="Változó neve", type="string",
                     default="sequence_value", required=True,
                     description="Az értéksorozat azonosítója"),
-        ParamSchema(name="mode", label="Generálás módja", type="enum",
-                    default="start_step",
-                    options=["start_step", "start_stop", "explicit"],
-                    description="start_step: kezdőérték+lépésköz, start_stop: egyenletes elosztás, explicit: kézi értékek"),
+        ParamSchema(name="values", label="X értékek", type="string",
+                    default="", required=False,
+                    description="Vesszővel elválasztott szintértékek (pl. 1,2,3)"),
+        ParamSchema(name="num_levels", label="Szintek száma", type="int",
+                    default=5, min=1, max=10000, step=1, required=False,
+                    description="Hány különböző szintet rendelünk a képekhez"),
         ParamSchema(name="start", label="Kezdőérték", type="float",
                     default=0.0, min=-1e9, max=1e9, step=0.1),
         ParamSchema(name="step_val", label="Lépésköz", type="float",
-                    default=1.0, min=-1e9, max=1e9, step=0.1,
-                    description="Használatos start_step módban"),
-        ParamSchema(name="stop", label="Végérték", type="float",
-                    default=100.0, min=-1e9, max=1e9, step=0.1,
-                    description="Használatos start_stop módban"),
-        ParamSchema(name="values", label="Explicit értékek", type="string",
+                    default=1.0, min=-1e9, max=1e9, step=0.1),
+        ParamSchema(name="group_colors", label="Csoport színek", type="string",
                     default="", required=False,
-                    description="Vesszővel elválasztott értékek (explicit módban)"),
+                    description="JSON szín térkép az egyedi értékekhez (pl. {\"10\":\"#ff0000\"})"),
     ],
 )
 
 
 def _exec_add_sequence_values(data: dict, params: dict) -> dict:
     name = params.get("name", "sequence_value")
-    mode = params.get("mode", "start_step")
-    start = float(params.get("start", 0.0))
-    step_val = float(params.get("step_val", 1.0))
-    stop = float(params.get("stop", 100.0))
     values_str = params.get("values", "")
+    group_colors_str = params.get("group_colors", "")
+    num_levels = params.get("num_levels", None)
+    if num_levels is not None:
+        num_levels = int(num_levels)
 
-    if mode == "explicit":
+    group_colors = None
+    if isinstance(group_colors_str, str) and group_colors_str.strip():
         try:
-            values = [float(x.strip()) for x in str(values_str).split(",") if x.strip()]
+            parsed = json.loads(group_colors_str)
+            if isinstance(parsed, dict):
+                group_colors = parsed
         except (ValueError, TypeError):
-            data["error"] = "E2634"
-            return data
-        return _pe_add_sequence_values(data, name=name, values=values)
-    elif mode == "start_step":
-        return _pe_add_sequence_values(data, name=name, start=start, step=step_val)
-    elif mode == "start_stop":
-        return _pe_add_sequence_values(data, name=name, start=start, stop=stop)
-    else:
-        data["error"] = "E2638"
+            group_colors = None
+
+    # Always use the explicit values string.
+    # The frontend provides short-form (unique level values) which we expand
+    # by repeating each value (total_images / num_levels) times.
+    try:
+        unique_vals = [float(x.strip()) for x in str(values_str).split(",") if x.strip()]
+    except (ValueError, TypeError):
+        data["error"] = "E2634"
         return data
+
+    if not unique_vals:
+        data["error"] = "E2634"
+        return data
+
+    total_images = data.get("count", 0)
+    n_levels = len(unique_vals)
+    if total_images > 0 and n_levels > 0:
+        samples_per_value = total_images // n_levels
+        if samples_per_value < 1:
+            samples_per_value = 1
+        expanded = []
+        for v in unique_vals:
+            expanded.extend([v] * samples_per_value)
+        # If there are remaining images, assign them to the last level
+        while len(expanded) < total_images:
+            expanded.append(unique_vals[-1])
+        expanded = expanded[:total_images]
+    else:
+        expanded = unique_vals
+        samples_per_value = 1
+
+    return _pe_add_sequence_values(data, name=name, values=expanded,
+                                  group_colors=group_colors,
+                                  _samples_per_value=samples_per_value)
 
 
 _register(_add_sequence_values_def, _exec_add_sequence_values)
@@ -331,14 +360,14 @@ _fit_curve_def = StepDefinition(
     id="fit_curve",
     name="Görbe illesztés",
     category="analysis",
-    description="Lineáris vagy polinomiális görbe illesztése a szekvencia értékek és az intenzitás statisztikák alapján.",
+    description="Lineáris vagy polinomiális görbe illesztése a referencia értékek és az intenzitás statisztikák alapján.",
     icon="show_chart",
     input_type=DataType.IMAGE,
     output_type=DataType.IMAGE,
     params=[
         ParamSchema(name="x_name", label="X tengely (értéknév)", type="string",
                     default="sequence_value", required=True,
-                    description="A results-ben tárolt szekvencia változó neve"),
+                    description="A results-ben tárolt referencia változó neve"),
         ParamSchema(name="y_name", label="Y tengely (statisztika)", type="enum",
                     default="mean",
                     options=["mean", "median", "min", "max", "std", "p5", "p25", "p50", "p75", "p95", "dynamic_range"],
@@ -349,8 +378,19 @@ _fit_curve_def = StepDefinition(
         ParamSchema(name="degree", label="Polinom fok", type="int",
                     default=2, min=1, max=10, step=1,
                     description="Polinom illesztés fokszáma (poly módban)"),
+        ParamSchema(name="aggregate", label="Csoportosítás", type="bool",
+                    default=False, required=False,
+                    description="Azonos X értékű pontok összevonása"),
+        ParamSchema(name="agg_method", label="Aggregálási módszer", type="enum",
+                    default="mean", options=["mean", "median"], required=False,
+                    description="Aggregálás módja (átlag vagy medián)"),
+        ParamSchema(name="merge_ab_pairs", label="A/B párok összevonása", type="bool",
+                    default=False, required=False,
+                    description="_a/_b utótagú X értékek összevonása"),
     ],
     side_output_types={"r2": "SCALAR", "coefficients": "SCALAR"},
+    required_preceding_steps=["calculate_intensity_stats"],
+    secondary_inputs=["add_sequence_values"],
 )
 
 
@@ -359,7 +399,12 @@ def _exec_fit_curve(data: dict, params: dict) -> dict:
     y_name = params.get("y_name", "mean")
     model = params.get("model", "linear")
     degree = int(params.get("degree", 2))
-    return _pe_fit_curve(data, x_name=x_name, y_name=y_name, model=model, degree=degree)
+    aggregate = bool(params.get("aggregate", False))
+    agg_method = params.get("agg_method", "mean")
+    merge_ab_pairs = bool(params.get("merge_ab_pairs", False))
+    return _pe_fit_curve(data, x_name=x_name, y_name=y_name, model=model,
+                         degree=degree, aggregate=aggregate,
+                         agg_method=agg_method, merge_ab_pairs=merge_ab_pairs)
 
 
 _register(_fit_curve_def, _exec_fit_curve)
@@ -449,6 +494,7 @@ _histogram_eq_def = StepDefinition(
     input_type=DataType.GRAYSCALE,
     output_type=DataType.GRAYSCALE,
     params=[],
+    side_output_types={"histeq_input_histograms": "HISTOGRAM", "histeq_output_histograms": "HISTOGRAM"},
 )
 
 
@@ -782,3 +828,31 @@ def _exec_mask_roi(data: dict, params: dict) -> dict:
 
 
 _register(_mask_roi_def, _exec_mask_roi)
+
+
+# ---------------------------------------------------------------------------
+# 21. Resize Images  (resize_img.py)
+# ---------------------------------------------------------------------------
+_resize_images_def = StepDefinition(
+    id="resize_images",
+    name="Képek átméretezése",
+    category="adjustment",
+    description="Képek átméretezése skálázási aránnyal.",
+    icon="photo_size_select_large",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="scale", label="Skálázási arány", type="float",
+                    default=1.0, min=0.0, max=1.0, step=0.01, required=False,
+                    description="Skálázási tényező (0-1 csúszka, kézi bevitellel nagyobb is megadható)"),
+    ],
+)
+
+
+def _exec_resize_images(data: dict, params: dict) -> dict:
+    scale_val = float(params.get("scale", 1.0))
+    scale = scale_val if scale_val > 0 else None
+    return _pe_resize_images(data, scale=scale)
+
+
+_register(_resize_images_def, _exec_resize_images)

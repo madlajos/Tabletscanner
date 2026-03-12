@@ -11,6 +11,8 @@ def histogram_equalization(data, debug=False):
         return data
 
     output_images = []
+    input_histograms = []
+    output_histograms = []
 
     for img in data["images"]:
         if img is None:
@@ -21,13 +23,24 @@ def histogram_equalization(data, debug=False):
             data["error"] = "E3113"
             return data
 
+        input_hist = cv2.calcHist([img], [0], None, [256], [0, 256]).flatten()
+        input_histograms.append(input_hist)
+
         result = cv2.equalizeHist(img)
+
+        output_hist = cv2.calcHist([result], [0], None, [256], [0, 256]).flatten()
+        output_histograms.append(output_hist)
+
         output_images.append(result)
 
     data["images"] = output_images
     data["count"] = len(output_images)
+    data["results"]["histeq_input_histograms"] = input_histograms
+    data["results"]["histeq_output_histograms"] = output_histograms
     data["meta"]["histogram_equalization"] = {
-        "enabled": True
+        "enabled": True,
+        "bins": 256,
+        "range": [0, 256],
     }
     data["history"].append("histogram_equalization")
 

@@ -2841,6 +2841,69 @@ def browse_for_folder():
         return jsonify({"path": ""}), 200
 
 
+@app.route('/api/pipeline/browse-values-file', methods=['GET'])
+def browse_for_values_file():
+    """Open a native file dialog for CSV/TXT explicit values import."""
+    try:
+        result = subprocess.run(
+            ['python', 'browse_dialog.py', 'values'],
+            capture_output=True, text=True, timeout=120
+        )
+        output = json.loads(result.stdout.strip())
+        return jsonify({"path": output.get("path", "")}), 200
+    except Exception:
+        app.logger.exception("Browse values file dialog failed")
+        return jsonify({"path": ""}), 200
+
+
+@app.route('/api/pipeline/import-explicit-values', methods=['POST'])
+def import_explicit_values():
+    """
+    Import and validate explicit values from a CSV/TXT file.
+    Rules:
+      - exactly one non-empty line
+      - comma-separated numeric values only
+      - strictly increasing sequence
+    """
+    payload = request.get_json(silent=True) or {}
+    file_path = payload.get('path', '')
+    if not isinstance(file_path, str) or not file_path.strip():
+        return jsonify({"error": "Hiányzó fájl elérési útvonal."}), 400
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+
+        if len(lines) != 1:
+            return jsonify({"error": "A fájlnak pontosan egy nem üres sort kell tartalmaznia."}), 400
+
+        line = lines[0]
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) < 1 or any(p == '' for p in parts):
+            return jsonify({"error": "Érvénytelen CSV formátum. Vesszővel elválasztott számok szükségesek."}), 400
+
+        values = []
+        for p in parts:
+            try:
+                values.append(float(p))
+            except ValueError:
+                return jsonify({"error": "A fájl csak számokat tartalmazhat."}), 400
+
+        for i in range(1, len(values)):
+            if values[i] <= values[i - 1]:
+                return jsonify({"error": "Az értékeknek szigorúan növekvő sorrendben kell lenniük."}), 400
+
+        return jsonify({
+            "values": values,
+            "values_csv": ", ".join(str(v) for v in values),
+        }), 200
+    except OSError:
+        return jsonify({"error": "A fájl nem olvasható."}), 400
+    except Exception:
+        app.logger.exception("Explicit values import failed")
+        return jsonify({"error": "Váratlan hiba az import során."}), 500
+
+
 @app.route('/api/pipeline/preview', methods=['POST'])
 def preview_pipeline():
     """Execute pipeline up to a selected step and return the result image + side outputs."""
@@ -2850,6 +2913,8 @@ def preview_pipeline():
 
     preview_step = data.get('preview_step_index', -1)
     preview_image_index = data.get('preview_image_index', 0)
+    single_image_only = data.get('single_image_only', False)
+    omitted_indices = data.get('omitted_indices', [])
     pipeline_data = data.get('pipeline')
     if not pipeline_data:
         return jsonify({'error': 'Hiányzó pipeline adat', 'code': ErrorCode.PIPELINE_VALIDATION_FAILED, 'popup': True}), 400
@@ -2859,7 +2924,8 @@ def preview_pipeline():
     except Exception as e:
         return jsonify({'error': f'Érvénytelen dokumentum: {e}', 'code': ErrorCode.RECIPE_INVALID_FORMAT, 'popup': True}), 400
 
-    result = pipeline_engine.execute_pipeline(doc, up_to_step=preview_step)
+    single_idx = preview_image_index if single_image_only else -1
+    result = pipeline_engine.execute_pipeline(doc, up_to_step=preview_step, single_image_index=single_idx, omitted_indices=omitted_indices)
 
     if not result.success:
         error_list = [e.to_dict() for e in result.errors]
@@ -2894,7 +2960,7 @@ def preview_pipeline():
                 response_data['image_base64'] = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
                 response_data['image_width'] = img.shape[1]
                 response_data['image_height'] = img.shape[0]
-                response_data['image_count'] = len(result.data["images"])
+                response_data['image_count'] = result.data.get("_original_count", len(result.data["images"]))
 
     return jsonify(response_data), 200
 

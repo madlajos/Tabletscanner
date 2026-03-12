@@ -70,6 +70,10 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2636": "Érvénytelen kezdőérték/lépésköz.",
     "E2637": "Érvénytelen kezdő/végérték.",
     "E2638": "Váratlan hiba a szekvencia értékek hozzáadásakor.",
+    "E2639": "Érvénytelen típusú kezdő/vég/lépésköz érték (szám szükséges).",
+    "E2640": "Érvénytelen képek száma szintenként (pozitív egész szám szükséges).",
+    "E2641": "A lépésköz nem lehet nulla.",
+    "E2642": "A generált értékek száma nem egyezik a képek számával.",
     # fit_curve
     "E2701": "Nincsenek feldolgozandó képek.",
     "E2702": "Hiányzó intenzitás statisztikák.",
@@ -82,6 +86,8 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2709": "Érvénytelen illesztési modell.",
     "E2710": "A polinom fok túl magas az adatpontok számához képest.",
     "E2711": "Váratlan hiba a görbe illesztés során.",
+    "E2712": "Érvénytelen aggregálási módszer (mean vagy median szükséges).",
+    "E2713": "Az X tengely értékei nem konvertálhatók számmá.",
     # predict_node
     "E2801": "Hiányzó modell adatok.",
     "E2803": "Nincsenek illesztett görbék a modell adatokban.",
@@ -166,6 +172,16 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E3521": "Nincsenek feldolgozandó képek.",
     "E3522": "Érvénytelen ROI típus (csak 'rect' támogatott).",
     "E3523": "Üres kép a ROI maszkolás bemeneteként.",
+    # resize_images
+    "E3901": "Nincsenek feldolgozandó képek.",
+    "E3902": "Érvénytelen interpolációs módszer.",
+    "E3903": "Nincs megadva szélesség, magasság vagy skálázási arány.",
+    "E3904": "Érvénytelen skálázási arány (pozitív szám szükséges).",
+    "E3905": "Érvénytelen szélesség (pozitív egész szám szükséges).",
+    "E3906": "Érvénytelen magasság (pozitív egész szám szükséges).",
+    "E3907": "Üres kép az átméretezés bemeneteként.",
+    "E3908": "Az átméretezett méret túl kicsi (min. 1x1 pixel).",
+    "E3909": "Váratlan hiba az átméretezés során.",
 }
 
 
@@ -251,8 +267,8 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
     images = data.get("images", [])
     side["image_count"] = len(images)
 
-    # Loaded file paths (basenames for UI)
-    paths = data.get("paths", [])
+    # Loaded file paths (basenames for UI) — prefer originals for single-image mode
+    paths = data.get("_original_paths", data.get("paths", []))
     if paths:
         import os
         side["loaded_paths"] = [os.path.basename(p) for p in paths]
@@ -269,6 +285,8 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
 def execute_pipeline(
     doc: PipelineDocument,
     up_to_step: int = -1,
+    single_image_index: int = -1,
+    omitted_indices: list = None,
 ) -> PipelineResult:
     """
     Execute pipeline steps 0..up_to_step (inclusive).
@@ -369,6 +387,22 @@ def execute_pipeline(
                 executed_up_to=i,
                 data=data,
             )
+
+        # After load_image, optionally trim to a single image for faster preview
+        if (step_inst.step_def_id == "load_image"
+                and single_image_index >= 0
+                and data is not None
+                and data.get("images")):
+            data["_original_count"] = data["count"]
+            data["_original_paths"] = list(data.get("paths", []))
+            idx = min(single_image_index, len(data["images"]) - 1)
+            data["images"] = [data["images"][idx]]
+            data["paths"] = [data["paths"][idx]] if data.get("paths") else []
+            data["count"] = 1
+
+        # Inject omitted indices into data dict for curve fitting
+        if step_inst.step_def_id == "load_image" and data is not None and omitted_indices:
+            data["_omitted_indices"] = set(omitted_indices)
 
     return PipelineResult(
         success=True,

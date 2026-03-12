@@ -71,9 +71,11 @@ class StepDefinition:
     output_type: DataType
     params: List[ParamSchema] = field(default_factory=list)
     side_output_types: Dict[str, str] = field(default_factory=dict)
+    required_preceding_steps: List[str] = field(default_factory=list)
+    secondary_inputs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "id": self.id,
             "name": self.name,
             "category": self.category,
@@ -84,6 +86,11 @@ class StepDefinition:
             "params": [p.to_dict() for p in self.params],
             "side_output_types": self.side_output_types,
         }
+        if self.required_preceding_steps:
+            d["required_preceding_steps"] = self.required_preceding_steps
+        if self.secondary_inputs:
+            d["secondary_inputs"] = self.secondary_inputs
+        return d
 
 
 @dataclass
