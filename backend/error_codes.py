@@ -153,6 +153,35 @@ class ErrorCode:
     PE_ROI_NO_IMAGES = "E3521"
     PE_ROI_BAD_TYPE = "E3522"
     PE_ROI_NULL_IMG = "E3523"
+    # detect_particles
+    PE_DETPART_NO_IMAGES = "E3431"
+    PE_DETPART_BAD_CONN = "E3432"
+    PE_DETPART_NULL_IMG = "E3433"
+    PE_DETPART_BAD_SHAPE = "E3434"
+    # characterize_particles
+    PE_CHARPART_NO_PARTICLES = "E3441"
+    PE_CHARPART_NO_IMAGES = "E3442"
+    PE_CHARPART_BAD_PIXSIZE = "E3443"
+    PE_CHARPART_BAD_PERCENTILES = "E3444"
+    PE_CHARPART_BAD_PERCENTILE_VALUE = "E3445"
+    PE_CHARPART_BAD_FILTERS = "E3446"
+    PE_CHARPART_NULL_IMG = "E3447"
+    PE_CHARPART_BAD_SHAPE = "E3448"
+    # histogram_pca
+    PE_HISTPCA_NO_HIST = "E3421"
+    PE_HISTPCA_EMPTY = "E3422"
+    PE_HISTPCA_CONV_FAIL = "E3423"
+    PE_HISTPCA_NOT_2D = "E3424"
+    PE_HISTPCA_FEW_SAMPLES = "E3425"
+    PE_HISTPCA_BAD_NCOMP = "E3426"
+    # detect_circles
+    PE_CIRC_NO_IMAGES = "E3601"
+    PE_CIRC_BAD_POLARITY = "E3602"
+    PE_CIRC_BAD_RADIUS_TYPE = "E3603"
+    PE_CIRC_BAD_RADIUS_RANGE = "E3604"
+    PE_CIRC_BAD_KSIZE = "E3605"
+    PE_CIRC_NULL_IMG = "E3606"
+    PE_CIRC_BAD_SHAPE = "E3607"
 
 def load_error_messages():
     file_path = os.path.join(os.path.dirname(__file__), "error_messages.json")

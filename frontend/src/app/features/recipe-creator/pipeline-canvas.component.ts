@@ -5,7 +5,6 @@ import {
   CdkDrag,
   CdkDragDrop,
   CdkDragPlaceholder,
-  moveItemInArray,
 } from '@angular/cdk/drag-drop';
 import { MatIconModule } from '@angular/material/icon';
 import { Subscription } from 'rxjs';
@@ -346,6 +345,9 @@ export class PipelineCanvasComponent implements OnInit, OnDestroy {
     if (event.previousContainer === event.container) {
       // Reorder within pipeline — translate main-chain indices to flat indices
       if (event.previousIndex !== event.currentIndex) {
+        if (!this.pipelineState.canMoveMainStep(event.previousIndex, event.currentIndex)) {
+          return;
+        }
         const fromFlat = this.mainSteps[event.previousIndex].pipelineIndex;
         const toFlat = this.mainSteps[event.currentIndex].pipelineIndex;
         this.pipelineState.moveStep(fromFlat, toFlat);
@@ -354,6 +356,9 @@ export class PipelineCanvasComponent implements OnInit, OnDestroy {
       // Drop from toolbox
       const stepDef = event.item.data as StepDefinition;
       if (stepDef?.id) {
+        if (!this.pipelineState.canInsertStepAtMainIndex(stepDef.id, event.currentIndex)) {
+          return;
+        }
         const insertAt = event.currentIndex < this.mainSteps.length
           ? this.mainSteps[event.currentIndex].pipelineIndex
           : this.steps.length;

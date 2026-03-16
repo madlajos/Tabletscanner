@@ -5,11 +5,28 @@ import {
   StepInstance,
   StepError,
   PipelineDocument,
+  DataType,
   PreviewResponse,
   createStepInstance,
   createEmptyPipeline,
 } from '../models/pipeline.models';
 import { RecipeService } from './recipe.service';
+
+type PortDirection = 'source' | 'transform' | 'sink';
+
+interface StepIoOverride {
+  direction?: PortDirection;
+  inputType?: DataType | null;
+  outputType?: DataType | null;
+}
+
+const STEP_IO_OVERRIDES: Record<string, StepIoOverride> = {
+  // Source nodes: no primary input in the main chain.
+  load_image: { direction: 'source', inputType: null },
+  add_sequence_values: { direction: 'source', inputType: null },
+  // Explicit grayscale transform override to keep drag/drop compatibility stable.
+  robust_stretch_gamma: { inputType: 'GRAYSCALE', outputType: 'GRAYSCALE' },
+};
 
 @Injectable({ providedIn: 'root' })
 export class PipelineStateService {
@@ -119,6 +136,8 @@ export class PipelineStateService {
     }
 
     const idx = atIndex ?? pipeline.steps.length;
+    if (!this.canInsertStepAtFlatIndex(stepDefId, idx)) return;
+
     const steps = [...pipeline.steps];
 
     // Auto-add secondary input steps before this step
@@ -217,8 +236,85 @@ export class PipelineStateService {
 
     // Insert group (secondaries first, then main)
     steps.splice(adjustedTo, 0, ...group);
+
+    if (!this.isPrimaryChainCompatible(steps)) {
+      return;
+    }
+
     this.updateSteps(steps);
     this.selectStep(adjustedTo + group.length - 1); // Select the main step
+  }
+
+  /** Check if inserting a step at a flat pipeline index keeps the chain compatible. */
+  canInsertStepAtFlatIndex(stepDefId: string, flatIndex: number): boolean {
+    const defn = this.getStepDefinition(stepDefId);
+    if (!defn) return false;
+
+    const pipeline = this.getPipeline();
+    const idx = Math.max(0, Math.min(flatIndex, pipeline.steps.length));
+    const simulated = [...pipeline.steps];
+
+    // Simulate auto-added secondary input steps for a main step insert.
+    let insertOffset = 0;
+    if (defn.secondary_inputs?.length) {
+      for (const secId of defn.secondary_inputs) {
+        const secDefn = this.getStepDefinition(secId);
+        if (!secDefn) continue;
+        simulated.splice(idx + insertOffset, 0, this.createTemporaryStep(secId));
+        insertOffset++;
+      }
+    }
+    simulated.splice(idx + insertOffset, 0, this.createTemporaryStep(stepDefId));
+
+    return this.isPrimaryChainCompatible(simulated);
+  }
+
+  /** Check if inserting a step at a main-chain index is valid. */
+  canInsertStepAtMainIndex(stepDefId: string, mainIndex: number): boolean {
+    const mainChain = this.getMainChain(this.getPipeline().steps);
+    const flatIndex = mainIndex < mainChain.length
+      ? mainChain[mainIndex].pipelineIndex
+      : this.getPipeline().steps.length;
+    return this.canInsertStepAtFlatIndex(stepDefId, flatIndex);
+  }
+
+  /** Check if moving a main-chain node from one main index to another is valid. */
+  canMoveMainStep(fromMainIndex: number, toMainIndex: number): boolean {
+    const pipeline = this.getPipeline();
+    const mainChain = this.getMainChain(pipeline.steps);
+    if (fromMainIndex < 0 || fromMainIndex >= mainChain.length) return false;
+    if (toMainIndex < 0 || toMainIndex >= mainChain.length) return false;
+    if (fromMainIndex === toMainIndex) return true;
+
+    const fromFlat = mainChain[fromMainIndex].pipelineIndex;
+    const toFlat = mainChain[toMainIndex].pipelineIndex;
+
+    const defn = this.getStepDefinition(pipeline.steps[fromFlat].step_def_id);
+    const steps = [...pipeline.steps];
+
+    const groupIndices = [fromFlat];
+    if (defn?.secondary_inputs?.length) {
+      const secondarySet = new Set(defn.secondary_inputs);
+      for (let j = fromFlat - 1; j >= 0; j--) {
+        if (secondarySet.has(steps[j].step_def_id)) {
+          groupIndices.unshift(j);
+          secondarySet.delete(steps[j].step_def_id);
+          if (secondarySet.size === 0) break;
+        }
+      }
+    }
+
+    const group = groupIndices.map((i) => steps[i]);
+    for (let k = groupIndices.length - 1; k >= 0; k--) {
+      steps.splice(groupIndices[k], 1);
+    }
+
+    let adjustedTo = toFlat;
+    for (const gi of groupIndices) {
+      if (gi < toFlat) adjustedTo--;
+    }
+    steps.splice(adjustedTo, 0, ...group);
+    return this.isPrimaryChainCompatible(steps);
   }
 
   updateParams(index: number, paramValues: Record<string, any>): void {
@@ -241,6 +337,10 @@ export class PipelineStateService {
     const pipeline = this.getPipeline();
     if (index >= 0 && index < pipeline.steps.length &&
         pipeline.steps[index].step_def_id === 'mask_rect_roi' && index > 0) {
+      this.requestPreviewForStep(index - 1);
+    } else if (index >= 0 && index < pipeline.steps.length &&
+               pipeline.steps[index].step_def_id === 'fit_curve' && index > 0) {
+      // Fit curve runs manually, but inspector still needs upstream outputs for dynamic Y options.
       this.requestPreviewForStep(index - 1);
     } else {
       // Trigger preview for the newly selected step
@@ -370,6 +470,7 @@ export class PipelineStateService {
           this.validationErrorsSubject.next(res.errors || []);
           this.previewImageSubject.next(null);
           this.imageCountSubject.next(0);
+          this.sideOutputsSubject.next({});
         }
       },
       error: (err) => {
@@ -437,5 +538,138 @@ export class PipelineStateService {
   /** Request maximizing a chart in the preview area. */
   requestMaximizeGraph(data: any, omittedIndices: Set<number>): void {
     this.maximizeGraphSubject.next({ data, omittedIndices });
+  }
+
+  private createTemporaryStep(stepDefId: string): StepInstance {
+    return {
+      instance_id: `tmp-${stepDefId}-${Math.random().toString(36).slice(2, 9)}`,
+      step_def_id: stepDefId,
+      param_values: {},
+      order: -1,
+    };
+  }
+
+  private getSecondaryIndices(steps: StepInstance[]): Set<number> {
+    const secondary = new Set<number>();
+    for (let i = 0; i < steps.length; i++) {
+      const defn = this.getStepDefinition(steps[i].step_def_id);
+      if (!defn?.secondary_inputs?.length) continue;
+      for (const secId of defn.secondary_inputs) {
+        for (let j = i - 1; j >= 0; j--) {
+          if (steps[j].step_def_id === secId && !secondary.has(j)) {
+            secondary.add(j);
+            break;
+          }
+        }
+      }
+    }
+    return secondary;
+  }
+
+  private getMainChain(steps: StepInstance[]): Array<{ step: StepInstance; definition?: StepDefinition; pipelineIndex: number }> {
+    const secondary = this.getSecondaryIndices(steps);
+    const main: Array<{ step: StepInstance; definition?: StepDefinition; pipelineIndex: number }> = [];
+    for (let i = 0; i < steps.length; i++) {
+      if (secondary.has(i)) continue;
+      main.push({
+        step: steps[i],
+        definition: this.getStepDefinition(steps[i].step_def_id),
+        pipelineIndex: i,
+      });
+    }
+    return main;
+  }
+
+  private getDirection(defn: StepDefinition): PortDirection {
+    return STEP_IO_OVERRIDES[defn.id]?.direction ?? 'transform';
+  }
+
+  private getInputType(defn: StepDefinition): DataType | null {
+    const override = STEP_IO_OVERRIDES[defn.id];
+    if (override && Object.prototype.hasOwnProperty.call(override, 'inputType')) {
+      return override.inputType ?? null;
+    }
+    return defn.input_type ?? null;
+  }
+
+  private getOutputType(defn: StepDefinition): DataType | null {
+    const override = STEP_IO_OVERRIDES[defn.id];
+    if (override && Object.prototype.hasOwnProperty.call(override, 'outputType')) {
+      return override.outputType ?? null;
+    }
+    return defn.output_type ?? null;
+  }
+
+  private areTypesCompatible(outputType: DataType | null, inputType: DataType | null): boolean {
+    if (!outputType || !inputType) return false;
+
+    if (outputType === inputType) return true;
+
+    // IMAGE input accepts any raster-like image output.
+    if (inputType === 'IMAGE') {
+      return outputType === 'IMAGE' || outputType === 'GRAYSCALE' || outputType === 'MASK';
+    }
+
+    // GRAYSCALE input accepts grayscale-like outputs and auto-converts from IMAGE.
+    if (inputType === 'GRAYSCALE') {
+      return outputType === 'GRAYSCALE' || outputType === 'MASK' || outputType === 'IMAGE';
+    }
+
+    // MASK input accepts mask outputs.
+    if (inputType === 'MASK') {
+      return outputType === 'MASK' || outputType === 'GRAYSCALE';
+    }
+
+    return false;
+  }
+
+  /**
+   * Validate only the primary chain (secondaries are modeled as branch inputs).
+   * Rules:
+   * - first primary node must be load_image
+   * - source nodes have no primary input (can only appear at first primary position)
+   * - sink nodes have no primary output (must be last primary node)
+   * - adjacent primary nodes must have compatible output/input data types
+   */
+  private isPrimaryChainCompatible(steps: StepInstance[]): boolean {
+    const main = this.getMainChain(steps);
+    if (main.length === 0) return true;
+
+    const firstDef = main[0].definition;
+    if (!firstDef || firstDef.id !== 'load_image') {
+      return false;
+    }
+
+    for (let i = 0; i < main.length; i++) {
+      const currDef = main[i].definition;
+      if (!currDef) return false;
+
+      const currDir = this.getDirection(currDef);
+      const currInput = this.getInputType(currDef);
+      const currOutput = this.getOutputType(currDef);
+
+      if (i === 0) {
+        if (currDir !== 'source') return false;
+      } else {
+        if (currDir === 'source') return false;
+
+        const prevDef = main[i - 1].definition;
+        if (!prevDef) return false;
+        const prevDir = this.getDirection(prevDef);
+        if (prevDir === 'sink') return false;
+
+        const prevOutput = this.getOutputType(prevDef);
+        if (!this.areTypesCompatible(prevOutput, currInput)) {
+          return false;
+        }
+      }
+
+      const isLast = i === main.length - 1;
+      if (!isLast && currDir === 'sink') return false;
+      if (!isLast && !currOutput) return false;
+      if (i > 0 && currDir !== 'source' && !currInput) return false;
+    }
+
+    return true;
   }
 }

@@ -182,6 +182,35 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E3907": "Üres kép az átméretezés bemeneteként.",
     "E3908": "Az átméretezett méret túl kicsi (min. 1x1 pixel).",
     "E3909": "Váratlan hiba az átméretezés során.",
+    # detect_particles
+    "E3431": "Nincsenek feldolgozandó képek.",
+    "E3432": "Érvénytelen szomszédsági érték (4 vagy 8 szükséges).",
+    "E3433": "Üres kép a szemcsedetektálás bemeneteként.",
+    "E3434": "Nem támogatott képformátum.",
+    # characterize_particles
+    "E3441": "Hiányzó szemcse adatok. Futtassa előbb a 'Szemcsedetektálás' lépést.",
+    "E3442": "Nincsenek feldolgozandó képek.",
+    "E3443": "Érvénytelen pixel méret (pozitív szám szükséges).",
+    "E3444": "Érvénytelen percentilis lista.",
+    "E3445": "Érvénytelen percentilis érték (0-100 szükséges).",
+    "E3446": "Érvénytelen szűrő konfiguráció.",
+    "E3447": "Üres kép a szemcsekarakterizálás bemeneteként.",
+    "E3448": "Nem támogatott képformátum.",
+    # histogram_pca
+    "E3421": "Hiányzó hisztogramok. Futtassa előbb a 'Hisztogram' lépést.",
+    "E3422": "Üres vagy érvénytelen hisztogram adatok.",
+    "E3423": "A hisztogram adatok nem konvertálhatók tömbbé.",
+    "E3424": "A hisztogram adatoknak 2D tömbnek kell lenniük.",
+    "E3425": "Legalább 2 minta szükséges a PCA-hoz.",
+    "E3426": "Érvénytelen komponensszám (pozitív egész szám szükséges).",
+    # detect_circles
+    "E3601": "Nincsenek feldolgozandó képek.",
+    "E3602": "Érvénytelen polaritás (dark, bright vagy both szükséges).",
+    "E3603": "A sugár értékeknek egész számnak kell lenniük.",
+    "E3604": "Érvénytelen sugár tartomány (min > 0, max > 0, min <= max).",
+    "E3605": "Az elmosás kernel méretnek páratlan pozitív számnak kell lennie.",
+    "E3606": "Üres kép a kör detektálás bemeneteként.",
+    "E3607": "Nem támogatott képformátum.",
 }
 
 
@@ -252,16 +281,24 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
 
     # Copy serializable results
     results = data.get("results", {})
+    _skip_result_keys = {"range_masks", "circle_overlay", "region_masks"}
     for key, val in results.items():
-        if key == "range_masks":
-            side["range_masks_count"] = len(val) if isinstance(val, list) else 0
+        if key in _skip_result_keys:
+            side[f"{key}_count"] = len(val) if isinstance(val, list) else 0
             continue
         side[key] = _serialize_value(val)
 
-    # Copy meta
+    # Copy meta (skip overlay image arrays)
     meta = data.get("meta", {})
     if meta:
-        side["meta"] = _serialize_value(meta)
+        _skip_meta_keys = {
+            "region_props_overlay",
+            "filtered_regions_overlay",
+            "particles_overlay",
+            "particle_characterization_overlay",
+        }
+        filtered_meta = {k: v for k, v in meta.items() if k not in _skip_meta_keys}
+        side["meta"] = _serialize_value(filtered_meta)
 
     # Image count
     images = data.get("images", [])

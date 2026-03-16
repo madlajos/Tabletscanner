@@ -37,6 +37,10 @@ from proc_elements import (
     advanced_illumin_corr as _pe_advanced_illumin_corr,
     mask_roi as _pe_mask_roi,
     resize_images as _pe_resize_images,
+    detect_particles as _pe_detect_particles,
+    histogram_pca as _pe_histogram_pca,
+    detect_circles as _pe_detect_circles,
+    characterize_particles as _pe_characterize_particles,
 )
 
 # ---------------------------------------------------------------------------
@@ -365,38 +369,46 @@ _fit_curve_def = StepDefinition(
     input_type=DataType.IMAGE,
     output_type=DataType.IMAGE,
     params=[
-        ParamSchema(name="x_name", label="X tengely (értéknév)", type="string",
-                    default="sequence_value", required=True,
-                    description="A results-ben tárolt referencia változó neve"),
-        ParamSchema(name="y_name", label="Y tengely (statisztika)", type="enum",
+        ParamSchema(name="y_name", label="Y tengely értékei", type="string",
                     default="mean",
-                    options=["mean", "median", "min", "max", "std", "p5", "p25", "p50", "p75", "p95", "dynamic_range"],
-                    description="Intenzitás statisztika mező neve"),
-        ParamSchema(name="model", label="Illesztési modell", type="enum",
+                    description="A görbe illesztéshez használt Y mező"),
+        ParamSchema(name="y_label", label="Y tengely neve", type="string",
+                    default="mean",
+                    description="A grafikonon megjelenő Y tengelyfelirat"),
+        ParamSchema(name="model", label="Illesztett görbe", type="enum",
                     default="linear",
                     options=["linear", "poly"]),
         ParamSchema(name="degree", label="Polinom fok", type="int",
                     default=2, min=1, max=10, step=1,
                     description="Polinom illesztés fokszáma (poly módban)"),
-        ParamSchema(name="aggregate", label="Csoportosítás", type="bool",
+        ParamSchema(name="aggregate", label="Szintenkénti összevonás", type="bool",
                     default=False, required=False,
                     description="Azonos X értékű pontok összevonása"),
-        ParamSchema(name="agg_method", label="Aggregálási módszer", type="enum",
+        ParamSchema(name="agg_method", label="Összevont értékek számítása", type="enum",
                     default="mean", options=["mean", "median"], required=False,
                     description="Aggregálás módja (átlag vagy medián)"),
-        ParamSchema(name="merge_ab_pairs", label="A/B párok összevonása", type="bool",
+        ParamSchema(name="merge_ab_pairs", label="Tablettaoldalak összevonása", type="bool",
                     default=False, required=False,
                     description="_a/_b utótagú X értékek összevonása"),
     ],
     side_output_types={"r2": "SCALAR", "coefficients": "SCALAR"},
-    required_preceding_steps=["calculate_intensity_stats"],
     secondary_inputs=["add_sequence_values"],
 )
 
 
 def _exec_fit_curve(data: dict, params: dict) -> dict:
-    x_name = params.get("x_name", "sequence_value")
+    x_name = "sequence_value"
+    seq_meta = data.get("meta", {}).get("sequence_values", {})
+    if isinstance(seq_meta, dict) and seq_meta:
+        # Prefer the most recently added reference variable.
+        x_name = next(reversed(seq_meta.keys()))
+    if x_name not in data.get("results", {}):
+        fallback = params.get("x_name")
+        if isinstance(fallback, str) and fallback in data.get("results", {}):
+            x_name = fallback
+
     y_name = params.get("y_name", "mean")
+    y_label = params.get("y_label")
     model = params.get("model", "linear")
     degree = int(params.get("degree", 2))
     aggregate = bool(params.get("aggregate", False))
@@ -404,7 +416,8 @@ def _exec_fit_curve(data: dict, params: dict) -> dict:
     merge_ab_pairs = bool(params.get("merge_ab_pairs", False))
     return _pe_fit_curve(data, x_name=x_name, y_name=y_name, model=model,
                          degree=degree, aggregate=aggregate,
-                         agg_method=agg_method, merge_ab_pairs=merge_ab_pairs)
+                         agg_method=agg_method, merge_ab_pairs=merge_ab_pairs,
+                         y_display_name=y_label)
 
 
 _register(_fit_curve_def, _exec_fit_curve)
@@ -896,3 +909,240 @@ def _exec_resize_images(data: dict, params: dict) -> dict:
 
 
 _register(_resize_images_def, _exec_resize_images)
+
+
+# ---------------------------------------------------------------------------
+# 22. Detect Particles  (region_attr.py)
+# ---------------------------------------------------------------------------
+_detect_particles_def = StepDefinition(
+    id="detect_particles",
+    name="Szemcsedetektálás",
+    category="detection",
+    description="Szemcsék detektálása bináris/maszkolt képeken, polygon és contour adatok előállításával.",
+    icon="center_focus_strong",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.MASK,
+    params=[
+        ParamSchema(name="connectivity", label="Szomszédság", type="enum",
+                    default="8", options=["4", "8"],
+                    description="4-es vagy 8-as szomszédság"),
+        ParamSchema(name="polygon_epsilon", label="Polygon közelítés", type="float",
+                    default=0.01, min=0.001, max=0.5, step=0.001,
+                    description="Polygon közelítés pontossága (kisebb = pontosabb)"),
+        ParamSchema(name="draw", label="Rajzolás", type="bool",
+                    default=True,
+                    description="Detektált szemcsék körvonalainak kirajzolása"),
+        ParamSchema(name="draw_label", label="Címkék rajzolása", type="bool",
+                    default=True,
+                    description="Szemcse azonosítók megjelenítése"),
+        ParamSchema(name="replace_images", label="Overlay csere", type="bool",
+                    default=False,
+                    description="A kimeneti képek cseréje az overlay képekre"),
+    ],
+    side_output_types={"particles": "SCALAR", "particles_summary": "SCALAR"},
+)
+
+
+def _exec_detect_particles(data: dict, params: dict) -> dict:
+    connectivity = int(params.get("connectivity", "8"))
+    polygon_epsilon = float(params.get("polygon_epsilon", 0.01))
+    draw = bool(params.get("draw", True))
+    draw_label = bool(params.get("draw_label", True))
+    replace_images = bool(params.get("replace_images", False))
+    return _pe_detect_particles(
+        data,
+        connectivity=connectivity,
+        polygon_epsilon=polygon_epsilon,
+        draw=draw,
+        draw_label=draw_label,
+        replace_images=replace_images,
+    )
+
+
+_register(_detect_particles_def, _exec_detect_particles)
+
+
+# ---------------------------------------------------------------------------
+# 23. Histogram PCA  (create_pca.py)
+# ---------------------------------------------------------------------------
+_histogram_pca_def = StepDefinition(
+    id="histogram_pca",
+    name="Hisztogram PCA",
+    category="analysis",
+    description="Főkomponens-analízis (PCA) a hisztogramok alapján. Előtte a 'Hisztogram' lépés szükséges.",
+    icon="scatter_plot",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="n_components", label="Komponensek száma", type="int",
+                    default=2, min=1, max=50, step=1,
+                    description="Az előállítandó főkomponensek száma"),
+        ParamSchema(name="center", label="Középre igazítás", type="bool",
+                    default=True,
+                    description="Átlag kivonása a PCA előtt"),
+    ],
+    side_output_types={
+        "histogram_pca_scores": "SCALAR",
+        "histogram_pca_explained_ratio": "SCALAR",
+    },
+    required_preceding_steps=["calculate_histograms"],
+)
+
+
+def _exec_histogram_pca(data: dict, params: dict) -> dict:
+    n_components = int(params.get("n_components", 2))
+    center = bool(params.get("center", True))
+    return _pe_histogram_pca(data, n_components=n_components, center=center)
+
+
+_register(_histogram_pca_def, _exec_histogram_pca)
+
+
+# ---------------------------------------------------------------------------
+# 24. Detect Circles  (detect_circ.py)
+# ---------------------------------------------------------------------------
+_detect_circles_def = StepDefinition(
+    id="detect_circles",
+    name="Kör detektálás",
+    category="detection",
+    description="Kör alakú objektumok detektálása Hough-transzformációval.",
+    icon="radio_button_unchecked",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="dp", label="Felbontás arány", type="float",
+                    default=1.2, min=0.5, max=5.0, step=0.1,
+                    description="Az akkumulátor felbontásának inverz aránya"),
+        ParamSchema(name="min_dist", label="Min. távolság", type="int",
+                    default=20, min=1, max=1000, step=1,
+                    description="Minimális távolság a detektált körök középpontjai között"),
+        ParamSchema(name="min_radius", label="Min. sugár", type="int",
+                    default=20, min=1, max=5000, step=1,
+                    description="Minimális kör sugár pixelben"),
+        ParamSchema(name="max_radius", label="Max. sugár", type="int",
+                    default=25, min=1, max=5000, step=1,
+                    description="Maximális kör sugár pixelben"),
+        ParamSchema(name="blur_ksize", label="Elmosás kernel", type="int",
+                    default=5, min=1, max=99, step=2, odd_only=True,
+                    description="Medián elmosás kernel mérete"),
+        ParamSchema(name="edge_threshold", label="Él küszöb", type="int",
+                    default=100, min=1, max=500, step=1,
+                    description="Canny él-detektálás felső küszöbe"),
+        ParamSchema(name="accumulator_threshold", label="Akkumulátor küszöb", type="int",
+                    default=20, min=1, max=300, step=1,
+                    description="Akkumulátor küszöbérték a kör jelöltek elfogadásához"),
+        ParamSchema(name="polarity", label="Polaritás", type="enum",
+                    default="dark",
+                    options=["dark", "bright", "both"],
+                    description="Sötét körök világos háttéren / világos körök sötét háttéren / mindkettő"),
+    ],
+    side_output_types={"circles": "SCALAR"},
+)
+
+
+def _exec_detect_circles(data: dict, params: dict) -> dict:
+    dp = float(params.get("dp", 1.2))
+    min_dist = int(params.get("min_dist", 20))
+    min_radius = int(params.get("min_radius", 20))
+    max_radius = int(params.get("max_radius", 25))
+    blur_ksize = int(params.get("blur_ksize", 5))
+    edge_threshold = int(params.get("edge_threshold", 100))
+    accumulator_threshold = int(params.get("accumulator_threshold", 20))
+    polarity = params.get("polarity", "dark")
+    return _pe_detect_circles(
+        data,
+        dp=dp,
+        min_dist=min_dist,
+        min_radius=min_radius,
+        max_radius=max_radius,
+        blur_ksize=blur_ksize,
+        edge_threshold=edge_threshold,
+        accumulator_threshold=accumulator_threshold,
+        polarity=polarity,
+    )
+
+
+_register(_detect_circles_def, _exec_detect_circles)
+
+
+# ---------------------------------------------------------------------------
+# 25. Characterize Particles  (filter_region.py)
+# ---------------------------------------------------------------------------
+_characterize_particles_def = StepDefinition(
+    id="characterize_particles",
+    name="Szemcsekarakterizálás",
+    category="analysis",
+    description="Detektált szemcsék geometriai és intenzitás alapú karakterizálása, táblázatos eredménnyel.",
+    icon="table_chart",
+    input_type=DataType.GRAYSCALE,
+    output_type=DataType.GRAYSCALE,
+    params=[
+        ParamSchema(name="include_excluded", label="Kizárt szemcsék számítása", type="bool",
+                    default=False,
+                    description="A kizárt szemcsék is bekerüljenek a karakterizálásba"),
+        ParamSchema(name="pixel_size_um", label="Pixel méret (µm)", type="float",
+                    default=0.0, min=0.0, max=1000.0, step=0.01,
+                    description="Pixel méret mikronban (0 = pixel egység)"),
+        ParamSchema(name="percentiles", label="Percentilisek", type="string",
+                    default="5,25,50,75,95", required=True,
+                    description="Vesszővel elválasztott percentilis értékek (0-100)"),
+        ParamSchema(name="draw", label="Rajzolás", type="bool",
+                    default=True,
+                    description="Szemcsék kirajzolása a preview képre"),
+        ParamSchema(name="draw_only_filtered", label="Csak szűrtek rajzolása", type="bool",
+                    default=True,
+                    description="Csak a szűrésen átment szemcsék rajzolása"),
+        ParamSchema(name="draw_label_key", label="Felirat típusa", type="enum",
+                    default="area_px",
+                    options=["label", "area_px", "perimeter_px", "equivalent_diameter_px", "circularity", "intensity_mean"],
+                    description="A szemcsék feliratának típusa"),
+        ParamSchema(name="filter_min_area", label="Min. terület", type="int",
+                    default=0, min=0, max=10000000, step=1,
+                    description="Minimális szemcse terület (0 = nincs szűrés)"),
+        ParamSchema(name="filter_max_area", label="Max. terület", type="int",
+                    default=0, min=0, max=10000000, step=1,
+                    description="Maximális szemcse terület (0 = nincs limit)"),
+        ParamSchema(name="replace_images", label="Overlay csere", type="bool",
+                    default=False,
+                    description="A kimeneti képek cseréje az overlay képekre"),
+    ],
+    side_output_types={"particle_table": "SCALAR", "particle_table_filtered": "SCALAR"},
+    required_preceding_steps=["detect_particles"],
+)
+
+
+def _exec_characterize_particles(data: dict, params: dict) -> dict:
+    pixel_size_val = float(params.get("pixel_size_um", 0.0))
+    pixel_size_um = pixel_size_val if pixel_size_val > 0 else None
+
+    pct_str = params.get("percentiles", "5,25,50,75,95")
+    try:
+        percentiles = tuple(float(x.strip()) for x in str(pct_str).split(",") if x.strip())
+    except (ValueError, TypeError):
+        percentiles = (5, 25, 50, 75, 95)
+
+    filters = {}
+    min_area = int(params.get("filter_min_area", 0))
+    max_area = int(params.get("filter_max_area", 0))
+    if min_area > 0 or max_area > 0:
+        rule = {}
+        if min_area > 0:
+            rule["min"] = min_area
+        if max_area > 0:
+            rule["max"] = max_area
+        filters["area_px"] = rule
+
+    return _pe_characterize_particles(
+        data,
+        include_excluded=bool(params.get("include_excluded", False)),
+        pixel_size_um=pixel_size_um,
+        percentiles=percentiles,
+        filters=filters,
+        draw=bool(params.get("draw", True)),
+        draw_only_filtered=bool(params.get("draw_only_filtered", True)),
+        draw_label_key=params.get("draw_label_key", "area_px"),
+        replace_images=bool(params.get("replace_images", False)),
+    )
+
+
+_register(_characterize_particles_def, _exec_characterize_particles)

@@ -83,6 +83,28 @@ const CATEGORY_ORDER = ['io', 'adjustment', 'filter', 'analysis', 'detection'];
       flex: 1;
       overflow-y: auto;
       padding: 8px;
+      scrollbar-width: thin;
+      scrollbar-color: #444 #1a1a1a;
+    }
+
+    .toolbox-scroll::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    .toolbox-scroll::-webkit-scrollbar-track {
+      background: #1a1a1a;
+      border-radius: 8px;
+    }
+
+    .toolbox-scroll::-webkit-scrollbar-thumb {
+      background: #444;
+      border-radius: 8px;
+      border: 2px solid #1a1a1a;
+    }
+
+    .toolbox-scroll::-webkit-scrollbar-thumb:hover {
+      background: #5a5a5a;
     }
 
     .category-group {

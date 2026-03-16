@@ -31,7 +31,6 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
           <mat-icon class="step-icon">{{ definition.icon }}</mat-icon>
           <span class="step-name">{{ definition.name }}</span>
         </div>
-        <p class="step-desc">{{ definition.description }}</p>
 
         @if (stepErrors.length > 0) {
           <div class="error-list">
@@ -65,10 +64,10 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
             }
           }
           @for (param of getVisibleParams(); track param.name) {
-            @if (param.name !== 'file_order' && param.name !== 'group_colors') {
+            @if (param.name !== 'file_order' && param.name !== 'group_colors' && !shouldHideParam(param)) {
             <div class="param-row">
               <label class="param-label" [attr.for]="'param-' + param.name">
-                {{ param.label }}
+                {{ getDisplayParamLabel(param) }}
               </label>
 
               @switch (param.type) {
@@ -112,18 +111,51 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                   </div>
                 }
                 @case ('bool') {
-                  <div class="param-control">
-                    <label class="toggle-wrap">
-                      <input
-                        type="checkbox"
-                        [id]="'param-' + param.name"
-                        [ngModel]="getParamValue(param.name)"
-                        (ngModelChange)="onParamChange(param.name, $event)"
-                        [disabled]="isBoolParamDisabled(param.name)"
-                      />
-                      <span class="toggle-label">{{ getParamValue(param.name) ? 'Be' : 'Ki' }}</span>
-                    </label>
-                  </div>
+                  @if (isFitCurveAggregateParam(param.name)) {
+                    <div class="aggregation-block">
+                      <div class="param-control">
+                        <label class="toggle-wrap">
+                          <input
+                            type="checkbox"
+                            [id]="'param-' + param.name"
+                            [ngModel]="getParamValue(param.name)"
+                            (ngModelChange)="onParamChange(param.name, $event)"
+                            [disabled]="isBoolParamDisabled(param.name)"
+                          />
+                          <span class="toggle-label">{{ getParamValue(param.name) ? 'Be' : 'Ki' }}</span>
+                        </label>
+                      </div>
+                      @if (getParamValue('aggregate')) {
+                        <div class="aggregation-method-row">
+                          <label class="param-label" for="param-agg_method">Összevont értékek számítása</label>
+                          <div class="param-control">
+                            <select
+                              id="param-agg_method"
+                              [ngModel]="getParamValue('agg_method')"
+                              (ngModelChange)="onParamChange('agg_method', $event)"
+                            >
+                              @for (opt of getFitCurveAggMethodOptions(); track opt) {
+                                <option [value]="opt">{{ opt }}</option>
+                              }
+                            </select>
+                          </div>
+                        </div>
+                      }
+                    </div>
+                  } @else {
+                    <div class="param-control">
+                      <label class="toggle-wrap">
+                        <input
+                          type="checkbox"
+                          [id]="'param-' + param.name"
+                          [ngModel]="getParamValue(param.name)"
+                          (ngModelChange)="onParamChange(param.name, $event)"
+                          [disabled]="isBoolParamDisabled(param.name)"
+                        />
+                        <span class="toggle-label">{{ getParamValue(param.name) ? 'Be' : 'Ki' }}</span>
+                      </label>
+                    </div>
+                  }
                 }
                 @case ('enum') {
                   <div class="param-control">
@@ -139,17 +171,31 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                   </div>
                 }
                 @case ('string') {
-                  <div class="param-control" [class.file-path-control]="isReferenceValuesParam(param.name)">
-                    <input
-                      type="text"
-                      [id]="'param-' + param.name"
-                      [ngModel]="getParamValue(param.name)"
-                      (ngModelChange)="onParamChange(param.name, $event)"
-                    />
-                    @if (isReferenceValuesParam(param.name)) {
-                      <button class="browse-btn" (click)="importReferenceValuesFromFile()" title="CSV/TXT import"><mat-icon>upload_file</mat-icon></button>
-                    }
-                  </div>
+                  @if (isFitCurveYAxisParam(param.name)) {
+                    <div class="param-control">
+                      <select
+                        [id]="'param-' + param.name"
+                        [ngModel]="getParamValue(param.name)"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                      >
+                        @for (opt of getFitCurveYOptions(); track opt) {
+                          <option [value]="opt">{{ opt }}</option>
+                        }
+                      </select>
+                    </div>
+                  } @else {
+                    <div class="param-control" [class.file-path-control]="isReferenceValuesParam(param.name)">
+                      <input
+                        type="text"
+                        [id]="'param-' + param.name"
+                        [ngModel]="getParamValue(param.name)"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                      />
+                      @if (isReferenceValuesParam(param.name)) {
+                        <button class="browse-btn" (click)="importReferenceValuesFromFile()" title="CSV/TXT import"><mat-icon>upload_file</mat-icon></button>
+                      }
+                    </div>
+                  }
                 }
                 @case ('file_path') {
                   <div class="param-control file-path-control">
@@ -164,10 +210,6 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                     <button class="browse-btn" (click)="browseFolder(param.name)" title="Mappa tallózása"><mat-icon>folder_open</mat-icon></button>
                   </div>
                 }
-              }
-
-              @if (param.description) {
-                <div class="param-hint">{{ param.description }}</div>
               }
             </div>
             }
@@ -258,11 +300,10 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
           </div>
         }
 
-        @if (hasSideOutputs()) {
-          <!-- User-friendly results -->
-          @if (hasUserFriendlyResults()) {
-            <div class="user-results-section">
-              <div class="section-label">Eredmények</div>
+        <!-- User-friendly results -->
+        @if (hasUserFriendlyResults()) {
+          <div class="user-results-section">
+            <div class="section-label">Eredmények</div>
 
               @if (step?.step_def_id === 'load_image') {
                 <div class="user-result-item">
@@ -349,20 +390,23 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                   }
                 }
               }
-            </div>
-          }
+          </div>
+        }
 
-          <!-- Developer results (collapsible) -->
-          <div class="side-outputs-section">
-            <div class="dev-results-header" (click)="devResultsExpanded = !devResultsExpanded">
-              <mat-icon class="expand-icon" [class.expanded]="devResultsExpanded">chevron_right</mat-icon>
-              <span class="section-label">Fejlesztői eredmények</span>
-              <button class="copy-all-btn" (click)="copyAllResults($event)" title="Összes másolása">
-                <mat-icon>content_copy</mat-icon>
-              </button>
-            </div>
-            @if (devResultsExpanded) {
-              <div class="dev-results-body">
+        <!-- Developer results (collapsible) -->
+        <div class="side-outputs-section">
+          <div class="dev-results-header" (click)="devResultsExpanded = !devResultsExpanded">
+            <mat-icon class="expand-icon" [class.expanded]="devResultsExpanded">chevron_right</mat-icon>
+            <span class="section-label">Fejlesztői eredmények</span>
+            <button class="copy-all-btn" (click)="copyAllResults($event)" title="Összes másolása">
+              <mat-icon>content_copy</mat-icon>
+            </button>
+          </div>
+          @if (devResultsExpanded) {
+            <div class="dev-results-body">
+              @if (!hasSideOutputs()) {
+                <div class="dev-empty">Nincsenek még fejlesztői eredmények.</div>
+              } @else {
                 @for (key of sideOutputKeys(); track key) {
                   <div class="side-output-item">
                     <span class="side-key">{{ key }}:</span>
@@ -372,10 +416,10 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                     </button>
                   </div>
                 }
-              </div>
-            }
-          </div>
-        }
+              }
+            </div>
+          }
+        </div>
 
         @if (copyNotification) {
           <div class="copy-toast">{{ copyNotification }}</div>
@@ -384,67 +428,183 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     </div>
   `,
   styles: [`
-    :host { display: block; height: 100%; overflow-y: auto; }
-    .inspector-wrapper { padding: 12px; }
-    .no-selection { color: #666; font-size: 12px; text-align: center; padding: 40px 16px; }
-
-    .step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    .step-icon { font-size: 18px; width: 18px; height: 18px; color: #9fb3c8; }
-    .step-name { font-size: 14px; font-weight: 600; color: #e0e0e0; }
-    .step-desc { font-size: 12px; line-height: 1.45; color: #a4a4a4; margin: 0 0 12px; }
-
-    .error-list { margin-bottom: 12px; }
-    .error-item {
-      font-size: 11px; color: #ef4444; padding: 4px 8px;
-      background: rgba(239,68,68,0.1); border-radius: 4px; margin-bottom: 4px;
+    :host {
+      display: block;
+      height: 100%;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #444 #1a1a1a;
+    }
+    :host::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    :host::-webkit-scrollbar-track {
+      background: #1a1a1a;
+      border-radius: 8px;
+    }
+    :host::-webkit-scrollbar-thumb {
+      background: #444;
+      border-radius: 8px;
+      border: 2px solid #1a1a1a;
+    }
+    :host::-webkit-scrollbar-thumb:hover {
+      background: #5a5a5a;
     }
 
-    .params-section { display: flex; flex-direction: column; gap: 12px; }
+    .inspector-wrapper {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .no-selection {
+      color: #7a7a7a;
+      font-size: 12px;
+      text-align: center;
+      padding: 40px 16px;
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: linear-gradient(180deg, #2d3136 0%, #26292d 100%);
+      border: 1px solid #3d434c;
+      border-radius: 10px;
+    }
+    .step-icon {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+      color: #b7c9dc;
+    }
+    .step-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #eef2f7;
+      line-height: 1.2;
+    }
+
+    .error-list { display: flex; flex-direction: column; gap: 6px; }
+    .error-item {
+      font-size: 11px;
+      color: #f87171;
+      padding: 8px 10px;
+      background: rgba(127, 29, 29, 0.28);
+      border: 1px solid rgba(248, 113, 113, 0.22);
+      border-radius: 8px;
+    }
+
+    .params-section { display: flex; flex-direction: column; gap: 10px; }
 
     .roi-shape-selector {
-      display: flex; gap: 4px; margin-bottom: 4px;
+      display: flex;
+      gap: 6px;
     }
     .roi-shape-btn {
-      flex: 1; display: flex; align-items: center; justify-content: center;
-      padding: 8px; background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
-      color: #888; cursor: pointer; transition: all 0.15s;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 8px;
+      background: #23262a;
+      border: 1px solid #42474f;
+      border-radius: 8px;
+      color: #9099a5;
+      cursor: pointer;
+      transition: all 0.15s;
     }
     .roi-shape-btn:hover { background: #333; color: #ccc; border-color: #555; }
     .roi-shape-btn.active { background: #224477; border-color: #3b82f6; color: #fff; }
     .roi-empty-warning {
-      font-size: 12px; color: #ef4444; padding: 6px 10px;
+      font-size: 12px; color: #ef4444; padding: 8px 10px;
       background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
-      border-radius: 4px; text-align: center;
+      border-radius: 8px; text-align: center;
     }
-    .param-row { display: flex; flex-direction: column; gap: 4px; }
+    .param-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      background: linear-gradient(180deg, #26282c 0%, #232427 100%);
+      border: 1px solid #373c42;
+      border-radius: 10px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    }
     .param-label {
-      font-size: 12px; font-weight: 600; color: #b3b3b3;
-      text-transform: uppercase; letter-spacing: 0.03em;
+      font-size: 11px;
+      font-weight: 600;
+      color: #c2c9d3;
+      letter-spacing: 0.03em;
+      line-height: 1.25;
     }
     .param-control { width: 100%; }
-    .slider-control { display: flex; align-items: center; gap: 8px; }
+    .slider-control { display: flex; align-items: center; gap: 10px; }
     .slider-control input[type="range"] { flex: 1; accent-color: #224477; }
 
     .slider-number {
-      width: 86px; padding: 4px 6px;
-      background: #2a2a2a; border: 1px solid #444; border-radius: 4px;
-      color: #e0e0e0; font-size: 13px;
+      width: 86px;
+      min-height: 36px;
+      padding: 7px 9px;
+      background: #1e2023;
+      border: 1px solid #474b52;
+      border-radius: 8px;
+      color: #e6e6e6;
+      font-size: 13px;
+      box-sizing: border-box;
     }
 
     .param-control input[type="text"], .param-control select {
-      width: 100%; padding: 4px 8px;
-      background: #2a2a2a; border: 1px solid #444; border-radius: 4px;
-      color: #e0e0e0; font-size: 13px; box-sizing: border-box;
+      width: 100%;
+      min-height: 36px;
+      padding: 7px 10px;
+      background: #1e2023;
+      border: 1px solid #474b52;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 13px;
+      box-sizing: border-box;
     }
     .param-control select { cursor: pointer; }
-    .toggle-wrap { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-    .toggle-label { font-size: 13px; color: #ccc; }
-    .param-hint { font-size: 11px; line-height: 1.35; color: #8f8f8f; }
+    .toggle-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      min-height: 36px;
+      padding: 0 2px;
+    }
+    .toggle-label { font-size: 13px; color: #d3d8de; font-weight: 600; }
 
-    .side-outputs-section { margin-top: 20px; padding-top: 12px; border-top: 1px solid #333; }
+    .aggregation-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 8px;
+      background: #1f2226;
+      border: 1px solid #353a40;
+      border-radius: 8px;
+    }
+
+    .aggregation-method-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .side-outputs-section,
+    .user-results-section {
+      padding: 12px;
+      background: linear-gradient(180deg, #222427 0%, #1f2023 100%);
+      border: 1px solid #32363b;
+      border-radius: 10px;
+    }
 
     .section-label {
-      font-size: 11px; font-weight: 600; color: #999;
+      font-size: 11px; font-weight: 600; color: #9ba6b2;
       text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;
     }
 
@@ -459,6 +619,11 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     .expand-icon { font-size: 18px; width: 18px; height: 18px; color: #888; transition: transform 0.15s ease; }
     .expand-icon.expanded { transform: rotate(90deg); }
     .dev-results-body { margin-top: 8px; }
+    .dev-empty {
+      color: #8a8f97;
+      font-size: 12px;
+      padding: 6px 2px;
+    }
 
     /* Copy buttons */
     .copy-all-btn, .copy-row-btn {
@@ -479,10 +644,6 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
       background: #333; color: #e0e0e0; padding: 6px 16px; border-radius: 6px;
       font-size: 12px; z-index: 9999; pointer-events: none;
-    }
-
-    .user-results-section {
-      margin-top: 20px; padding-top: 12px; border-top: 1px solid #333;
     }
 
     .user-result-item { display: flex; gap: 6px; font-size: 12px; margin-bottom: 4px; }
@@ -546,18 +707,24 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     .browse-btn mat-icon { font-size: 16px; width: 16px; height: 16px; }
     .browse-btn:hover { background: #444; border-color: #3b82f6; }
 
-    .group-colors-section { margin-top: 8px; padding: 8px; border: 1px solid #333; border-radius: 4px; background: #1e1e1e; }
+    .group-colors-section {
+      margin-top: 2px;
+      padding: 10px;
+      border: 1px solid #363b42;
+      border-radius: 10px;
+      background: #202226;
+    }
     .group-color-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
     .group-color-label { color: #bbb; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .group-color-picker { width: 28px; height: 22px; border: 1px solid #555; border-radius: 4px; padding: 0; background: transparent; cursor: pointer; }
 
     .generator-group {
-      margin-top: 8px;
-      padding: 8px;
-      border: 1px solid #4b5360;
-      border-radius: 4px;
-      background: #2a3038;
+      margin-top: 2px;
+      padding: 10px;
+      border: 1px solid #46505d;
+      border-radius: 10px;
+      background: linear-gradient(180deg, #2b3138 0%, #262b32 100%);
     }
 
     .generator-group-title {
@@ -592,11 +759,12 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     .gen-input {
       width: 100%;
       min-width: 0;
-      padding: 4px 6px;
+      min-height: 36px;
+      padding: 7px 9px;
       box-sizing: border-box;
-      background: #353c46;
-      border: 1px solid #5b6675;
-      border-radius: 4px;
+      background: #1f2328;
+      border: 1px solid #596474;
+      border-radius: 8px;
       color: #e0e0e0;
       font-size: 13px;
     }
@@ -750,7 +918,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
           this.step = pipeline.steps[idx];
           this.definition = this.pipelineState.getStepDefinition(this.step.step_def_id);
           this.stepErrors = errors.filter((e) => e.step_index === idx);
-          this.sideOutputs = sideOutputs ?? {};
+          // Clear results if this step has validation errors
+          this.sideOutputs = this.stepErrors.length > 0 ? {} : (sideOutputs ?? {});
+          this.syncFitCurveDefaultsFromContext();
           // Populate loaded image names from side outputs
           const paths: string[] = sideOutputs?.['loaded_paths'] ?? [];
           if (paths.length > 0 && paths.length !== this.loadedImageNames.length) {
@@ -808,6 +978,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (this.step?.step_def_id === 'resize_images' && param.name === 'scale') {
       return 1;
     }
+    if (this.step?.step_def_id === 'characterize_particles' && (param.name === 'filter_min_area' || param.name === 'filter_max_area')) {
+      return 50000;
+    }
     // ROI sliders: max based on actual image dimensions
     if (this.step?.step_def_id === 'mask_rect_roi' && this.imgDimsW > 0 && this.imgDimsH > 0) {
       if (param.name === 'roi_x' || param.name === 'roi_width' || param.name === 'roi_cx' || param.name === 'roi_rx') {
@@ -841,6 +1014,15 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
     // Mutual exclusivity: aggregate vs merge_ab_pairs
     if (this.step.step_def_id === 'fit_curve') {
+      if (paramName === 'y_name') {
+        const oldY = String(this.step.param_values?.['y_name'] ?? '');
+        const oldLabel = String(this.step.param_values?.['y_label'] ?? '').trim();
+        const suggestedOld = this.makeAxisLabel(oldY);
+        const shouldSyncLabel = !oldLabel || oldLabel === oldY || oldLabel === suggestedOld;
+        if (shouldSyncLabel) {
+          updated['y_label'] = this.makeAxisLabel(String(value ?? ''));
+        }
+      }
       if (paramName === 'aggregate' && value) {
         updated['merge_ab_pairs'] = false;
       } else if (paramName === 'merge_ab_pairs' && value) {
@@ -965,6 +1147,37 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return this.definition?.params.find(p => p.name === name);
   }
 
+  shouldHideParam(param: ParamSchema): boolean {
+    if (this.step?.step_def_id !== 'fit_curve') return false;
+    if (param.name === 'x_name') return true;
+    if (param.name === 'agg_method') return true;
+    if (param.name === 'degree' && this.getParamValue('model') !== 'poly') return true;
+    return false;
+  }
+
+  getDisplayParamLabel(param: ParamSchema): string {
+    if (this.step?.step_def_id !== 'fit_curve') return param.label;
+    if (param.name === 'y_name') return 'Y tengely értékei';
+    if (param.name === 'y_label') return 'Y tengely neve';
+    if (param.name === 'model') return 'Illesztett görbe';
+    if (param.name === 'aggregate') return 'Szintenkénti összevonás';
+    if (param.name === 'merge_ab_pairs') return 'Tablettaoldalak összevonása';
+    return param.label;
+  }
+
+  isFitCurveAggregateParam(paramName: string): boolean {
+    return this.step?.step_def_id === 'fit_curve' && paramName === 'aggregate';
+  }
+
+  isFitCurveYAxisParam(paramName: string): boolean {
+    return this.step?.step_def_id === 'fit_curve' && paramName === 'y_name';
+  }
+
+  getFitCurveAggMethodOptions(): string[] {
+    const param = this.getParamByName('agg_method');
+    return param?.options ?? ['mean', 'median'];
+  }
+
   isBoolParamDisabled(paramName: string): boolean {
     if (this.step?.step_def_id !== 'fit_curve') return false;
     if (paramName === 'aggregate') return !!this.getParamValue('merge_ab_pairs');
@@ -1062,19 +1275,63 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     const idx = Math.min(this.previewImageIndex, stats.length - 1);
     const s = stats[idx];
     if (!s || typeof s !== 'object') return [];
-    const labels: Record<string, string> = {
-      min: 'Min', max: 'Max', mean: 'Átlag', median: 'Medián',
-      std: 'Szórás', pixel_count: 'Pixelszám',
-      p5: 'P5', p25: 'P25', p50: 'P50', p75: 'P75', p95: 'P95',
+    const values = s as Record<string, any>;
+    const entries: { key: string; label: string; value: string }[] = [];
+    const baseOrder = ['min', 'max', 'mean', 'median', 'std', 'pixel_count'];
+    const baseLabels: Record<string, string> = {
+      min: 'Min',
+      max: 'Max',
+      mean: 'Átlag',
+      median: 'Medián',
+      std: 'Szórás',
+      pixel_count: 'Pixelszám',
       dynamic_range: 'Dinamikus tart.',
     };
-    return Object.keys(labels)
-      .filter((k) => s[k] != null)
-      .map((k) => ({
-        key: k,
-        label: labels[k],
-        value: k === 'pixel_count' ? String(s[k]) : Number(s[k]).toFixed(2),
-      }));
+
+    for (const key of baseOrder) {
+      const v = values[key];
+      if (v == null) continue;
+      entries.push({
+        key,
+        label: baseLabels[key] ?? key,
+        value: key === 'pixel_count' ? String(v) : Number(v).toFixed(2),
+      });
+    }
+
+    const percentileKeys = Object.keys(values)
+      .filter((k) => /^p\d+(?:\.\d+)?$/i.test(k) && values[k] != null)
+      .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+
+    for (const key of percentileKeys) {
+      entries.push({
+        key,
+        label: key.toUpperCase(),
+        value: Number(values[key]).toFixed(2),
+      });
+    }
+
+    if (values['dynamic_range'] != null) {
+      entries.push({
+        key: 'dynamic_range',
+        label: baseLabels['dynamic_range'],
+        value: Number(values['dynamic_range']).toFixed(2),
+      });
+    }
+
+    const known = new Set([...baseOrder, ...percentileKeys, 'dynamic_range']);
+    const otherNumeric = Object.keys(values)
+      .filter((k) => !known.has(k) && typeof values[k] === 'number')
+      .sort();
+
+    for (const key of otherNumeric) {
+      entries.push({
+        key,
+        label: key.replace(/_/g, ' '),
+        value: Number(values[key]).toFixed(2),
+      });
+    }
+
+    return entries;
   }
 
   getLatestCurveFit(): CurveFitData | null {
@@ -1138,7 +1395,73 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       const space = this.getParamValue('space') ?? 'GRAY';
       return this.CHANNEL_MAP[space] ?? param.options ?? [];
     }
+    if (this.step?.step_def_id === 'fit_curve' && param.name === 'y_name') {
+      return this.getFitCurveYOptions(param.options ?? []);
+    }
     return param.options ?? [];
+  }
+
+  getFitCurveYOptions(defaultOptions: string[] = []): string[] {
+    const options: string[] = [];
+    const seen = new Set<string>();
+    const add = (key: string) => {
+      const k = String(key ?? '').trim();
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      options.push(k);
+    };
+
+    for (const opt of defaultOptions) add(opt);
+
+    const addNumericKeysFromSeries = (series: any) => {
+      if (!Array.isArray(series) || series.length === 0) return;
+      const sample = series.find((v) => v && typeof v === 'object' && !Array.isArray(v));
+      if (!sample || typeof sample !== 'object') return;
+      for (const [k, v] of Object.entries(sample)) {
+        if (typeof v === 'number') add(k);
+      }
+    };
+
+    addNumericKeysFromSeries(this.sideOutputs['intensity_stats']);
+    for (const [, value] of Object.entries(this.sideOutputs ?? {})) {
+      addNumericKeysFromSeries(value);
+    }
+
+    const current = String(this.getParamValue('y_name') ?? '').trim();
+    if (current) add(current);
+
+    return options;
+  }
+
+  private makeAxisLabel(key: string): string {
+    const trimmed = String(key ?? '').trim();
+    if (!trimmed) return '';
+    return trimmed
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private syncFitCurveDefaultsFromContext(): void {
+    if (!this.step || this.step.step_def_id !== 'fit_curve') return;
+
+    const currentY = String(this.step.param_values?.['y_name'] ?? '').trim();
+    const yOptions = this.getFitCurveYOptions(this.getParamByName('y_name')?.options ?? []);
+    const nextY = yOptions.includes(currentY) ? currentY : (yOptions[0] ?? currentY ?? '');
+
+    const currentLabel = String(this.step.param_values?.['y_label'] ?? '').trim();
+    const oldSuggested = this.makeAxisLabel(currentY);
+    const shouldSyncLabel = !currentLabel || currentLabel === currentY || currentLabel === oldSuggested;
+    const nextLabel = shouldSyncLabel ? this.makeAxisLabel(nextY) : currentLabel;
+
+    if ((nextY && nextY !== currentY) || nextLabel !== currentLabel) {
+      const updated = {
+        ...this.step.param_values,
+        y_name: nextY || currentY || 'mean',
+        y_label: nextLabel || this.makeAxisLabel(nextY || currentY || 'mean'),
+      };
+      this.pipelineState.updateParams(this.selectedIndex, updated);
+    }
   }
 
   private normalizeColorMap(map: Record<string, string>): Record<string, string> {
@@ -1281,6 +1604,23 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   // --- Run curve fit manually ---
 
   runCurveFit(): void {
+    const previousFits = this.sideOutputs['curve_fits'];
+    const previousFitCount = Array.isArray(previousFits) ? previousFits.length : 0;
+
+    const sub = this.pipelineState.sideOutputs$.subscribe((so) => {
+      const fits = so?.['curve_fits'];
+      if (!Array.isArray(fits) || fits.length === 0) return;
+      const latest = fits[fits.length - 1] as CurveFitData;
+      if (!latest) return;
+      if (fits.length <= previousFitCount) return;
+      this.maximizeChart(latest);
+      sub.unsubscribe();
+    });
+
     this.pipelineState.requestPreview(true);
+
+    setTimeout(() => {
+      sub.unsubscribe();
+    }, 12000);
   }
 }

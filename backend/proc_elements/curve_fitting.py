@@ -33,7 +33,68 @@ def _lookup_group_color(colors_map, x_raw, x_float):
     return None
 
 
-def fit_curve(data, x_name, y_name, model="linear", degree=2, aggregate=False, agg_method="mean", merge_ab_pairs=False, debug=False):
+def _is_numeric(value):
+    return isinstance(value, (int, float, np.integer, np.floating))
+
+
+def _extract_y_records(results, y_name, expected_len):
+    """
+    Resolve Y values from result collections.
+
+    Preferred order:
+      1. intensity_stats (backward compatible)
+      2. any list[dict] result with a numeric y_name field and matching length
+    """
+    stats = results.get("intensity_stats")
+    if isinstance(stats, list) and len(stats) == expected_len:
+        if all((s is None or (isinstance(s, dict) and y_name in s)) for s in stats):
+            out = []
+            for s in stats:
+                if s is None:
+                    out.append(None)
+                    continue
+                v = s.get(y_name)
+                if v is None:
+                    out.append(None)
+                    continue
+                try:
+                    out.append(float(v))
+                except Exception:
+                    return None, None
+            return out, "intensity_stats"
+
+    for source_key, source_val in results.items():
+        if source_key == "intensity_stats":
+            continue
+        if not isinstance(source_val, list) or len(source_val) != expected_len:
+            continue
+        first = next((item for item in source_val if item is not None), None)
+        if not isinstance(first, dict) or y_name not in first:
+            continue
+        if not _is_numeric(first.get(y_name)):
+            continue
+
+        out = []
+        valid = True
+        for item in source_val:
+            if item is None:
+                out.append(None)
+                continue
+            if not isinstance(item, dict) or y_name not in item:
+                valid = False
+                break
+            val = item.get(y_name)
+            if not _is_numeric(val):
+                valid = False
+                break
+            out.append(float(val))
+        if valid:
+            return out, source_key
+
+    return None, None
+
+
+def fit_curve(data, x_name, y_name, model="linear", degree=2, aggregate=False, agg_method="mean", merge_ab_pairs=False, y_display_name=None, debug=False):
 
     if data["error"] is not None:
         return data
@@ -46,18 +107,17 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, aggregate=False, a
         data["error"] = "E2702"
         return data
 
-    if "intensity_stats" not in data["results"]:
-        data["error"] = "E2703"
-        return data
-
     if agg_method not in ("mean", "median"):
         data["error"] = "E2712"
         return data
 
     x_values = data["results"][x_name]
-    stats = data["results"]["intensity_stats"]
+    y_values_raw, y_source_key = _extract_y_records(data["results"], y_name, len(x_values))
+    if y_values_raw is None:
+        data["error"] = "E2703"
+        return data
 
-    if len(x_values) != len(stats):
+    if len(x_values) != len(y_values_raw):
         data["error"] = "E2704"
         return data
 
@@ -72,19 +132,15 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, aggregate=False, a
     all_y = []
     all_colors = []
 
-    for idx, (x_val, stat) in enumerate(zip(x_values, stats)):
-        if stat is None:
+    for idx, (x_val, y_val) in enumerate(zip(x_values, y_values_raw)):
+        if y_val is None:
             continue
-
-        if y_name not in stat:
-            data["error"] = "E2705"
-            return data
 
         xf = _safe_float(x_val)
         if xf is None:
             data["error"] = "E2713"
             return data
-        yf = float(stat[y_name])
+        yf = float(y_val)
         group_color = _lookup_group_color(colors_map, x_val, xf)
         sample_path = paths[idx] if idx < len(paths) else str(idx)
         sample_key = _parse_sample_key_from_path(sample_path)
@@ -225,9 +281,15 @@ def fit_curve(data, x_name, y_name, model="linear", degree=2, aggregate=False, a
         "input_count": int(len(records)),
     }
 
+    y_axis_name = str(y_display_name).strip() if isinstance(y_display_name, str) else ""
+    if not y_axis_name:
+        y_axis_name = str(y_name)
+
     fit_result = {
         "x_name": x_name,
-        "y_name": y_name,
+        "y_name": y_axis_name,
+        "y_key": y_name,
+        "y_source": y_source_key,
         "model": model,
         "degree": degree if model == "poly" else 1,
         "coefficients": coeffs.tolist(),
