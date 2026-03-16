@@ -28,7 +28,7 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
         <div class="no-selection">Válasszon egy lépést a szerkesztéshez</div>
       } @else {
         <div class="step-header">
-          <span class="step-icon">{{ definition.icon }}</span>
+          <mat-icon class="step-icon">{{ definition.icon }}</mat-icon>
           <span class="step-name">{{ definition.name }}</span>
         </div>
         <p class="step-desc">{{ definition.description }}</p>
@@ -389,9 +389,9 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     .no-selection { color: #666; font-size: 12px; text-align: center; padding: 40px 16px; }
 
     .step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-    .step-icon { font-size: 18px; }
+    .step-icon { font-size: 18px; width: 18px; height: 18px; color: #9fb3c8; }
     .step-name { font-size: 14px; font-weight: 600; color: #e0e0e0; }
-    .step-desc { font-size: 11px; color: #888; margin: 0 0 12px; }
+    .step-desc { font-size: 12px; line-height: 1.45; color: #a4a4a4; margin: 0 0 12px; }
 
     .error-list { margin-bottom: 12px; }
     .error-item {
@@ -418,28 +418,28 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     }
     .param-row { display: flex; flex-direction: column; gap: 4px; }
     .param-label {
-      font-size: 11px; font-weight: 600; color: #aaa;
+      font-size: 12px; font-weight: 600; color: #b3b3b3;
       text-transform: uppercase; letter-spacing: 0.03em;
     }
     .param-control { width: 100%; }
     .slider-control { display: flex; align-items: center; gap: 8px; }
-    .slider-control input[type="range"] { flex: 1; accent-color: #3b82f6; }
+    .slider-control input[type="range"] { flex: 1; accent-color: #224477; }
 
     .slider-number {
       width: 86px; padding: 4px 6px;
       background: #2a2a2a; border: 1px solid #444; border-radius: 4px;
-      color: #e0e0e0; font-size: 12px;
+      color: #e0e0e0; font-size: 13px;
     }
 
     .param-control input[type="text"], .param-control select {
       width: 100%; padding: 4px 8px;
       background: #2a2a2a; border: 1px solid #444; border-radius: 4px;
-      color: #e0e0e0; font-size: 12px; box-sizing: border-box;
+      color: #e0e0e0; font-size: 13px; box-sizing: border-box;
     }
     .param-control select { cursor: pointer; }
     .toggle-wrap { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-    .toggle-label { font-size: 12px; color: #ccc; }
-    .param-hint { font-size: 10px; color: #666; }
+    .toggle-label { font-size: 13px; color: #ccc; }
+    .param-hint { font-size: 11px; line-height: 1.35; color: #8f8f8f; }
 
     .side-outputs-section { margin-top: 20px; padding-top: 12px; border-top: 1px solid #333; }
 
@@ -555,15 +555,15 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     .generator-group {
       margin-top: 8px;
       padding: 8px;
-      border: 1px solid #333;
+      border: 1px solid #4b5360;
       border-radius: 4px;
-      background: #1e1e1e;
+      background: #2a3038;
     }
 
     .generator-group-title {
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
-      color: #999;
+      color: #d0d8e2;
       text-transform: uppercase;
       letter-spacing: 0.03em;
       margin-bottom: 6px;
@@ -577,25 +577,28 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     }
 
     .gen-field {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
       align-items: center;
       gap: 8px;
     }
 
     .gen-label {
-      font-size: 11px;
-      color: #aaa;
-      min-width: 80px;
+      font-size: 12px;
+      color: #c7cfda;
+      min-width: 0;
     }
 
     .gen-input {
-      flex: 1;
+      width: 100%;
+      min-width: 0;
       padding: 4px 6px;
-      background: #2a2a2a;
-      border: 1px solid #444;
+      box-sizing: border-box;
+      background: #353c46;
+      border: 1px solid #5b6675;
       border-radius: 4px;
       color: #e0e0e0;
-      font-size: 12px;
+      font-size: 13px;
     }
 
     /* Image manager button */
