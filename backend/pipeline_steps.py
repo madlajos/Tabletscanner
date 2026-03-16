@@ -35,7 +35,7 @@ from proc_elements import (
     flat_field_correction as _pe_flat_field_correction,
     robust_stretch_gamma as _pe_robust_stretch_gamma,
     advanced_illumin_corr as _pe_advanced_illumin_corr,
-    mask_rect_roi as _pe_mask_rect_roi,
+    mask_roi as _pe_mask_roi,
     resize_images as _pe_resize_images,
 )
 
@@ -784,47 +784,87 @@ _register(_advanced_illum_def, _exec_advanced_illum)
 
 
 # ---------------------------------------------------------------------------
-# 19. Mask Rect ROI  (draw_roi.py)
+# 19. ROI Mask  (draw_roi.py)
 # ---------------------------------------------------------------------------
 _mask_roi_def = StepDefinition(
     id="mask_rect_roi",
-    name="Téglalap ROI maszk",
+    name="ROI beállítása",
     category="filter",
-    description="Téglalap alakú érdeklődési terület (ROI) maszkolás. A területen kívüli pixelek a háttérszínnel töltődnek.",
+    description="Érdeklődési terület (ROI) beállítása és maszkolás. Téglalap, ellipszis vagy sokszög alakú ROI alkalmazható.",
     icon="crop",
     input_type=DataType.IMAGE,
     output_type=DataType.IMAGE,
     params=[
+        ParamSchema(name="roi_type", label="ROI típusa", type="enum",
+                    default="rect", options=["rect", "ellipse", "polygon"]),
+        # Rectangle params
         ParamSchema(name="roi_x", label="X kezdőpont", type="int",
                     default=0, min=0, max=100000, step=1),
         ParamSchema(name="roi_y", label="Y kezdőpont", type="int",
                     default=0, min=0, max=100000, step=1),
         ParamSchema(name="roi_width", label="Szélesség", type="int",
-                    default=100, min=1, max=100000, step=1),
+                    default=0, min=0, max=100000, step=1),
         ParamSchema(name="roi_height", label="Magasság", type="int",
-                    default=100, min=1, max=100000, step=1),
-        ParamSchema(name="background_color", label="Háttérszín", type="int",
-                    default=0, min=0, max=255, step=1),
-        ParamSchema(name="keep_outside", label="Külső megtartása", type="bool",
-                    default=False,
-                    description="True: a ROI-n kívüli rész marad; False: a ROI-n belüli rész marad"),
+                    default=0, min=0, max=100000, step=1),
+        # Ellipse params
+        ParamSchema(name="roi_cx", label="Közép X", type="int",
+                    default=0, min=0, max=100000, step=1),
+        ParamSchema(name="roi_cy", label="Közép Y", type="int",
+                    default=0, min=0, max=100000, step=1),
+        ParamSchema(name="roi_rx", label="Sugár X", type="int",
+                    default=0, min=0, max=100000, step=1),
+        ParamSchema(name="roi_ry", label="Sugár Y", type="int",
+                    default=0, min=0, max=100000, step=1),
+        # Polygon params (JSON string of [{x,y}, ...])
+        ParamSchema(name="roi_points", label="Pontok (JSON)", type="string",
+                    default="[]"),
     ],
     side_output_types={"roi_masks": "MASK"},
 )
 
 
 def _exec_mask_roi(data: dict, params: dict) -> dict:
-    roi = {
-        "type": "rect",
-        "x": int(params.get("roi_x", 0)),
-        "y": int(params.get("roi_y", 0)),
-        "width": int(params.get("roi_width", 100)),
-        "height": int(params.get("roi_height", 100)),
-    }
-    background_color = int(params.get("background_color", 0))
-    keep_outside = bool(params.get("keep_outside", False))
-    return _pe_mask_rect_roi(data, roi=roi, background_color=background_color,
-                             keep_outside=keep_outside)
+    import json as _json
+    roi_type = params.get("roi_type", "rect")
+
+    if roi_type == "rect":
+        w = int(params.get("roi_width", 0))
+        h = int(params.get("roi_height", 0))
+        if w <= 0 or h <= 0:
+            return data  # No ROI defined
+        roi = {
+            "type": "rect",
+            "x": int(params.get("roi_x", 0)),
+            "y": int(params.get("roi_y", 0)),
+            "width": w,
+            "height": h,
+        }
+    elif roi_type == "ellipse":
+        rx = int(params.get("roi_rx", 0))
+        ry = int(params.get("roi_ry", 0))
+        if rx <= 0 or ry <= 0:
+            return data  # No ROI defined
+        roi = {
+            "type": "ellipse",
+            "cx": int(params.get("roi_cx", 0)),
+            "cy": int(params.get("roi_cy", 0)),
+            "rx": rx,
+            "ry": ry,
+        }
+    else:
+        pts_raw = params.get("roi_points", "[]")
+        try:
+            pts = _json.loads(pts_raw) if isinstance(pts_raw, str) else pts_raw
+        except Exception:
+            pts = []
+        if not pts or len(pts) < 3:
+            return data  # No ROI defined
+        roi = {
+            "type": "polygon",
+            "points": [{'x': int(p.get('x', 0)), 'y': int(p.get('y', 0))} for p in pts],
+        }
+
+    return _pe_mask_roi(data, roi=roi)
 
 
 _register(_mask_roi_def, _exec_mask_roi)

@@ -29,5 +29,5 @@ from proc_elements.gamma_corr import gamma_correction
 from proc_elements.flat_field_corr import flat_field_correction
 from proc_elements.robust_stretch import robust_stretch_gamma
 from proc_elements.advanced_ill_corr import advanced_illumin_corr
-from proc_elements.draw_roi import mask_rect_roi
+from proc_elements.draw_roi import mask_roi, mask_rect_roi
 from proc_elements.resize_img import resize_images

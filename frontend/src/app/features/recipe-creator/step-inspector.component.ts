@@ -42,6 +42,28 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
         }
 
         <div class="params-section">
+          @if (isRoiStep()) {
+            <div class="roi-shape-selector">
+              <button class="roi-shape-btn" [class.active]="getParamValue('roi_type') === 'rect'" (click)="onParamChange('roi_type', 'rect')" title="Téglalap">
+                <svg viewBox="0 0 24 24" width="20" height="20">
+                  <rect x="3" y="5" width="18" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2" rx="1"/>
+                </svg>
+              </button>
+              <button class="roi-shape-btn" [class.active]="getParamValue('roi_type') === 'ellipse'" (click)="onParamChange('roi_type', 'ellipse')" title="Ellipszis">
+                <svg viewBox="0 0 24 24" width="20" height="20">
+                  <ellipse cx="12" cy="12" rx="10" ry="7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>
+                </svg>
+              </button>
+              <button class="roi-shape-btn" [class.active]="getParamValue('roi_type') === 'polygon'" (click)="onParamChange('roi_type', 'polygon')" title="Sokszög">
+                <svg viewBox="0 0 24 24" width="20" height="20">
+                  <polygon points="12,2 22,8 19,20 5,20 2,8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>
+                </svg>
+              </button>
+            </div>
+            @if (isRoiEmpty()) {
+              <div class="roi-empty-warning">⚠ Nincs kijelölt ROI terület</div>
+            }
+          }
           @for (param of getVisibleParams(); track param.name) {
             @if (param.name !== 'file_order' && param.name !== 'group_colors') {
             <div class="param-row">
@@ -378,6 +400,22 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     }
 
     .params-section { display: flex; flex-direction: column; gap: 12px; }
+
+    .roi-shape-selector {
+      display: flex; gap: 4px; margin-bottom: 4px;
+    }
+    .roi-shape-btn {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      padding: 8px; background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      color: #888; cursor: pointer; transition: all 0.15s;
+    }
+    .roi-shape-btn:hover { background: #333; color: #ccc; border-color: #555; }
+    .roi-shape-btn.active { background: #224477; border-color: #3b82f6; color: #fff; }
+    .roi-empty-warning {
+      font-size: 12px; color: #ef4444; padding: 6px 10px;
+      background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 4px; text-align: center;
+    }
     .param-row { display: flex; flex-direction: column; gap: 4px; }
     .param-label {
       font-size: 11px; font-weight: 600; color: #aaa;
@@ -671,6 +709,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   // Preview loading state (to disable run button)
   previewLoading = false;
 
+  // Image dimensions for ROI slider limits
+  private imgDimsW = 0;
+  private imgDimsH = 0;
+
   // Reference groups and colors (add_sequence_values)
   referenceGroups: Array<{ key: string; label: string; color: string }> = [];
 
@@ -737,6 +779,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       this.pipelineState.previewLoading$.subscribe((l) => {
         this.previewLoading = l;
       }),
+      this.pipelineState.imageDims$.subscribe((dims) => {
+        this.imgDimsW = dims.w;
+        this.imgDimsH = dims.h;
+      }),
     );
   }
 
@@ -758,6 +804,15 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   getSliderMax(param: ParamSchema): number {
     if (this.step?.step_def_id === 'resize_images' && param.name === 'scale') {
       return 1;
+    }
+    // ROI sliders: max based on actual image dimensions
+    if (this.step?.step_def_id === 'mask_rect_roi' && this.imgDimsW > 0 && this.imgDimsH > 0) {
+      if (param.name === 'roi_x' || param.name === 'roi_width' || param.name === 'roi_cx' || param.name === 'roi_rx') {
+        return this.imgDimsW;
+      }
+      if (param.name === 'roi_y' || param.name === 'roi_height' || param.name === 'roi_cy' || param.name === 'roi_ry') {
+        return this.imgDimsH;
+      }
     }
     return Number(param.max ?? (param.type === 'float' ? 1 : 100));
   }
@@ -843,12 +898,41 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return this.step?.step_def_id === 'add_sequence_values';
   }
 
+  isRoiStep(): boolean {
+    return this.step?.step_def_id === 'mask_rect_roi';
+  }
+
+  isRoiEmpty(): boolean {
+    if (!this.isRoiStep()) return false;
+    const t = this.getParamValue('roi_type') ?? 'rect';
+    if (t === 'rect') {
+      return !(this.getParamValue('roi_width') > 0 && this.getParamValue('roi_height') > 0);
+    }
+    if (t === 'ellipse') {
+      return !(this.getParamValue('roi_rx') > 0 && this.getParamValue('roi_ry') > 0);
+    }
+    if (t === 'polygon') {
+      const raw = this.getParamValue('roi_points') ?? '[]';
+      try {
+        const pts = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return !Array.isArray(pts) || pts.length < 3;
+      } catch {
+        return true;
+      }
+    }
+    return true;
+  }
+
   isReferenceValuesParam(paramName: string): boolean {
     return this.isReferenceStep() && paramName === 'values';
   }
 
   /** Params hidden from the generic loop because they are shown in the generator group */
   private readonly REFERENCE_GENERATOR_PARAMS = new Set(['num_levels', 'start', 'step_val']);
+
+  private readonly ROI_RECT_PARAMS = new Set(['roi_x', 'roi_y', 'roi_width', 'roi_height']);
+  private readonly ROI_ELLIPSE_PARAMS = new Set(['roi_cx', 'roi_cy', 'roi_rx', 'roi_ry']);
+  private readonly ROI_POLYGON_PARAMS = new Set(['roi_points']);
 
   private isReferenceSliderParam(paramName: string): boolean {
     return this.REFERENCE_GENERATOR_PARAMS.has(paramName);
@@ -858,9 +942,20 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   getVisibleParams(): ParamSchema[] {
     if (!this.definition) return [];
     const params = this.definition.params;
-    if (this.step?.step_def_id !== 'add_sequence_values') return params;
-    // For reference step: show name, then values (X értékek), hide generator params (shown in generator group)
-    return params.filter(p => !this.REFERENCE_GENERATOR_PARAMS.has(p.name));
+    if (this.step?.step_def_id === 'add_sequence_values') {
+      return params.filter(p => !this.REFERENCE_GENERATOR_PARAMS.has(p.name));
+    }
+    if (this.step?.step_def_id === 'mask_rect_roi') {
+      const roiType = this.getParamValue('roi_type') ?? 'rect';
+      return params.filter(p => {
+        if (p.name === 'roi_type') return false; // shown as shape buttons
+        if (roiType === 'rect') return !this.ROI_ELLIPSE_PARAMS.has(p.name) && !this.ROI_POLYGON_PARAMS.has(p.name);
+        if (roiType === 'ellipse') return !this.ROI_RECT_PARAMS.has(p.name) && !this.ROI_POLYGON_PARAMS.has(p.name);
+        if (roiType === 'polygon') return !this.ROI_RECT_PARAMS.has(p.name) && !this.ROI_ELLIPSE_PARAMS.has(p.name);
+        return true;
+      });
+    }
+    return params;
   }
 
   getParamByName(name: string): ParamSchema | undefined {

@@ -39,7 +39,7 @@
       "param_values": {
         "high": 255,
         "keep_mode": "inside",
-        "low": 0
+        "low": 50
       },
       "order": 3
     },
@@ -53,7 +53,8 @@
         "start": 0,
         "step_val": 1,
         "stop": 100,
-        "values": "0"
+        "values": "1,2,3,4,5",
+        "group_colors": "{\"1\":\"#60a5fa\",\"2\":\"#34d399\",\"3\":\"#f59e0b\",\"4\":\"#f87171\",\"5\":\"#a78bfa\"}"
       },
       "order": 4
     },
@@ -70,7 +71,7 @@
       "step_def_id": "fit_curve",
       "param_values": {
         "agg_method": "mean",
-        "aggregate": true,
+        "aggregate": false,
         "degree": 2,
         "merge_ab_pairs": false,
         "model": "linear",
@@ -81,5 +82,5 @@
     }
   ],
   "created_at": "2026-03-12T12:24:31.733906+00:00",
-  "modified_at": "2026-03-12T15:58:07.394158+00:00"
+  "modified_at": "2026-03-12T20:22:28.975944+00:00"
 }

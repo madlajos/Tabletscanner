@@ -53,6 +53,10 @@ export class PipelineStateService {
   private imageCountSubject = new BehaviorSubject<number>(0);
   imageCount$ = this.imageCountSubject.asObservable();
 
+  /** Image dimensions from last preview. */
+  private imageDimsSubject = new BehaviorSubject<{ w: number; h: number }>({ w: 0, h: 0 });
+  imageDims$ = this.imageDimsSubject.asObservable();
+
   /** Emitted when pipeline changes (debounced for preview). */
   private pipelineChangedSubject = new Subject<void>();
 
@@ -76,11 +80,14 @@ export class PipelineStateService {
   constructor(private recipeService: RecipeService) {
     // Auto-preview on pipeline change (debounced)
     this.pipelineChangedSubject.pipe(debounceTime(400)).subscribe(() => {
-      // Skip auto-preview for fit_curve (manual play button)
+      // Skip auto-preview for fit_curve and mask_rect_roi (manual play/apply button)
       const idx = this.selectedStepIndexSubject.value;
       const pipeline = this.getPipeline();
-      if (idx >= 0 && idx < pipeline.steps.length && pipeline.steps[idx].step_def_id === 'fit_curve') {
-        return;
+      if (idx >= 0 && idx < pipeline.steps.length) {
+        const defId = pipeline.steps[idx].step_def_id;
+        if (defId === 'fit_curve' || defId === 'mask_rect_roi') {
+          return;
+        }
       }
       this.requestPreview();
     });
@@ -230,8 +237,51 @@ export class PipelineStateService {
   selectStep(index: number): void {
     this.selectedStepIndexSubject.next(index);
     this.previewImageIndexSubject.next(0);
-    // Trigger preview for the newly selected step
-    this.pipelineChangedSubject.next();
+    // For ROI step, preview the previous step to show the input image
+    const pipeline = this.getPipeline();
+    if (index >= 0 && index < pipeline.steps.length &&
+        pipeline.steps[index].step_def_id === 'mask_rect_roi' && index > 0) {
+      this.requestPreviewForStep(index - 1);
+    } else {
+      // Trigger preview for the newly selected step
+      this.pipelineChangedSubject.next();
+    }
+  }
+
+  /** Preview a specific step index (used to show input image for ROI editing). */
+  requestPreviewForStep(stepIndex: number, forceAllImages: boolean = false): void {
+    const pipeline = this.getPipeline();
+    const imageIndex = this.previewImageIndexSubject.value;
+
+    if (pipeline.steps.length === 0 || stepIndex < 0) {
+      this.previewImageSubject.next(null);
+      return;
+    }
+
+    const step = pipeline.steps[stepIndex];
+    const isAggregating = this.AGGREGATING_STEPS.has(step.step_def_id);
+    const singleImageOnly = !forceAllImages && !isAggregating;
+    const omittedArr = Array.from(this.omittedPointsSubject.value.indices);
+
+    this.previewLoadingSubject.next(true);
+    this.recipeService.previewStep(pipeline, stepIndex, imageIndex, singleImageOnly, omittedArr).subscribe({
+      next: (res: PreviewResponse) => {
+        this.previewLoadingSubject.next(false);
+        if (res.success) {
+          this.validationErrorsSubject.next([]);
+          if (res.image_base64) {
+            this.previewImageSubject.next('data:image/jpeg;base64,' + res.image_base64);
+          } else {
+            this.previewImageSubject.next(null);
+          }
+          this.imageCountSubject.next(res.image_count ?? 0);
+          if (res.image_width && res.image_height) {
+            this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
+          }
+        }
+      },
+      error: () => { this.previewLoadingSubject.next(false); },
+    });
   }
 
   // --- Pipeline state helpers ---
@@ -246,6 +296,10 @@ export class PipelineStateService {
 
   getImageCount(): number {
     return this.imageCountSubject.value;
+  }
+
+  getImageDims(): { w: number; h: number } {
+    return this.imageDimsSubject.value;
   }
 
   newPipeline(): void {
@@ -309,6 +363,9 @@ export class PipelineStateService {
           }
           this.sideOutputsSubject.next(res.side_outputs || {});
           this.imageCountSubject.next(res.image_count ?? 0);
+          if (res.image_width && res.image_height) {
+            this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
+          }
         } else {
           this.validationErrorsSubject.next(res.errors || []);
           this.previewImageSubject.next(null);

@@ -1,8 +1,37 @@
 import cv2
 import numpy as np
+import json
 
 
-def mask_rect_roi(
+def _build_mask(roi, H, W):
+    """Build a binary mask (255 inside ROI) for a given roi dict."""
+    roi_type = roi.get("type", "rect")
+    mask = np.zeros((H, W), dtype=np.uint8)
+
+    if roi_type == "rect":
+        x = int(roi["x"])
+        y = int(roi["y"])
+        w = int(roi["width"])
+        h = int(roi["height"])
+        mask[y:y+h, x:x+w] = 255
+
+    elif roi_type == "ellipse":
+        cx = int(roi["cx"])
+        cy = int(roi["cy"])
+        rx = int(roi["rx"])
+        ry = int(roi["ry"])
+        cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+
+    elif roi_type == "polygon":
+        points = roi.get("points", [])
+        if len(points) >= 3:
+            pts = np.array([[int(p["x"]), int(p["y"])] for p in points], dtype=np.int32)
+            cv2.fillPoly(mask, [pts], 255)
+
+    return mask
+
+
+def mask_roi(
     data,
     roi,
     background_color=0,
@@ -17,14 +46,17 @@ def mask_rect_roi(
         data["error"] = "E3521"
         return data
 
-    if roi.get("type") != "rect":
+    roi_type = roi.get("type", "rect")
+    if roi_type not in ("rect", "ellipse", "polygon"):
         data["error"] = "E3522"
         return data
 
-    x = int(roi["x"])
-    y = int(roi["y"])
-    w = int(roi["width"])
-    h = int(roi["height"])
+    # Polygon with fewer than 3 points: skip masking, pass through
+    if roi_type == "polygon":
+        points = roi.get("points", [])
+        if len(points) < 3:
+            data["history"].append("mask_roi (skipped, polygon < 3 points)")
+            return data
 
     output_images = []
     masks = []
@@ -37,26 +69,10 @@ def mask_rect_roi(
 
         H, W = img.shape[:2]
 
-        mask = np.zeros((H, W), dtype=np.uint8)
-        mask[y:y+h, x:x+w] = 255
+        mask = _build_mask(roi, H, W)
 
-        if keep_outside:
-            mask = cv2.bitwise_not(mask)
-
-        # háttér generálása
-        if len(img.shape) == 2:
-            background = np.full((H, W), background_color, dtype=img.dtype)
-        else:
-            if isinstance(background_color, (list, tuple)):
-                background = np.full((H, W, 3), background_color, dtype=img.dtype)
-            else:
-                background = np.full((H, W, 3), (background_color,)*3, dtype=img.dtype)
-
-        roi_part = cv2.bitwise_and(img, img, mask=mask)
-        inv_mask = cv2.bitwise_not(mask)
-        bg_part = cv2.bitwise_and(background, background, mask=inv_mask)
-
-        result = cv2.add(roi_part, bg_part)
+        # Apply mask: keep only the ROI region
+        result = cv2.bitwise_and(img, img, mask=mask)
 
         output_images.append(result)
         masks.append(mask)
@@ -67,16 +83,12 @@ def mask_rect_roi(
     data["results"]["roi_masks"] = masks
     data["meta"]["roi_mask"] = {
         "roi": roi,
-        "background_color": background_color,
-        "keep_outside": keep_outside
     }
 
-    data["history"].append("mask_rect_roi")
-
-    if debug:
-        cv2.imshow("roi_mask", masks[0])
-        cv2.imshow("roi_result", output_images[0])
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    data["history"].append("mask_roi")
 
     return data
+
+
+# Backward-compatible alias
+mask_rect_roi = mask_roi
