@@ -45,6 +45,7 @@ export class HistogramChartComponent implements AfterViewInit, OnChanges {
   @Input() label = '';
   @Input() rangeMin = 0;
   @Input() rangeMax = 256;
+  @Input() markerLines: Array<{ value: number; label?: string; color?: string }> = [];
   @Input() width = 400;
   @Input() height = 120;
 
@@ -103,6 +104,32 @@ export class HistogramChartComponent implements AfterViewInit, OnChanges {
       const x = pad.left + i * barW;
       const y = pad.top + plotH - barH;
       ctx.fillRect(x, y, Math.max(barW, 1), barH);
+    }
+
+    // Marker lines (for thresholds/ranges)
+    if (Array.isArray(this.markerLines) && this.markerLines.length > 0) {
+      for (const marker of this.markerLines) {
+        const v = Number(marker?.value);
+        if (!Number.isFinite(v)) continue;
+        const normalized = (v - this.rangeMin) / Math.max(this.rangeMax - this.rangeMin, 1e-9);
+        const x = pad.left + Math.max(0, Math.min(1, normalized)) * plotW;
+        const color = marker?.color || '#f59e0b';
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.moveTo(x, pad.top);
+        ctx.lineTo(x, pad.top + plotH);
+        ctx.stroke();
+
+        if (marker?.label) {
+          ctx.fillStyle = color;
+          ctx.font = '9px sans-serif';
+          ctx.textAlign = 'left';
+          const labelX = Math.min(x + 3, pad.left + plotW - 26);
+          ctx.fillText(marker.label, labelX, pad.top + 9);
+        }
+      }
     }
 
     // Axes

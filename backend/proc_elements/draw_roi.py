@@ -71,8 +71,15 @@ def mask_roi(
 
         mask = _build_mask(roi, H, W)
 
-        # Apply mask: keep only the ROI region
-        result = cv2.bitwise_and(img, img, mask=mask)
+        # Apply mask: keep ROI, fill outside with background_color
+        if background_color == 0:
+            result = cv2.bitwise_and(img, img, mask=mask)
+        else:
+            bg = np.full_like(img, background_color)
+            inv_mask = cv2.bitwise_not(mask)
+            fg = cv2.bitwise_and(img, img, mask=mask)
+            bg_part = cv2.bitwise_and(bg, bg, mask=inv_mask)
+            result = cv2.add(fg, bg_part)
 
         output_images.append(result)
         masks.append(mask)

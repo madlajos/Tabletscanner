@@ -1,8 +1,7 @@
 import cv2
-import numpy as np
 
 
-def calculate_histograms(data, bins=256, hist_range=None, debug=False):
+def calculate_histograms(data, bins=256, hist_range=(0, 256), debug=False):
 
     if data["error"] is not None:
         return data
@@ -15,16 +14,6 @@ def calculate_histograms(data, bins=256, hist_range=None, debug=False):
         data["error"] = "E2303"
         return data
 
-    if hist_range is None:
-        channel_meta = data.get("meta", {}).get("channel", {})
-        space = channel_meta.get("space", "GRAY")
-        channel = channel_meta.get("channel", "GRAY")
-
-        if space == "HSV" and channel == "H":
-            hist_range = (0, 180)
-        else:
-            hist_range = (0, 256)
-
     if not isinstance(hist_range, (list, tuple)) or len(hist_range) != 2:
         data["error"] = "E2304"
         return data
@@ -34,7 +23,6 @@ def calculate_histograms(data, bins=256, hist_range=None, debug=False):
         return data
 
     histograms = []
-    histogram_stats = []
 
     for img in data["images"]:
 
@@ -49,21 +37,14 @@ def calculate_histograms(data, bins=256, hist_range=None, debug=False):
         hist = cv2.calcHist([img], [0], None, [bins], hist_range)
         hist = hist.flatten()
 
-        histograms.append(hist.tolist())
-        histogram_stats.append({
-            "pixel_min": int(np.min(img)),
-            "pixel_max": int(np.max(img)),
-            "pixel_mean": float(np.mean(img)),
-            "pixel_std": float(np.std(img))
-        })
+        histograms.append(hist)
 
     if "results" not in data:
         data["results"] = {}
 
     data["results"]["histograms"] = histograms
-    data["results"]["histogram_stats"] = histogram_stats
     data["meta"]["histogram"] = {
-        "bins": int(bins),
+        "bins": bins,
         "range": tuple(hist_range)
     }
     data["history"].append("calculate_histograms")
@@ -71,8 +52,6 @@ def calculate_histograms(data, bins=256, hist_range=None, debug=False):
     if debug:
         print(f"Histogram calculated for {len(histograms)} images")
         print(f"Bins: {bins}")
-        print(f"Histogram range: {hist_range}")
-        print(f"First histogram length: {len(histograms[0])}")
-        print(f"First image stats: {histogram_stats[0]}")
+        print(f"First histogram shape: {histograms[0].shape}")
 
     return data

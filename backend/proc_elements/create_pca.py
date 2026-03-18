@@ -3,95 +3,135 @@ import numpy as np
 
 def histogram_pca(
     data,
-    n_components=2,
-    center=True,
+    max_components=5,
+    preprocessing="center",
     debug=False
 ):
     """
     PCA a calculate_histograms node kimenetén.
 
-    Input:
-        data["results"]["histograms"]  -> list of 1D histogram vectors
-
-    Output:
-        data["results"]["histogram_pca_scores"]
-        data["results"]["histogram_pca_components"]
-        data["results"]["histogram_pca_explained_variance"]
-        data["meta"]["histogram_pca"]
+    preprocessing options:
+        - "none"
+        - "center"
+        - "standardize"
+        - "l1"
+        - "l2"
     """
 
     if data["error"] is not None:
         return data
 
     if "results" not in data or "histograms" not in data["results"]:
-        data["error"] = "E3421"
+        data["error"] = "E2401"
         return data
 
     histograms = data["results"]["histograms"]
 
     if not isinstance(histograms, list) or len(histograms) == 0:
-        data["error"] = "E3422"
+        data["error"] = "E2402"
         return data
 
     try:
         X = np.array(histograms, dtype=np.float64)
     except Exception:
-        data["error"] = "E3423"
+        data["error"] = "E2403"
         return data
 
     if X.ndim != 2:
-        data["error"] = "E3424"
+        data["error"] = "E2404"
         return data
 
     n_samples, n_features = X.shape
 
     if n_samples < 2:
-        data["error"] = "E3425"
+        data["error"] = "E2405"
         return data
 
-    if not isinstance(n_components, int) or n_components <= 0:
-        data["error"] = "E3426"
+    if not isinstance(max_components, int) or max_components <= 0:
+        data["error"] = "E2406"
         return data
 
-    n_components = min(n_components, n_samples, n_features)
+    max_components = min(max_components, n_samples, n_features)
 
-    # mean center
-    if center:
+    valid_preprocessing = {"none", "center", "standardize", "l1", "l2"}
+    if preprocessing not in valid_preprocessing:
+        data["error"] = "E2408"
+        return data
+
+    # preprocessing
+    if preprocessing == "none":
+        Xp = X.copy()
+        prep_meta = {"mode": "none"}
+
+    elif preprocessing == "center":
         mean_vec = np.mean(X, axis=0)
-        Xc = X - mean_vec
-    else:
-        mean_vec = np.zeros(n_features)
-        Xc = X.copy()
+        Xp = X - mean_vec
+        prep_meta = {
+            "mode": "center",
+            "mean": mean_vec.tolist()
+        }
 
-    # PCA via SVD
-    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+    elif preprocessing == "standardize":
+        mean_vec = np.mean(X, axis=0)
+        std_vec = np.std(X, axis=0)
+        std_vec_safe = np.where(std_vec == 0, 1.0, std_vec)
+        Xp = (X - mean_vec) / std_vec_safe
+        prep_meta = {
+            "mode": "standardize",
+            "mean": mean_vec.tolist(),
+            "std": std_vec_safe.tolist()
+        }
 
-    components = Vt[:n_components]
-    scores = np.dot(Xc, components.T)
+    elif preprocessing == "l1":
+        norms = np.sum(np.abs(X), axis=1, keepdims=True)
+        norms_safe = np.where(norms == 0, 1.0, norms)
+        Xp = X / norms_safe
+        prep_meta = {
+            "mode": "l1"
+        }
 
-    if n_samples > 1:
-        explained_variance = (S ** 2) / (n_samples - 1)
-    else:
-        explained_variance = np.zeros_like(S)
+    elif preprocessing == "l2":
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+        norms_safe = np.where(norms == 0, 1.0, norms)
+        Xp = X / norms_safe
+        prep_meta = {
+            "mode": "l2"
+        }
 
-    total_var = np.sum(explained_variance)
-    explained_variance = explained_variance[:n_components]
+    try:
+        U, S, Vt = np.linalg.svd(Xp, full_matrices=False)
+    except Exception:
+        data["error"] = "E2407"
+        return data
+
+    explained_variance_all = (S ** 2) / (n_samples - 1)
+    total_var = np.sum(explained_variance_all)
 
     if total_var > 0:
-        explained_ratio = explained_variance / total_var
+        explained_ratio_all = explained_variance_all / total_var
     else:
-        explained_ratio = np.zeros_like(explained_variance)
+        explained_ratio_all = np.zeros_like(explained_variance_all)
+
+    components = Vt[:max_components]
+    scores = Xp @ components.T
+
+    explained_variance = explained_variance_all[:max_components]
+    explained_ratio = explained_ratio_all[:max_components]
+    cumulative_ratio = np.cumsum(explained_ratio)
 
     data["results"]["histogram_pca_scores"] = scores.tolist()
     data["results"]["histogram_pca_components"] = components.tolist()
     data["results"]["histogram_pca_explained_variance"] = explained_variance.tolist()
     data["results"]["histogram_pca_explained_ratio"] = explained_ratio.tolist()
+    data["results"]["histogram_pca_cumulative_ratio"] = cumulative_ratio.tolist()
 
     data["meta"]["histogram_pca"] = {
-        "n_components": n_components,
-        "centered": center,
+        "max_components": int(max_components),
+        "preprocessing": preprocessing,
         "samples": int(n_samples),
-        "features": int(n_features)
+        "features": int(n_features),
+        "total_variance": float(total_var),
+        "preprocessing_meta": prep_meta
     }
 
     data["history"].append("histogram_pca")
@@ -100,6 +140,8 @@ def histogram_pca(
         print("Histogram PCA calculated")
         print(f"Samples: {n_samples}")
         print(f"Features: {n_features}")
-        print(f"Explained variance ratio: {explained_ratio}")
+        print(f"Preprocessing: {preprocessing}")
+        print(f"Explained ratio: {explained_ratio}")
+        print(f"Cumulative ratio: {cumulative_ratio}")
 
     return data

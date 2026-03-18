@@ -42,6 +42,10 @@ export class PipelineStateService {
   private selectedStepIndexSubject = new BehaviorSubject<number>(-1);
   selectedStepIndex$ = this.selectedStepIndexSubject.asObservable();
 
+  /** Toolbox preview step id (single-click in toolbox). */
+  private toolboxPreviewStepIdSubject = new BehaviorSubject<string | null>(null);
+  toolboxPreviewStepId$ = this.toolboxPreviewStepIdSubject.asObservable();
+
   /** Validation errors. */
   private validationErrorsSubject = new BehaviorSubject<StepError[]>([]);
   validationErrors$ = this.validationErrorsSubject.asObservable();
@@ -160,6 +164,7 @@ export class PipelineStateService {
     const inst = createStepInstance(stepDefId, idx + insertOffset, defaults);
     steps.splice(idx + insertOffset, 0, inst);
     this.updateSteps(steps);
+    this.clearToolboxPreviewStep();
     this.selectStep(idx + insertOffset);
   }
 
@@ -250,6 +255,10 @@ export class PipelineStateService {
     const defn = this.getStepDefinition(stepDefId);
     if (!defn) return false;
 
+    // add_sequence_values is intended as a secondary input for fit_curve,
+    // not as a standalone main-chain step.
+    if (stepDefId === 'add_sequence_values') return false;
+
     const pipeline = this.getPipeline();
     const idx = Math.max(0, Math.min(flatIndex, pipeline.steps.length));
     const simulated = [...pipeline.steps];
@@ -331,6 +340,7 @@ export class PipelineStateService {
   }
 
   selectStep(index: number): void {
+    this.clearToolboxPreviewStep();
     this.selectedStepIndexSubject.next(index);
     this.previewImageIndexSubject.next(0);
     // For ROI step, preview the previous step to show the input image
@@ -374,6 +384,7 @@ export class PipelineStateService {
           } else {
             this.previewImageSubject.next(null);
           }
+          this.sideOutputsSubject.next(res.side_outputs || {});
           this.imageCountSubject.next(res.image_count ?? 0);
           if (res.image_width && res.image_height) {
             this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
@@ -405,6 +416,7 @@ export class PipelineStateService {
   newPipeline(): void {
     this.pipelineSubject.next(createEmptyPipeline());
     this.selectedStepIndexSubject.next(-1);
+    this.clearToolboxPreviewStep();
     this.validationErrorsSubject.next([]);
     this.previewImageSubject.next(null);
     this.sideOutputsSubject.next({});
@@ -416,8 +428,17 @@ export class PipelineStateService {
     this.pipelineSubject.next(doc);
     this.recipeNameSubject.next(doc.name);
     this.dirtySubject.next(false);
+    this.clearToolboxPreviewStep();
     this.selectedStepIndexSubject.next(doc.steps.length > 0 ? 0 : -1);
     this.pipelineChangedSubject.next();
+  }
+
+  setToolboxPreviewStep(stepDefId: string | null): void {
+    this.toolboxPreviewStepIdSubject.next(stepDefId);
+  }
+
+  clearToolboxPreviewStep(): void {
+    this.toolboxPreviewStepIdSubject.next(null);
   }
 
   private updateSteps(steps: StepInstance[]): void {
@@ -504,6 +525,16 @@ export class PipelineStateService {
     const clamped = Math.max(0, Math.min(index, count - 1));
     if (clamped !== this.previewImageIndexSubject.value) {
       this.previewImageIndexSubject.next(clamped);
+      const stepIndex = this.selectedStepIndexSubject.value;
+      const pipeline = this.getPipeline();
+      if (stepIndex >= 0 && stepIndex < pipeline.steps.length) {
+        const selected = pipeline.steps[stepIndex];
+        if (selected.step_def_id === 'fit_curve' && stepIndex > 0) {
+          // Fit curve is a manual action. While paging images, only refresh upstream context.
+          this.requestPreviewForStep(stepIndex - 1);
+          return;
+        }
+      }
       this.requestPreview();
     }
   }
@@ -592,7 +623,32 @@ export class PipelineStateService {
     return defn.input_type ?? null;
   }
 
-  private getOutputType(defn: StepDefinition): DataType | null {
+  private getOutputType(defn: StepDefinition, step?: StepInstance): DataType | null {
+    if (defn.id === 'calculate_histograms') {
+      return 'HISTOGRAM';
+    }
+
+    if (defn.id === 'calculate_intensity_stats') {
+      return 'SCALAR';
+    }
+
+    if (defn.id === 'histogram_equalization') {
+      const selected = String(step?.param_values?.['output_mode'] ?? '').trim();
+      if (selected === 'histogram') return 'HISTOGRAM';
+      if (selected === 'image') return 'GRAYSCALE';
+      const fallback = defn.params.find((p) => p.name === 'output_mode')?.default;
+      if (fallback === 'histogram') return 'HISTOGRAM';
+      return 'GRAYSCALE';
+    }
+
+    if (defn.id === 'apply_threshold') {
+      const selected = String(step?.param_values?.['mode'] ?? '').trim();
+      if (selected === 'trunc' || selected === 'tozero' || selected === 'tozero_inv') {
+        return 'GRAYSCALE';
+      }
+      return 'MASK';
+    }
+
     const override = STEP_IO_OVERRIDES[defn.id];
     if (override && Object.prototype.hasOwnProperty.call(override, 'outputType')) {
       return override.outputType ?? null;
@@ -646,7 +702,7 @@ export class PipelineStateService {
 
       const currDir = this.getDirection(currDef);
       const currInput = this.getInputType(currDef);
-      const currOutput = this.getOutputType(currDef);
+      const currOutput = this.getOutputType(currDef, main[i].step);
 
       if (i === 0) {
         if (currDir !== 'source') return false;
@@ -658,7 +714,27 @@ export class PipelineStateService {
         const prevDir = this.getDirection(prevDef);
         if (prevDir === 'sink') return false;
 
-        const prevOutput = this.getOutputType(prevDef);
+        const prevOutput = this.getOutputType(prevDef, main[i - 1].step);
+
+        // Histogram equalization requires grayscale-like input.
+        // Prevent dropping it directly after generic IMAGE output steps.
+        if (currDef.id === 'histogram_equalization' && prevOutput === 'IMAGE') {
+          return false;
+        }
+
+        // Range mask should only be used on grayscale-like outputs
+        // (e.g. selected grayscale channel), not directly on generic IMAGE.
+        if (currDef.id === 'apply_range_mask' && prevOutput === 'IMAGE') {
+          return false;
+        }
+
+        // Flat-field and advanced illumination correction operate on
+        // grayscale-like images, so block direct generic IMAGE input.
+        if ((currDef.id === 'flat_field_correction' || currDef.id === 'advanced_illumin_corr')
+            && prevOutput === 'IMAGE') {
+          return false;
+        }
+
         if (!this.areTypesCompatible(prevOutput, currInput)) {
           return false;
         }

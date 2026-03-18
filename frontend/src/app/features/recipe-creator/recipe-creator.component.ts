@@ -35,6 +35,9 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
   savedRecipes: RecipeSummary[] = [];
   showSaveInput = false;
   saveInputName = '';
+  editingDescriptionFor: string | null = null;
+  editingDescriptionText = '';
+  showDeleteConfirm: string | null = null;
 
   private subs: Subscription[] = [];
 
@@ -115,11 +118,55 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
   }
 
   deleteRecipe(name: string): void {
+    this.showDeleteConfirm = name;
+  }
+
+  confirmDelete(): void {
+    const name = this.showDeleteConfirm;
+    this.showDeleteConfirm = null;
+    if (!name) return;
     this.recipeService.deleteRecipe(name).subscribe({
       next: () => {
         this.savedRecipes = this.savedRecipes.filter((r) => r.name !== name);
       },
       error: (err) => console.error('Delete failed:', err),
     });
+  }
+
+  cancelDelete(): void {
+    this.showDeleteConfirm = null;
+  }
+
+  duplicateRecipe(name: string, event: Event): void {
+    event.stopPropagation();
+    this.recipeService.duplicateRecipe(name).subscribe({
+      next: (res) => {
+        this.recipeService.listRecipes().subscribe({
+          next: (recipes) => (this.savedRecipes = recipes),
+        });
+      },
+      error: (err) => console.error('Duplicate failed:', err),
+    });
+  }
+
+  startEditDescription(recipe: RecipeSummary, event: Event): void {
+    event.stopPropagation();
+    this.editingDescriptionFor = recipe.name;
+    this.editingDescriptionText = recipe.description || '';
+  }
+
+  saveDescription(recipe: RecipeSummary): void {
+    const newDesc = this.editingDescriptionText.trim();
+    this.editingDescriptionFor = null;
+    this.recipeService.updateRecipeDescription(recipe.name, newDesc).subscribe({
+      next: () => {
+        recipe.description = newDesc;
+      },
+      error: (err) => console.error('Description update failed:', err),
+    });
+  }
+
+  cancelEditDescription(): void {
+    this.editingDescriptionFor = null;
   }
 }

@@ -72,6 +72,18 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
         param_errors = _validate_params(i, step_inst, defn)
         errors.extend(param_errors)
 
+    has_fit = any(s.step_def_id == "fit_curve" for s in doc.steps)
+    has_predict = any(s.step_def_id == "predict_node" for s in doc.steps)
+    if has_fit and has_predict:
+        for i, step_inst in enumerate(doc.steps):
+            if step_inst.step_def_id in ("fit_curve", "predict_node"):
+                errors.append(StepError(
+                    step_index=i,
+                    step_def_id=step_inst.step_def_id,
+                    error_code="E3004",
+                    message="A 'Görbe illesztés' és a 'Predikció' lépés nem használható ugyanabban a receptben.",
+                ))
+
     return errors
 
 

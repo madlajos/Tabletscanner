@@ -1,0 +1,74 @@
+[
+  {
+    "id": "kalibráció-2026-03-18-91416-20260318081421",
+    "name": "Kalibráció 2026 03 18 91416",
+    "equation": "y = -3.515517x + 147.849774",
+    "comment": "Teszt",
+    "x_name": "Helo",
+    "y_name": "mean",
+    "y_key": "mean",
+    "model": "linear",
+    "degree": 1,
+    "coefficients": [
+      -3.515516684116259,
+      147.8497741595667
+    ],
+    "x_min": 1,
+    "x_max": 5,
+    "created_at": "2026-03-18T08:14:21.148982+00:00"
+  },
+  {
+    "id": "kalibráció-2026-03-18-100644-20260318090655",
+    "name": "Kalibráció 2026 03 18 100644",
+    "equation": "y = -3.515517x + 147.849774",
+    "comment": "Teszt2",
+    "x_name": "Helo",
+    "y_name": "mean",
+    "y_key": "mean",
+    "model": "linear",
+    "degree": 1,
+    "coefficients": [
+      -3.515516684116299,
+      147.84977415956678
+    ],
+    "x_min": 1,
+    "x_max": 5,
+    "created_at": "2026-03-18T09:06:55.253821+00:00"
+  },
+  {
+    "id": "kalibráció-2026-03-18-102159-20260318092207",
+    "name": "Kalibráció 2026 03 18 102159",
+    "equation": "y = -3.515517x + 147.849774",
+    "comment": "Tesz5",
+    "x_name": "Helo",
+    "y_name": "mean",
+    "y_key": "mean",
+    "model": "linear",
+    "degree": 1,
+    "coefficients": [
+      -3.515516684116259,
+      147.8497741595667
+    ],
+    "x_min": 1,
+    "x_max": 5,
+    "created_at": "2026-03-18T09:22:07.055359+00:00"
+  },
+  {
+    "id": "test243-20260318125357",
+    "name": "Test243",
+    "equation": "y = -3.533723x + 147.940807",
+    "comment": "Terst3534",
+    "x_name": "Helo",
+    "y_name": "mean",
+    "y_key": "mean",
+    "model": "linear",
+    "degree": 1,
+    "coefficients": [
+      -3.533723285066742,
+      147.9408071643191
+    ],
+    "x_min": 1,
+    "x_max": 5,
+    "created_at": "2026-03-18T12:53:57.400452+00:00"
+  }
+]

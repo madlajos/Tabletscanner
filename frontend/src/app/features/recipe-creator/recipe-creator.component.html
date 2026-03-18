@@ -55,15 +55,63 @@
           @for (recipe of savedRecipes; track recipe.name) {
             <div class="recipe-item">
               <div class="recipe-info" (click)="loadRecipe(recipe.name)">
-                <span class="recipe-name">{{ recipe.name }}</span>
-                <span class="recipe-meta">{{ recipe.step_count }} lépés</span>
+                <div class="recipe-name-line">
+                  <span class="recipe-name">{{ recipe.name }}</span>
+                  <span class="recipe-meta">{{ recipe.step_count }} lépés</span>
+                </div>
+                @if (editingDescriptionFor === recipe.name) {
+                  <div class="recipe-desc-edit" (click)="$event.stopPropagation()">
+                    <input
+                      class="recipe-desc-input"
+                      [(ngModel)]="editingDescriptionText"
+                      (keyup.enter)="saveDescription(recipe)"
+                      (keyup.escape)="cancelEditDescription()"
+                      placeholder="Megjegyzés..."
+                      autofocus
+                    />
+                    <button class="recipe-desc-save" (click)="saveDescription(recipe)" title="Mentés">
+                      <mat-icon>check</mat-icon>
+                    </button>
+                    <button class="recipe-desc-cancel" (click)="cancelEditDescription()" title="Mégse">
+                      <mat-icon>close</mat-icon>
+                    </button>
+                  </div>
+                } @else {
+                  <div class="recipe-desc-row" (click)="$event.stopPropagation()">
+                    @if (recipe.description) {
+                      <span class="recipe-description">{{ recipe.description }}</span>
+                    } @else {
+                      <span class="recipe-description empty">Nincs megjegyzés</span>
+                    }
+                    <button class="recipe-desc-edit-btn" (click)="startEditDescription(recipe, $event)" title="Megjegyzés szerkesztése">
+                      <mat-icon>edit</mat-icon>
+                    </button>
+                  </div>
+                }
               </div>
-              <button mat-icon-button class="recipe-delete" (click)="deleteRecipe(recipe.name)" title="Törlés">
-                <mat-icon>delete</mat-icon>
-              </button>
+              <div class="recipe-actions">
+                <button mat-icon-button class="recipe-action-btn" (click)="duplicateRecipe(recipe.name, $event)" title="Másolás">
+                  <mat-icon>content_copy</mat-icon>
+                </button>
+                <button mat-icon-button class="recipe-delete" (click)="deleteRecipe(recipe.name); $event.stopPropagation()" title="Törlés">
+                  <mat-icon>delete</mat-icon>
+                </button>
+              </div>
             </div>
           }
         </div>
+
+        @if (showDeleteConfirm) {
+          <div class="delete-confirm-overlay" (click)="cancelDelete()">
+            <div class="delete-confirm-dialog" (click)="$event.stopPropagation()">
+              <span class="delete-confirm-text">Biztosan törli a receptet: <strong>{{ showDeleteConfirm }}</strong>?</span>
+              <div class="delete-confirm-actions">
+                <button class="delete-confirm-yes" (click)="confirmDelete()">Törlés</button>
+                <button class="delete-confirm-no" (click)="cancelDelete()">Mégse</button>
+              </div>
+            </div>
+          </div>
+        }
       </div>
     </div>
   }

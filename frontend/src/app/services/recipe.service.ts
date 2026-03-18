@@ -11,6 +11,22 @@ import {
   RecipeSummary,
 } from '../models/pipeline.models';
 
+export interface CalibrationRecord {
+  id: string;
+  name: string;
+  equation: string;
+  comment?: string;
+  x_name?: string;
+  y_name?: string;
+  y_key?: string;
+  model?: string;
+  degree?: number;
+  coefficients?: number[];
+  x_min?: number;
+  x_max?: number;
+  created_at?: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class RecipeService {
   constructor(private http: HttpClient) {}
@@ -67,6 +83,31 @@ export class RecipeService {
     );
   }
 
+  listCalibrations(): Observable<CalibrationRecord[]> {
+    return this.http
+      .get<{ calibrations: CalibrationRecord[] }>(`${BASE_URL}/pipeline/calibrations`)
+      .pipe(map((res) => res.calibrations ?? []));
+  }
+
+  saveCalibration(payload: {
+    name: string;
+    equation: string;
+    comment?: string;
+    x_name?: string;
+    y_name?: string;
+    y_key?: string;
+    model?: string;
+    degree?: number;
+    coefficients?: number[];
+    x_min?: number;
+    x_max?: number;
+  }): Observable<{ message: string; calibration: CalibrationRecord }> {
+    return this.http.post<{ message: string; calibration: CalibrationRecord }>(
+      `${BASE_URL}/pipeline/calibrations`,
+      payload,
+    );
+  }
+
   /** List saved recipes. */
   listRecipes(): Observable<RecipeSummary[]> {
     return this.http
@@ -88,6 +129,22 @@ export class RecipeService {
   deleteRecipe(name: string): Observable<{ message: string }> {
     return this.http.delete<{ message: string }>(
       `${BASE_URL}/recipes/${encodeURIComponent(name)}`
+    );
+  }
+
+  /** Update only the description of a recipe. */
+  updateRecipeDescription(name: string, description: string): Observable<{ message: string }> {
+    return this.http.patch<{ message: string }>(
+      `${BASE_URL}/recipes/${encodeURIComponent(name)}/description`,
+      { description }
+    );
+  }
+
+  /** Duplicate a recipe. */
+  duplicateRecipe(name: string): Observable<{ message: string; new_name: string }> {
+    return this.http.post<{ message: string; new_name: string }>(
+      `${BASE_URL}/recipes/${encodeURIComponent(name)}/duplicate`,
+      {}
     );
   }
 }

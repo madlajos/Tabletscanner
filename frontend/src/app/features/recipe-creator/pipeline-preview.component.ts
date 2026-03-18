@@ -49,6 +49,9 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
               </button>
             }
             <div class="graph-toolbar-spacer"></div>
+            <button class="graph-tool-btn" (click)="copyGraphEquation()" [disabled]="!hasGraphData()" [class.disabled]="!hasGraphData()" title="Egyenlet másolása">
+              Egyenlet másolása
+            </button>
             <button class="graph-close-btn" (click)="closeGraphViewer()" title="Bezárás">✕</button>
           </div>
           <canvas #graphCanvas class="graph-canvas"
@@ -689,6 +692,11 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       this.pipelineState.maximizeGraph$.subscribe(({ data, omittedIndices }) => {
         this.openGraphViewer(data, omittedIndices);
       }),
+      this.pipelineState.pipeline$.subscribe((pipeline) => {
+        if (pipeline.steps.length === 0 && this.showGraphViewer) {
+          this.closeGraphViewer();
+        }
+      }),
       // Track ROI editing when an ROI step is selected
       combineLatest([
         this.pipelineState.pipeline$,
@@ -1047,6 +1055,17 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         return `${val}x^${power}`;
       })
       .join(' + ');
+  }
+
+  copyGraphEquation(): void {
+    if (!this.graphData) return;
+    const formula = this.getFormulaText(this.graphData);
+    if (!formula) return;
+    navigator.clipboard.writeText(formula).catch(() => undefined);
+  }
+
+  hasGraphData(): boolean {
+    return !!this.graphData;
   }
 
   private hitTestPoint(event: MouseEvent): number {

@@ -6,9 +6,10 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
+import { HttpClient } from '@angular/common/http';
 import { Subscription, combineLatest } from 'rxjs';
 import { PipelineStateService } from '../../services/pipeline-state.service';
-import { RecipeService } from '../../services/recipe.service';
+import { RecipeService, CalibrationRecord } from '../../services/recipe.service';
 import {
   StepDefinition,
   StepInstance,
@@ -17,6 +18,26 @@ import {
 } from '../../models/pipeline.models';
 import { HistogramChartComponent } from './histogram-chart.component';
 import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
+
+interface NodeHelpParameter {
+  name: string;
+  description: string;
+}
+
+interface NodeHelpPlacement {
+  before?: string;
+  after?: string;
+  restrictions?: string[];
+}
+
+interface NodeHelpContent {
+  purpose: string;
+  usage: string;
+  inputs: string;
+  parameters?: NodeHelpParameter[];
+  outputs: string;
+  placement?: NodeHelpPlacement;
+}
 
 @Component({
   selector: 'app-step-inspector',
@@ -29,8 +50,77 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       } @else {
         <div class="step-header">
           <mat-icon class="step-icon">{{ definition.icon }}</mat-icon>
-          <span class="step-name">{{ definition.name }}</span>
+          <button
+            type="button"
+            class="step-name-btn"
+            [class.has-help]="hasNodeHelp()"
+            [class.expanded]="nodeHelpExpanded"
+            [disabled]="!hasNodeHelp()"
+            (click)="toggleNodeHelp()"
+            [title]="hasNodeHelp() ? 'Részletes leírás megnyitása' : 'Ehhez a lépéshez még nincs részletes leírás'"
+          >
+            <span class="step-name">{{ definition.name }}</span>
+            @if (hasNodeHelp()) {
+              <mat-icon class="step-help-chevron">chevron_right</mat-icon>
+            }
+          </button>
         </div>
+
+        @if (nodeHelpExpanded && getNodeHelpContent(); as nodeHelp) {
+          <div class="node-help-card" role="note" aria-label="Lépés részletes leírása">
+            <div class="node-help-section">
+              <div class="node-help-title">Cél</div>
+              <p class="node-help-text">{{ nodeHelp.purpose }}</p>
+            </div>
+            <div class="node-help-section">
+              <div class="node-help-title">Használat</div>
+              <p class="node-help-text">{{ nodeHelp.usage }}</p>
+            </div>
+            <div class="node-help-section">
+              <div class="node-help-title">Bemenet</div>
+              <p class="node-help-text">{{ nodeHelp.inputs }}</p>
+            </div>
+            @if (nodeHelp.parameters && nodeHelp.parameters.length > 0) {
+              <div class="node-help-section">
+                <div class="node-help-title">Paraméterek</div>
+                @for (param of nodeHelp.parameters; track param.name) {
+                  <div class="node-param-block">
+                    <span class="node-param-name">{{ param.name }}</span>
+                    <span class="node-param-desc">{{ param.description }}</span>
+                  </div>
+                }
+              </div>
+            }
+            <div class="node-help-section">
+              <div class="node-help-title">Kimenet</div>
+              <p class="node-help-text">{{ nodeHelp.outputs }}</p>
+            </div>
+            @if (nodeHelp.placement) {
+              <div class="node-help-section">
+                <div class="node-help-title">Elhelyezési szabályok</div>
+                @if (nodeHelp.placement.before) {
+                  <div class="node-rule-row">
+                    <span class="node-rule-label">Előtte:</span>
+                    <span class="node-rule-text">{{ nodeHelp.placement.before }}</span>
+                  </div>
+                }
+                @if (nodeHelp.placement.after) {
+                  <div class="node-rule-row">
+                    <span class="node-rule-label">Utána:</span>
+                    <span class="node-rule-text">{{ nodeHelp.placement.after }}</span>
+                  </div>
+                }
+                @if (nodeHelp.placement.restrictions && nodeHelp.placement.restrictions.length > 0) {
+                  <div class="node-rule-list">
+                    @for (rule of nodeHelp.placement.restrictions; track rule) {
+                      <div class="node-rule-item">• {{ rule }}</div>
+                    }
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        }
 
         @if (stepErrors.length > 0) {
           <div class="error-list">
@@ -40,7 +130,7 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
           </div>
         }
 
-        <div class="params-section">
+        <fieldset class="params-section" [disabled]="isPreviewMode" [class.preview-locked]="isPreviewMode">
           @if (isRoiStep()) {
             <div class="roi-shape-selector">
               <button class="roi-shape-btn" [class.active]="getParamValue('roi_type') === 'rect'" (click)="onParamChange('roi_type', 'rect')" title="Téglalap">
@@ -111,24 +201,22 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                   </div>
                 }
                 @case ('bool') {
-                  @if (isFitCurveAggregateParam(param.name)) {
+                  @if (isFitCurveDataMergeParam(param.name)) {
                     <div class="aggregation-block">
-                      <div class="param-control">
-                        <label class="toggle-wrap">
-                          <input
-                            type="checkbox"
-                            [id]="'param-' + param.name"
-                            [ngModel]="getParamValue(param.name)"
-                            (ngModelChange)="onParamChange(param.name, $event)"
-                            [disabled]="isBoolParamDisabled(param.name)"
-                          />
-                          <span class="toggle-label">{{ getParamValue(param.name) ? 'Be' : 'Ki' }}</span>
+                      <div class="param-label">Adatösszevonás</div>
+                      <div class="aggregation-radio-grid">
+                        <label class="merge-mode-option">
+                          <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'none'" (change)="setFitCurveMergeMode('none')" />
+                          <span>Nincs</span>
                         </label>
-                      </div>
-                      @if (getParamValue('aggregate')) {
-                        <div class="aggregation-method-row">
-                          <label class="param-label" for="param-agg_method">Összevont értékek számítása</label>
-                          <div class="param-control">
+                        <label class="merge-mode-option">
+                          <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'tablet'" (change)="setFitCurveMergeMode('tablet')" />
+                          <span>Tablettánként</span>
+                        </label>
+                        <label class="merge-mode-option with-inline-select">
+                          <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'level'" (change)="setFitCurveMergeMode('level')" />
+                          <span>Szintenként</span>
+                          @if (getFitCurveMergeMode() === 'level') {
                             <select
                               id="param-agg_method"
                               [ngModel]="getParamValue('agg_method')"
@@ -138,9 +226,9 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                                 <option [value]="opt">{{ opt }}</option>
                               }
                             </select>
-                          </div>
-                        </div>
-                      }
+                          }
+                        </label>
+                      </div>
                     </div>
                   } @else {
                     <div class="param-control">
@@ -165,9 +253,20 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                       (ngModelChange)="onParamChange(param.name, $event)"
                     >
                       @for (opt of getFilteredOptions(param); track opt) {
-                        <option [value]="opt">{{ opt }}</option>
+                        <option [value]="opt">{{ getOptionDisplayLabel(param, opt) }}</option>
                       }
                     </select>
+                    @if (step?.step_def_id === 'apply_threshold' && param.name === 'mode' && getThresholdInputHistogram()) {
+                      <div class="threshold-histogram-wrap">
+                        <app-histogram-chart
+                          [data]="getThresholdInputHistogram()!"
+                          [rangeMin]="0"
+                          [rangeMax]="256"
+                          [label]="''"
+                          [markerLines]="getThresholdMarkerLines()"
+                        />
+                      </div>
+                    }
                   </div>
                 }
                 @case ('string') {
@@ -182,6 +281,31 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
                           <option [value]="opt">{{ opt }}</option>
                         }
                       </select>
+                    </div>
+                  } @else if (isPredictYAxisParam(param.name)) {
+                    <div class="param-control">
+                      <select
+                        [id]="'param-' + param.name"
+                        [ngModel]="getParamValue(param.name)"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                      >
+                        @for (opt of getPredictYOptions(); track opt) {
+                          <option [value]="opt">{{ opt }}</option>
+                        }
+                      </select>
+                    </div>
+                  } @else if (isPredictEquationParam(param.name)) {
+                    <div class="param-control file-path-control">
+                      <input
+                        type="text"
+                        [id]="'param-' + param.name"
+                        [ngModel]="getParamValue(param.name)"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                        placeholder="Pl. y = 1.2x + 3.4"
+                      />
+                      <button class="browse-btn" (click)="openCalibrationBrowser()" title="Kalibráció kiválasztása">
+                        <mat-icon>manage_search</mat-icon>
+                      </button>
                     </div>
                   } @else {
                     <div class="param-control" [class.file-path-control]="isReferenceValuesParam(param.name)">
@@ -213,6 +337,161 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
               }
             </div>
             }
+          }
+
+          @if (step?.step_def_id === 'detect_particles') {
+            <div class="section-label" style="margin-top: 6px;">Szemcsék szűrése</div>
+
+            <div class="filter-subgroup">
+              <div class="filter-subgroup-head">
+                <span class="filter-subgroup-title">Terület alapján</span>
+                <label class="toggle-wrap">
+                  <input
+                    type="checkbox"
+                    id="param-filter_by_area"
+                    [ngModel]="getParamValue('filter_by_area')"
+                    (ngModelChange)="onParamChange('filter_by_area', $event)"
+                  />
+                  <span class="toggle-label">{{ getParamValue('filter_by_area') ? 'Be' : 'Ki' }}</span>
+                </label>
+              </div>
+              @if (getParamValue('filter_by_area')) {
+                @if (getParamByName('filter_min_area'); as minAreaParam) {
+                  <div class="sub-param-row">
+                    <label class="param-label" for="param-filter_min_area">Min.</label>
+                    <div class="param-control slider-control">
+                      <input
+                        type="range"
+                        id="param-filter_min_area"
+                        [min]="getSliderMin(minAreaParam)"
+                        [max]="getSliderMax(minAreaParam)"
+                        [step]="minAreaParam.odd_only ? 2 : (minAreaParam.step ?? 1)"
+                        [ngModel]="getParamValue('filter_min_area')"
+                        (ngModelChange)="onParamChange('filter_min_area', $event)"
+                      />
+                      <input
+                        type="number"
+                        class="slider-number"
+                        [ngModel]="getParamValue('filter_min_area')"
+                        (ngModelChange)="onNumericTextChange(minAreaParam, $event)"
+                      />
+                    </div>
+                  </div>
+                }
+                @if (getParamByName('filter_max_area'); as maxAreaParam) {
+                  <div class="sub-param-row">
+                    <label class="param-label" for="param-filter_max_area">Max.</label>
+                    <div class="param-control slider-control">
+                      <input
+                        type="range"
+                        id="param-filter_max_area"
+                        [min]="getSliderMin(maxAreaParam)"
+                        [max]="getSliderMax(maxAreaParam)"
+                        [step]="maxAreaParam.odd_only ? 2 : (maxAreaParam.step ?? 1)"
+                        [ngModel]="getParamValue('filter_max_area')"
+                        (ngModelChange)="onParamChange('filter_max_area', $event)"
+                      />
+                      <input
+                        type="number"
+                        class="slider-number"
+                        [ngModel]="getParamValue('filter_max_area')"
+                        (ngModelChange)="onNumericTextChange(maxAreaParam, $event)"
+                      />
+                    </div>
+                  </div>
+                }
+              }
+            </div>
+
+            <div class="filter-subgroup">
+              <div class="filter-subgroup-head">
+                <span class="filter-subgroup-title">Kerekdedség alapján</span>
+                <label class="toggle-wrap">
+                  <input
+                    type="checkbox"
+                    id="param-filter_by_circularity"
+                    [ngModel]="getParamValue('filter_by_circularity')"
+                    (ngModelChange)="onParamChange('filter_by_circularity', $event)"
+                  />
+                  <span class="toggle-label">{{ getParamValue('filter_by_circularity') ? 'Be' : 'Ki' }}</span>
+                </label>
+              </div>
+              @if (getParamValue('filter_by_circularity')) {
+                @if (getParamByName('filter_min_circularity'); as minCircParam) {
+                  <div class="sub-param-row">
+                    <label class="param-label" for="param-filter_min_circularity">Min.</label>
+                    <div class="param-control slider-control">
+                      <input
+                        type="range"
+                        id="param-filter_min_circularity"
+                        [min]="getSliderMin(minCircParam)"
+                        [max]="getSliderMax(minCircParam)"
+                        [step]="minCircParam.step ?? 0.01"
+                        [ngModel]="getParamValue('filter_min_circularity')"
+                        (ngModelChange)="onParamChange('filter_min_circularity', +$event)"
+                      />
+                      <input
+                        type="number"
+                        class="slider-number"
+                        [step]="minCircParam.step ?? 0.01"
+                        [ngModel]="getParamValue('filter_min_circularity')"
+                        (ngModelChange)="onNumericTextChange(minCircParam, $event)"
+                      />
+                    </div>
+                  </div>
+                }
+                @if (getParamByName('filter_max_circularity'); as maxCircParam) {
+                  <div class="sub-param-row">
+                    <label class="param-label" for="param-filter_max_circularity">Max.</label>
+                    <div class="param-control slider-control">
+                      <input
+                        type="range"
+                        id="param-filter_max_circularity"
+                        [min]="getSliderMin(maxCircParam)"
+                        [max]="getSliderMax(maxCircParam)"
+                        [step]="maxCircParam.step ?? 0.01"
+                        [ngModel]="getParamValue('filter_max_circularity')"
+                        (ngModelChange)="onParamChange('filter_max_circularity', +$event)"
+                      />
+                      <input
+                        type="number"
+                        class="slider-number"
+                        [step]="maxCircParam.step ?? 0.01"
+                        [ngModel]="getParamValue('filter_max_circularity')"
+                        (ngModelChange)="onNumericTextChange(maxCircParam, $event)"
+                      />
+                    </div>
+                  </div>
+                }
+              }
+            </div>
+
+            <div class="filter-subgroup">
+              <div class="filter-subgroup-head">
+                <span class="filter-subgroup-title">Konvexitás alapján</span>
+                <label class="toggle-wrap">
+                  <input
+                    type="checkbox"
+                    id="param-filter_by_convexity"
+                    [ngModel]="getParamValue('filter_by_convexity')"
+                    (ngModelChange)="onParamChange('filter_by_convexity', $event)"
+                  />
+                  <span class="toggle-label">{{ getParamValue('filter_by_convexity') ? 'Be' : 'Ki' }}</span>
+                </label>
+              </div>
+              @if (getParamValue('filter_by_convexity')) {
+                <div class="convexity-checkboxes">
+                  <label class="toggle-wrap">
+                    <input type="checkbox" [ngModel]="getParamValue('filter_convex')" (ngModelChange)="onParamChange('filter_convex', $event)" />
+                    <span class="toggle-label">Konvex</span>
+                  </label>
+                  <label class="toggle-wrap">
+                    <input type="checkbox" [ngModel]="getParamValue('filter_concave')" (ngModelChange)="onParamChange('filter_concave', $event)" />
+                    <span class="toggle-label">Konkáv</span>
+                  </label>
+                </div>
+              }
+            </div>
           }
 
           @if (isReferenceStep()) {
@@ -254,11 +533,11 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
               </div>
             }
           }
-        </div>
+        </fieldset>
 
         @if (isLoadImageStep()) {
           <div class="image-manager-section">
-            <button class="image-manager-btn" (click)="showImageManager = true">
+            <button class="image-manager-btn" [disabled]="isPreviewMode" (click)="showImageManager = true">
               <mat-icon>photo_library</mat-icon> Képek kezelése
             </button>
           </div>
@@ -352,10 +631,13 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
               }
 
               @if (step?.step_def_id === 'fit_curve') {
-                <button class="run-fit-btn" (click)="runCurveFit()" [disabled]="previewLoading">
+                <button class="run-fit-btn" (click)="runCurveFit()" [disabled]="previewLoading || isPreviewMode">
                   {{ previewLoading ? '⏳ Futtatás...' : '▶ Görbe illesztés futtatása' }}
                 </button>
                 @if (getLatestCurveFit()) {
+                  <button class="run-fit-btn" (click)="openSaveCalibrationDialog()">
+                    Kalibrációs görbe mentése
+                  </button>
                   <div class="chart-with-maximize">
                     <app-scatter-chart
                       [data]="getLatestCurveFit()!"
@@ -424,6 +706,65 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
         @if (copyNotification) {
           <div class="copy-toast">{{ copyNotification }}</div>
         }
+
+        @if (showSaveCalibrationDialog) {
+          <div class="img-manager-overlay" (click)="closeSaveCalibrationDialog()">
+            <div class="img-manager-dialog calibration-dialog" (click)="$event.stopPropagation()">
+              <div class="img-manager-header">
+                <span class="img-manager-title">Kalibrációs görbe mentése</span>
+                <button class="img-manager-close" (click)="closeSaveCalibrationDialog()"><mat-icon>close</mat-icon></button>
+              </div>
+              <div class="param-row">
+                <label class="param-label">Egyenlet</label>
+                <div class="calibration-eq-box">{{ pendingCalibrationEquation }}</div>
+              </div>
+              <div class="param-row">
+                <label class="param-label" for="calibration-name">Név</label>
+                <input id="calibration-name" class="gen-input" type="text" [(ngModel)]="pendingCalibrationName" />
+              </div>
+              <div class="param-row">
+                <label class="param-label" for="calibration-comment">Megjegyzés</label>
+                <textarea id="calibration-comment" class="calibration-comment" [(ngModel)]="pendingCalibrationComment"></textarea>
+              </div>
+              <div class="img-manager-footer">
+                <button class="img-manager-apply" (click)="saveCurrentCalibration()" [disabled]="savingCalibration">
+                  {{ savingCalibration ? 'Mentés...' : 'Mentés' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        }
+
+        @if (showCalibrationBrowser) {
+          <div class="img-manager-overlay" (click)="closeCalibrationBrowser()">
+            <div class="img-manager-dialog" (click)="$event.stopPropagation()">
+              <div class="img-manager-header">
+                <span class="img-manager-title">Kalibrációk</span>
+                <button class="img-manager-close" (click)="closeCalibrationBrowser()"><mat-icon>close</mat-icon></button>
+              </div>
+              @if (calibrationRecords.length === 0) {
+                <p class="img-manager-empty">Nincs mentett kalibráció.</p>
+              } @else {
+                <div class="img-manager-list">
+                  @for (cal of calibrationRecords; track cal.id) {
+                    <div class="img-manager-item" [class.selected]="selectedCalibrationId === cal.id" (click)="selectedCalibrationId = cal.id">
+                      <div class="cal-list-main">
+                        <div class="cal-list-name">{{ cal.name }}</div>
+                        <div class="cal-list-eq">{{ cal.equation }}</div>
+                        @if (cal.comment) {
+                          <div class="cal-list-comment">{{ cal.comment }}</div>
+                        }
+                      </div>
+                    </div>
+                  }
+                </div>
+                <div class="img-manager-footer">
+                  <button class="img-manager-apply" (click)="applySelectedCalibration()" [disabled]="!selectedCalibrationId">Kiválaszt</button>
+                </div>
+              }
+            </div>
+          </div>
+        }
       }
     </div>
   `,
@@ -487,6 +828,125 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       line-height: 1.2;
     }
 
+    .step-name-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: default;
+      font: inherit;
+    }
+
+    .step-name-btn.has-help {
+      cursor: pointer;
+    }
+
+    .step-name-btn.has-help:hover .step-name {
+      color: #cfe4fb;
+    }
+
+    .step-name-btn:disabled {
+      opacity: 1;
+    }
+
+    .step-help-chevron {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+      color: #9fb3c7;
+      transition: transform 0.15s ease;
+    }
+
+    .step-name-btn.expanded .step-help-chevron {
+      transform: rotate(90deg);
+    }
+
+    .node-help-card {
+      padding: 10px;
+      border: 1px solid #3a4b60;
+      border-radius: 10px;
+      background: linear-gradient(180deg, #1f262e 0%, #1b2229 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .node-help-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .node-help-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #bcd0e5;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .node-help-text {
+      margin: 0;
+      color: #d5dee8;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .node-param-block {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 6px 0;
+    }
+
+    .node-param-name {
+      color: #e9edf2;
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .node-param-desc {
+      color: #c9d1db;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .node-rule-row {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .node-rule-label {
+      color: #e9edf2;
+      font-weight: 600;
+      min-width: 46px;
+      flex-shrink: 0;
+    }
+
+    .node-rule-text {
+      color: #c9d1db;
+    }
+
+    .node-rule-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 2px;
+    }
+
+    .node-rule-item {
+      color: #d6dee9;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
     .error-list { display: flex; flex-direction: column; gap: 6px; }
     .error-item {
       font-size: 11px;
@@ -497,7 +957,25 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       border-radius: 8px;
     }
 
-    .params-section { display: flex; flex-direction: column; gap: 10px; }
+    .params-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      min-inline-size: 0;
+    }
+
+    .params-section.preview-locked {
+      opacity: 0.75;
+    }
+
+    .params-section.preview-locked .param-row,
+    .params-section.preview-locked .generator-group,
+    .params-section.preview-locked .group-colors-section {
+      filter: saturate(0.55);
+    }
 
     .roi-shape-selector {
       display: flex;
@@ -542,6 +1020,11 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       line-height: 1.25;
     }
     .param-control { width: 100%; }
+
+    .threshold-histogram-wrap {
+      margin-top: 8px;
+    }
+
     .slider-control { display: flex; align-items: center; gap: 10px; }
     .slider-control input[type="range"] { flex: 1; accent-color: #224477; }
 
@@ -557,11 +1040,53 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       box-sizing: border-box;
     }
 
+    .slider-number,
+    .gen-input[type="number"],
+    .param-control input[type="number"] {
+      appearance: textfield;
+      -moz-appearance: textfield;
+    }
+
+    .slider-number::-webkit-outer-spin-button,
+    .slider-number::-webkit-inner-spin-button,
+    .gen-input[type="number"]::-webkit-outer-spin-button,
+    .gen-input[type="number"]::-webkit-inner-spin-button,
+    .param-control input[type="number"]::-webkit-outer-spin-button,
+    .param-control input[type="number"]::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .slider-number:hover,
+    .slider-number:focus,
+    .gen-input[type="number"]:hover,
+    .gen-input[type="number"]:focus,
+    .param-control input[type="number"]:hover,
+    .param-control input[type="number"]:focus {
+      border-color: #5d7694;
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18);
+    }
+
     .param-control input[type="text"], .param-control select {
       width: 100%;
       min-height: 36px;
       padding: 7px 10px;
       background: #1e2023;
+      border: 1px solid #474b52;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+
+    .param-control input[type="number"],
+    .gen-input[type="number"] {
+      width: 100%;
+      min-height: 36px;
+      padding: 7px 10px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0) 100%),
+        #1e2023;
       border: 1px solid #474b52;
       border-radius: 8px;
       color: #e0e0e0;
@@ -579,6 +1104,58 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
     }
     .toggle-label { font-size: 13px; color: #d3d8de; font-weight: 600; }
 
+    .filter-subgroup {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .filter-subgroup-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .filter-subgroup-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #d0d8e2;
+      letter-spacing: 0.02em;
+      line-height: 1.2;
+    }
+
+    .sub-param-row {
+      display: grid;
+      grid-template-columns: 40px minmax(165px, 1fr);
+      align-items: center;
+      gap: 8px;
+      padding-left: 10px;
+    }
+
+    .sub-param-row .slider-control {
+      gap: 8px;
+    }
+
+    .sub-param-row .slider-control input[type="range"] {
+      max-width: 130px;
+      min-width: 90px;
+    }
+
+    .sub-param-row .slider-number {
+      width: 64px;
+      min-height: 32px;
+      padding: 5px 7px;
+      font-size: 12px;
+    }
+
+    .convexity-checkboxes {
+      display: flex;
+      gap: 16px;
+      padding: 0 2px 0 12px;
+    }
+
     .aggregation-block {
       display: flex;
       flex-direction: column;
@@ -589,10 +1166,66 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       border-radius: 8px;
     }
 
-    .aggregation-method-row {
+    .aggregation-radio-grid {
       display: flex;
       flex-direction: column;
       gap: 6px;
+    }
+
+    .merge-mode-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #d3d8de;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 6px;
+      transition: background 0.12s;
+    }
+    .merge-mode-option:hover { background: rgba(59, 130, 246, 0.08); }
+
+    .merge-mode-option input[type="radio"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #474b52;
+      border-radius: 50%;
+      background: #1e2023;
+      cursor: pointer;
+      position: relative;
+      flex-shrink: 0;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .merge-mode-option input[type="radio"]:checked {
+      border-color: #3b82f6;
+      background: #1e2023;
+    }
+    .merge-mode-option input[type="radio"]:checked::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3b82f6;
+    }
+    .merge-mode-option input[type="radio"]:hover {
+      border-color: #6ba1f7;
+    }
+
+    .merge-mode-option.with-inline-select select {
+      margin-left: auto;
+      max-width: 130px;
+      min-height: 28px;
+      background: #1e2023;
+      border: 1px solid #474b52;
+      border-radius: 6px;
+      color: #e0e0e0;
+      padding: 4px 6px;
     }
 
     .side-outputs-section,
@@ -781,6 +1414,10 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       display: flex; align-items: center; gap: 6px; justify-content: center;
     }
     .image-manager-btn:hover { background: #3b82f6; border-color: #3b82f6; }
+    .image-manager-btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
 
     .img-manager-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -848,9 +1485,31 @@ import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
       cursor: pointer; font-size: 12px; font-weight: 600; background: #224477; color: #fff;
     }
     .img-manager-apply:hover { background: #1f4b8f; }
+
+    .calibration-comment {
+      width: 100%;
+      min-height: 72px;
+      padding: 7px 10px;
+      background: #1e2023;
+      border: 1px solid #474b52;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 13px;
+      font-family: inherit;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+    .calibration-comment:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
   `],
 })
 export class StepInspectorComponent implements OnInit, OnDestroy {
+  nodeHelpExpanded = false;
+  isPreviewMode = false;
+  private lastSelectedStepInstanceId = '';
+
   definition: StepDefinition | undefined;
   step: StepInstance | undefined;
   stepErrors: StepError[] = [];
@@ -869,6 +1528,17 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   // Copy toast
   copyNotification = '';
   private copyTimeout: any;
+
+  // Calibration dialogs
+  showSaveCalibrationDialog = false;
+  savingCalibration = false;
+  pendingCalibrationEquation = '';
+  pendingCalibrationName = '';
+  pendingCalibrationComment = '';
+
+  showCalibrationBrowser = false;
+  calibrationRecords: CalibrationRecord[] = [];
+  selectedCalibrationId = '';
 
   // Current preview image index (for histogram display)
   previewImageIndex = 0;
@@ -897,26 +1567,74 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
   private selectedIndex = -1;
   private subs: Subscription[] = [];
+  private nodeDescriptions: Record<string, NodeHelpContent> = {};
 
   constructor(
     private pipelineState: PipelineStateService,
     private recipeService: RecipeService,
+    private http: HttpClient,
   ) {}
 
+  private loadNodeDescriptions(): void {
+    this.http.get<Record<string, NodeHelpContent>>('assets/node-descriptions.json').subscribe({
+      next: (data) => {
+        this.nodeDescriptions = data;
+      },
+      error: (err) => {
+        console.warn('Failed to load node descriptions:', err);
+        this.nodeDescriptions = {};
+      },
+    });
+  }
+
   ngOnInit(): void {
+    this.loadNodeDescriptions();
     this.subs.push(
       combineLatest([
         this.pipelineState.pipeline$,
         this.pipelineState.selectedStepIndex$,
+        this.pipelineState.toolboxPreviewStepId$,
         this.pipelineState.validationErrors$,
         this.pipelineState.sideOutputs$,
         this.pipelineState.previewImageIndex$,
-      ]).subscribe(([pipeline, idx, errors, sideOutputs, imgIdx]) => {
+      ]).subscribe(([pipeline, idx, previewStepId, errors, sideOutputs, imgIdx]) => {
         this.selectedIndex = idx;
         this.previewImageIndex = imgIdx;
+        if (previewStepId) {
+          this.isPreviewMode = true;
+          this.definition = this.pipelineState.getStepDefinition(previewStepId);
+          if (this.definition) {
+            const defaults: Record<string, any> = {};
+            for (const p of this.definition.params) {
+              defaults[p.name] = p.default;
+            }
+            this.step = {
+              instance_id: `preview-${this.definition.id}`,
+              step_def_id: this.definition.id,
+              param_values: defaults,
+              order: -1,
+            };
+          } else {
+            this.step = undefined;
+          }
+          this.lastSelectedStepInstanceId = this.step?.instance_id ?? '';
+          this.stepErrors = [];
+          this.sideOutputs = {};
+          this.loadedImageNames = [];
+          this.imageOrderIndices = [];
+          this.referenceGroups = [];
+          return;
+        }
+
+        this.isPreviewMode = false;
         if (idx >= 0 && idx < pipeline.steps.length) {
           this.step = pipeline.steps[idx];
           this.definition = this.pipelineState.getStepDefinition(this.step.step_def_id);
+          const currentStepId = this.step.instance_id ?? '';
+          if (currentStepId !== this.lastSelectedStepInstanceId) {
+            this.nodeHelpExpanded = false;
+            this.lastSelectedStepInstanceId = currentStepId;
+          }
           this.stepErrors = errors.filter((e) => e.step_index === idx);
           // Clear results if this step has validation errors
           this.sideOutputs = this.stepErrors.length > 0 ? {} : (sideOutputs ?? {});
@@ -931,6 +1649,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
         } else {
           this.step = undefined;
           this.definition = undefined;
+          this.lastSelectedStepInstanceId = '';
           this.stepErrors = [];
           this.sideOutputs = {};
           this.loadedImageNames = [];
@@ -978,8 +1697,11 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (this.step?.step_def_id === 'resize_images' && param.name === 'scale') {
       return 1;
     }
-    if (this.step?.step_def_id === 'characterize_particles' && (param.name === 'filter_min_area' || param.name === 'filter_max_area')) {
-      return 50000;
+    if (this.step?.step_def_id === 'detect_particles' && param.name === 'filter_min_area') {
+      return 1000;
+    }
+    if (this.step?.step_def_id === 'detect_particles' && param.name === 'filter_max_area') {
+      return 10000;
     }
     // ROI sliders: max based on actual image dimensions
     if (this.step?.step_def_id === 'mask_rect_roi' && this.imgDimsW > 0 && this.imgDimsH > 0) {
@@ -994,6 +1716,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   onNumericTextChange(param: ParamSchema, value: any): void {
+    if (this.isPreviewMode) return;
     if (value === null || value === undefined || value === '') return;
     const num = param.type === 'int' ? parseInt(String(value), 10) : parseFloat(String(value));
     if (Number.isNaN(num)) return;
@@ -1001,6 +1724,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   onParamChange(paramName: string, value: any): void {
+    if (this.isPreviewMode) return;
     if (!this.step) return;
     const updated = { ...this.step.param_values, [paramName]: value };
 
@@ -1057,9 +1781,27 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return String(value);
   }
 
+  hasNodeHelp(): boolean {
+    return !!this.getNodeHelpContent();
+  }
+
+  toggleNodeHelp(): void {
+    if (!this.hasNodeHelp()) return;
+    this.nodeHelpExpanded = !this.nodeHelpExpanded;
+  }
+
+  getNodeHelpContent(): NodeHelpContent | null {
+    const stepDefId = this.step?.step_def_id;
+    if (!stepDefId || !this.nodeDescriptions[stepDefId]) {
+      return null;
+    }
+    return this.nodeDescriptions[stepDefId];
+  }
+
   // --- File/folder browsing ---
 
   browseFile(paramName: string): void {
+    if (this.isPreviewMode) return;
     this.recipeService.browseFile().subscribe({
       next: (res) => {
         if (res.path) {
@@ -1070,6 +1812,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   browseFolder(paramName: string): void {
+    if (this.isPreviewMode) return;
     this.recipeService.browseFolder().subscribe({
       next: (res) => {
         if (res.path) {
@@ -1118,6 +1861,17 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   private readonly ROI_RECT_PARAMS = new Set(['roi_x', 'roi_y', 'roi_width', 'roi_height']);
   private readonly ROI_ELLIPSE_PARAMS = new Set(['roi_cx', 'roi_cy', 'roi_rx', 'roi_ry']);
   private readonly ROI_POLYGON_PARAMS = new Set(['roi_points']);
+  private readonly DETECT_FILTER_PARAMS = new Set([
+    'filter_by_area',
+    'filter_min_area',
+    'filter_max_area',
+    'filter_by_circularity',
+    'filter_min_circularity',
+    'filter_max_circularity',
+    'filter_by_convexity',
+    'filter_convex',
+    'filter_concave',
+  ]);
 
   private isReferenceSliderParam(paramName: string): boolean {
     return this.REFERENCE_GENERATOR_PARAMS.has(paramName);
@@ -1148,9 +1902,17 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   shouldHideParam(param: ParamSchema): boolean {
+    if (this.step?.step_def_id === 'predict_node' && param.name === 'fit_index') return true;
+
+    if (this.step?.step_def_id === 'detect_particles') {
+      if (this.DETECT_FILTER_PARAMS.has(param.name)) return true;
+      return false;
+    }
+
     if (this.step?.step_def_id !== 'fit_curve') return false;
     if (param.name === 'x_name') return true;
     if (param.name === 'agg_method') return true;
+    if (param.name === 'merge_ab_pairs') return true;
     if (param.name === 'degree' && this.getParamValue('model') !== 'poly') return true;
     return false;
   }
@@ -1160,12 +1922,11 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (param.name === 'y_name') return 'Y tengely értékei';
     if (param.name === 'y_label') return 'Y tengely neve';
     if (param.name === 'model') return 'Illesztett görbe';
-    if (param.name === 'aggregate') return 'Szintenkénti összevonás';
-    if (param.name === 'merge_ab_pairs') return 'Tablettaoldalak összevonása';
+    if (param.name === 'aggregate') return 'Adatösszevonás';
     return param.label;
   }
 
-  isFitCurveAggregateParam(paramName: string): boolean {
+  isFitCurveDataMergeParam(paramName: string): boolean {
     return this.step?.step_def_id === 'fit_curve' && paramName === 'aggregate';
   }
 
@@ -1173,15 +1934,53 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return this.step?.step_def_id === 'fit_curve' && paramName === 'y_name';
   }
 
+  isPredictYAxisParam(paramName: string): boolean {
+    return this.step?.step_def_id === 'predict_node' && paramName === 'y_name';
+  }
+
+  isPredictEquationParam(paramName: string): boolean {
+    return this.step?.step_def_id === 'predict_node' && paramName === 'equation';
+  }
+
   getFitCurveAggMethodOptions(): string[] {
     const param = this.getParamByName('agg_method');
     return param?.options ?? ['mean', 'median'];
   }
 
+  getFitCurveMergeMode(): 'none' | 'tablet' | 'level' {
+    if (this.getParamValue('aggregate')) return 'level';
+    if (this.getParamValue('merge_ab_pairs')) return 'tablet';
+    return 'none';
+  }
+
+  setFitCurveMergeMode(mode: 'none' | 'tablet' | 'level'): void {
+    if (this.isPreviewMode) return;
+    if (!this.step || this.step.step_def_id !== 'fit_curve') return;
+    const updated = { ...this.step.param_values };
+    if (mode === 'level') {
+      updated['aggregate'] = true;
+      updated['merge_ab_pairs'] = false;
+    } else if (mode === 'tablet') {
+      updated['aggregate'] = false;
+      updated['merge_ab_pairs'] = true;
+    } else {
+      updated['aggregate'] = false;
+      updated['merge_ab_pairs'] = false;
+    }
+    this.pipelineState.updateParams(this.selectedIndex, updated);
+  }
+
+  getPredictYOptions(): string[] {
+    const defaults = this.getParamByName('y_name')?.options ?? ['mean', 'median', 'std', 'min', 'max'];
+    const options = this.getFitCurveYOptions(defaults);
+    const current = String(this.getParamValue('y_name') ?? '').trim();
+    if (current && !options.includes(current)) {
+      options.push(current);
+    }
+    return options;
+  }
+
   isBoolParamDisabled(paramName: string): boolean {
-    if (this.step?.step_def_id !== 'fit_curve') return false;
-    if (paramName === 'aggregate') return !!this.getParamValue('merge_ab_pairs');
-    if (paramName === 'merge_ab_pairs') return !!this.getParamValue('aggregate');
     return false;
   }
 
@@ -1192,6 +1991,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   moveImage(direction: 'up' | 'down' | 'top' | 'bottom'): void {
+    if (this.isPreviewMode) return;
     const idx = this.selectedImageIdx;
     const arr = this.loadedImageNames;
     const orderArr = this.imageOrderIndices;
@@ -1228,6 +2028,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   applyImageOrder(): void {
+    if (this.isPreviewMode) return;
     this.pipelineState.reorderLoadedImages(this.imageOrderIndices);
     this.showImageManager = false;
   }
@@ -1235,6 +2036,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   // --- User-friendly results ---
 
   hasUserFriendlyResults(): boolean {
+    if (this.isPreviewMode) return false;
     if (!this.step) return false;
     if (this.IMAGE_ONLY_STEPS.has(this.step.step_def_id)) return false;
     const id = this.step.step_def_id;
@@ -1362,12 +2164,14 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   // --- Copy functionality ---
 
   copyAllResults(event: Event): void {
+    if (this.isPreviewMode) return;
     event.stopPropagation();
     const text = JSON.stringify(this.sideOutputs, null, 2);
     navigator.clipboard.writeText(text).then(() => this.showCopyToast('Eredmények másolva'));
   }
 
   copyResult(key: string): void {
+    if (this.isPreviewMode) return;
     const val = this.sideOutputs[key];
     const text = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val);
     navigator.clipboard.writeText(text).then(() => this.showCopyToast(`„${key}" másolva`));
@@ -1399,6 +2203,113 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       return this.getFitCurveYOptions(param.options ?? []);
     }
     return param.options ?? [];
+  }
+
+  getOptionDisplayLabel(param: ParamSchema, option: string): string {
+    if (this.step?.step_def_id === 'apply_blur' && param.name === 'method') {
+      const map: Record<string, string> = {
+        gaussian: 'Gauss elmosás',
+        median: 'Medián szűrés',
+        bilateral: 'Bilaterális szűrés',
+        average: 'Átlagoló szűrés',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'flat_field_correction' && param.name === 'method') {
+      const map: Record<string, string> = {
+        gaussian: 'Gauss háttérbecslés',
+        downsampled: 'Lekicsinyített háttérbecslés',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'advanced_illumin_corr' && param.name === 'bg_method') {
+      const map: Record<string, string> = {
+        gaussian: 'Gauss háttérbecslés',
+        downsampled: 'Lekicsinyített háttérbecslés',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'apply_range_mask' && param.name === 'keep_mode') {
+      const map: Record<string, string> = {
+        inside: 'Tartományon belüli értékek megtartása',
+        outside: 'Tartományon kívüli értékek megtartása',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'apply_threshold' && param.name === 'mode') {
+      const map: Record<string, string> = {
+        binary: 'Bináris (küszöb felett fehér)',
+        binary_inv: 'Fordított bináris (küszöb alatt fehér)',
+        trunc: 'Levágás (küszöb felett korlátoz)',
+        tozero: 'Nullázás (küszöb alatt 0)',
+        tozero_inv: 'Fordított nullázás (küszöb felett 0)',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'histogram_equalization' && param.name === 'output_mode') {
+      const map: Record<string, string> = {
+        image: 'Korrigált kép',
+        histogram: 'Korrigált hisztogram',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'normalize_images' && param.name === 'norm_type') {
+      const map: Record<string, string> = {
+        minmax: 'Min-Max',
+        l1: 'L1 norma',
+        l2: 'L2 norma',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'detect_particles' && param.name === 'draw_label_key') {
+      const map: Record<string, string> = {
+        label: 'Azonosító',
+        area_px: 'Terület (px)',
+        perimeter_px: 'Kerület (px)',
+        equivalent_diameter_px: 'Ekvivalens átmérő (px)',
+        circularity: 'Körösség',
+        intensity_mean: 'Átlagos intenzitás',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id !== 'select_channel') {
+      return option;
+    }
+
+    if (param.name === 'space') {
+      const map: Record<string, string> = {
+        BGR: 'BGR',
+        HSV: 'HSV',
+        LAB: 'Lab',
+        GRAY: 'Szürkeárnyalatos',
+      };
+      return map[option] ?? option;
+    }
+
+    if (param.name === 'channel') {
+      const map: Record<string, string> = {
+        B: 'Blue',
+        G: 'Green',
+        R: 'Red',
+        H: 'Hue',
+        S: 'Saturation',
+        V: 'Value',
+        L: 'L',
+        A: 'a',
+        GRAY: 'szürkeárnyalat',
+      };
+      return map[option] ?? option;
+    }
+
+    return option;
   }
 
   getFitCurveYOptions(defaultOptions: string[] = []): string[] {
@@ -1433,6 +2344,30 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return options;
   }
 
+  getThresholdInputHistogram(): number[] | null {
+    if (this.step?.step_def_id !== 'apply_threshold') return null;
+    const histograms = this.sideOutputs['threshold_input_histograms'];
+    if (!Array.isArray(histograms) || histograms.length === 0) return null;
+    const idx = Math.min(this.previewImageIndex, histograms.length - 1);
+    const h = histograms[idx];
+    return Array.isArray(h) ? h : null;
+  }
+
+  getThresholdMarkerLines(): Array<{ value: number; label?: string; color?: string }> {
+    if (this.step?.step_def_id !== 'apply_threshold') return [];
+    const thresh = Number(this.getParamValue('thresh'));
+    const maxval = Number(this.getParamValue('maxval'));
+    const lines: Array<{ value: number; label?: string; color?: string }> = [];
+
+    if (Number.isFinite(thresh)) {
+      lines.push({ value: thresh, label: 'Küszöb', color: '#f59e0b' });
+    }
+    if (Number.isFinite(maxval)) {
+      lines.push({ value: maxval, label: 'Max', color: '#34d399' });
+    }
+    return lines;
+  }
+
   private makeAxisLabel(key: string): string {
     const trimmed = String(key ?? '').trim();
     if (!trimmed) return '';
@@ -1442,7 +2377,26 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       .trim();
   }
 
+  private getCurveFitEquation(fit: CurveFitData | null): string {
+    if (!fit || !Array.isArray(fit.coefficients) || fit.coefficients.length === 0) return '';
+    const c = fit.coefficients;
+    if (fit.model === 'linear' || (fit.model === 'poly' && fit.degree === 1)) {
+      return `y = ${c[0].toFixed(6)}x + ${c[1].toFixed(6)}`;
+    }
+    const expr = c
+      .map((coeff, i) => {
+        const power = c.length - 1 - i;
+        const val = coeff.toFixed(6);
+        if (power === 0) return val;
+        if (power === 1) return `${val}x`;
+        return `${val}x^${power}`;
+      })
+      .join(' + ');
+    return `y = ${expr}`;
+  }
+
   private syncFitCurveDefaultsFromContext(): void {
+    if (this.isPreviewMode) return;
     if (!this.step || this.step.step_def_id !== 'fit_curve') return;
 
     const currentY = String(this.step.param_values?.['y_name'] ?? '').trim();
@@ -1546,6 +2500,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   onReferenceGroupColorChange(groupKey: string, color: string): void {
+    if (this.isPreviewMode) return;
     this.referenceGroups = this.referenceGroups.map((g) =>
       g.key === groupKey ? { ...g, color } : g
     );
@@ -1553,6 +2508,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   generateReferenceValues(): void {
+    if (this.isPreviewMode) return;
     if (!this.step || this.step.step_def_id !== 'add_sequence_values') return;
     const p = this.step.param_values ?? {};
     const numLevels = Math.max(1, Math.floor(this.toNum(p['num_levels'], 5)));
@@ -1575,6 +2531,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   importReferenceValuesFromFile(): void {
+    if (this.isPreviewMode) return;
     this.recipeService.browseValuesFile().subscribe({
       next: (res) => {
         const path = res.path ?? '';
@@ -1594,9 +2551,105 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     });
   }
 
+  openSaveCalibrationDialog(): void {
+    if (this.isPreviewMode) return;
+    const fit = this.getLatestCurveFit();
+    if (!fit) return;
+    this.pendingCalibrationEquation = this.getCurveFitEquation(fit);
+    this.pendingCalibrationName = `Kalibráció ${new Date().toLocaleString('hu-HU')}`;
+    this.pendingCalibrationComment = '';
+    this.showSaveCalibrationDialog = true;
+  }
+
+  closeSaveCalibrationDialog(): void {
+    this.showSaveCalibrationDialog = false;
+  }
+
+  saveCurrentCalibration(): void {
+    if (this.isPreviewMode) return;
+    const fit = this.getLatestCurveFit();
+    if (!fit) return;
+    const name = this.pendingCalibrationName.trim();
+    if (!name) {
+      alert('A kalibráció neve kötelező.');
+      return;
+    }
+
+    const equation = this.pendingCalibrationEquation.trim() || this.getCurveFitEquation(fit);
+    if (!equation) {
+      alert('Az egyenlet nem lehet üres.');
+      return;
+    }
+
+    this.savingCalibration = true;
+    this.recipeService.saveCalibration({
+      name,
+      equation,
+      comment: this.pendingCalibrationComment.trim(),
+      x_name: fit.x_name,
+      y_name: fit.y_name,
+      y_key: (fit as any).y_key ?? fit.y_name,
+      model: fit.model,
+      degree: fit.degree,
+      coefficients: fit.coefficients,
+      x_min: (fit as any).x_min,
+      x_max: (fit as any).x_max,
+    }).subscribe({
+      next: () => {
+        this.savingCalibration = false;
+        this.showSaveCalibrationDialog = false;
+        this.showCopyToast('Kalibráció mentve');
+      },
+      error: (err) => {
+        this.savingCalibration = false;
+        const msg = err?.error?.error ?? 'Kalibráció mentése sikertelen.';
+        alert(msg);
+      },
+    });
+  }
+
+  openCalibrationBrowser(): void {
+    if (this.isPreviewMode) return;
+    this.recipeService.listCalibrations().subscribe({
+      next: (records) => {
+        this.calibrationRecords = records;
+        this.selectedCalibrationId = records[0]?.id ?? '';
+        this.showCalibrationBrowser = true;
+      },
+      error: (err) => {
+        const msg = err?.error?.error ?? 'Kalibrációk lekérése sikertelen.';
+        alert(msg);
+      },
+    });
+  }
+
+  closeCalibrationBrowser(): void {
+    this.showCalibrationBrowser = false;
+  }
+
+  applySelectedCalibration(): void {
+    if (this.isPreviewMode) return;
+    if (!this.step || this.step.step_def_id !== 'predict_node') return;
+    if (!this.selectedCalibrationId) return;
+    const selected = this.calibrationRecords.find(c => c.id === this.selectedCalibrationId);
+    if (!selected) return;
+
+    const updated = {
+      ...this.step.param_values,
+      equation: selected.equation ?? '',
+      y_name: selected.y_key || selected.y_name || this.step.param_values['y_name'] || 'mean',
+      x_min: selected.x_min ?? this.step.param_values['x_min'],
+      x_max: selected.x_max ?? this.step.param_values['x_max'],
+    };
+    this.pipelineState.updateParams(this.selectedIndex, updated);
+    this.showCalibrationBrowser = false;
+    this.showCopyToast('Kalibráció kiválasztva');
+  }
+
   // --- Maximize chart ---
 
   maximizeChart(data: any): void {
+    if (this.isPreviewMode) return;
     const omitted = this.pipelineState.getOmittedPoints();
     this.pipelineState.requestMaximizeGraph(data, omitted.indices);
   }
@@ -1604,6 +2657,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   // --- Run curve fit manually ---
 
   runCurveFit(): void {
+    if (this.isPreviewMode) return;
     const previousFits = this.sideOutputs['curve_fits'];
     const previousFitCount = Array.isArray(previousFits) ? previousFits.length : 0;
 

@@ -32,7 +32,10 @@ export interface CurveFitData {
       <canvas #canvas [width]="width" [height]="height"></canvas>
       @if (data) {
         <div class="fit-info">
-          <div class="fit-formula">{{ getFormulaText() }}</div>
+          <div class="fit-formula-row">
+            <div class="fit-formula">{{ getFormulaText() }}</div>
+            <button class="copy-equation-btn" (click)="copyEquation()" title="Egyenlet másolása">⧉</button>
+          </div>
           <div class="fit-r2">R² = {{ data.r2.toFixed(6) }}</div>
         </div>
       }
@@ -70,6 +73,31 @@ export interface CurveFitData {
     .fit-formula {
       color: #ccc;
       word-break: break-all;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .fit-formula-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .copy-equation-btn {
+      background: #2e2e2e;
+      border: 1px solid #4a4a4a;
+      border-radius: 4px;
+      color: #bbb;
+      cursor: pointer;
+      line-height: 1;
+      padding: 3px 6px;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .copy-equation-btn:hover {
+      color: #fff;
+      border-color: #6b8fad;
     }
 
     .fit-r2 {
@@ -116,6 +144,12 @@ export class ScatterChartComponent implements AfterViewInit, OnChanges {
         return `${val}x^${power}`;
       })
       .join(' + ');
+  }
+
+  copyEquation(): void {
+    const text = this.getFormulaText();
+    if (!text) return;
+    navigator.clipboard.writeText(text).catch(() => undefined);
   }
 
   private draw(): void {

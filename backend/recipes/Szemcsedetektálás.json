@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "name": "Szemcsedetektálás",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "94341600-639c-4ba8-9953-23750a3e1ef4",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "C:/Users/madlajos/Downloads/test/63_a.bmp"
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "aa227acc-4f5a-49a2-a0a1-c719f86bc9e5",
+      "step_def_id": "resize_images",
+      "param_values": {
+        "scale": 0.26
+      },
+      "order": 1
+    },
+    {
+      "instance_id": "3f915f47-6db8-4221-8773-d77511df0418",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "channel": "GRAY",
+        "space": "GRAY"
+      },
+      "order": 2
+    },
+    {
+      "instance_id": "43f568f9-7c5c-42e9-ba2a-0f2954c13d4b",
+      "step_def_id": "mask_rect_roi",
+      "param_values": {
+        "background_color": "fehér",
+        "roi_cx": 358,
+        "roi_cy": 385,
+        "roi_height": 0,
+        "roi_points": "[]",
+        "roi_rx": 291,
+        "roi_ry": 295,
+        "roi_type": "ellipse",
+        "roi_width": 0,
+        "roi_x": 0,
+        "roi_y": 0
+      },
+      "order": 3
+    },
+    {
+      "instance_id": "9810c1e6-a760-4a03-bafb-10c6f345b34e",
+      "step_def_id": "apply_threshold",
+      "param_values": {
+        "maxval": 255,
+        "mode": "binary_inv",
+        "thresh": 120
+      },
+      "order": 4
+    },
+    {
+      "instance_id": "18ac9583-4852-4ffa-83c3-d95e401d9878",
+      "step_def_id": "detect_particles",
+      "param_values": {
+        "draw": true,
+        "contour_thickness": 1,
+        "draw_label": false,
+        "draw_only_filtered": false,
+        "draw_label_key": "area_px",
+        "filter_by_area": false,
+        "filter_min_area": 885,
+        "filter_max_area": 50000,
+        "filter_by_circularity": true,
+        "filter_min_circularity": 0.29,
+        "filter_max_circularity": 1,
+        "filter_by_convexity": false,
+        "filter_convex": false,
+        "filter_concave": false
+      },
+      "order": 5
+    }
+  ],
+  "created_at": "2026-03-18T13:21:41.418753+00:00",
+  "modified_at": "2026-03-18T13:40:24.169525+00:00"
+}

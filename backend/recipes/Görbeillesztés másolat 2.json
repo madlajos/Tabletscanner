@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "name": "Görbeillesztés (másolat) 2",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "040daec2-4528-45da-8041-ed6aa33a65b1",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "C:/Users/madlajos/Downloads/test"
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "82cfbcc1-45e2-413d-bbf8-131c6db0f3ff",
+      "step_def_id": "resize_images",
+      "param_values": {
+        "height": 0,
+        "interpolation": "linear",
+        "keep_aspect": true,
+        "scale": 0.19,
+        "width": 0
+      },
+      "order": 1
+    },
+    {
+      "instance_id": "87afa608-08cd-4111-8eea-e9de9925532c",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "channel": "GRAY",
+        "space": "GRAY"
+      },
+      "order": 2
+    },
+    {
+      "instance_id": "ddfc0093-14a5-4984-b2c0-1a8bd1c426ae",
+      "step_def_id": "apply_range_mask",
+      "param_values": {
+        "high": 255,
+        "keep_mode": "inside",
+        "low": 50
+      },
+      "order": 3
+    },
+    {
+      "instance_id": "97a3c5bb-129b-42fa-aff5-0b05ba34aa62",
+      "step_def_id": "add_sequence_values",
+      "param_values": {
+        "mode": "start_step",
+        "name": "Helo",
+        "samples_per_value": 32,
+        "start": 0,
+        "step_val": 1,
+        "stop": 100,
+        "values": "1,2,3,4,5",
+        "group_colors": "{\"1\":\"#60a5fa\",\"2\":\"#34d399\",\"3\":\"#f59e0b\",\"4\":\"#f87171\",\"5\":\"#a78bfa\"}"
+      },
+      "order": 4
+    },
+    {
+      "instance_id": "fa7a6a30-3b0c-4fdd-b46b-1cd3e7024bf5",
+      "step_def_id": "calculate_intensity_stats",
+      "param_values": {
+        "percentiles": "5,25,50,75,95"
+      },
+      "order": 5
+    },
+    {
+      "instance_id": "f1d3a225-5f2d-4e61-ba5b-ea48183b9150",
+      "step_def_id": "fit_curve",
+      "param_values": {
+        "agg_method": "mean",
+        "aggregate": false,
+        "degree": 2,
+        "merge_ab_pairs": false,
+        "model": "linear",
+        "x_name": "Helo",
+        "y_name": "mean"
+      },
+      "order": 6
+    }
+  ],
+  "created_at": "2026-03-18T12:53:06.685295+00:00",
+  "modified_at": "2026-03-18T12:53:06.685295+00:00"
+}

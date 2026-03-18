@@ -1,0 +1,465 @@
+{
+  "load_image": {
+    "purpose": "A képfájlok betöltése a feldolgozási pipeline-ba. Ez az első, kötelező lépés, amely előkészíti a képeket a további feldolgozáshoz.",
+    "usage": "Válassz egy képfájlt vagy egy mappát, amely képeket tartalmaz. A node automatikusan felismeri és rendezi az összes támogatott formátumú képet. Opcionálisan módosíthatod a feldolgozási sorrendet a Képek kezelése gombbal.",
+    "inputs": "Az elemnek nincs bemenete",
+    "parameters": [
+      {
+        "name": "Forrás Útvonal",
+        "description": "A betölteni kívánt kép(ek) elérési útvonala. Támogatott képformátumok: PNG, JPG, JPEG, BMP, TIFF"
+      }
+    ],
+    "outputs": "A betöltött, sorba rendezett képek",
+    "placement": {
+      "before": "Nincs kötelező előzmény node.",
+      "after": "Bármely IMAGE bemenetet fogadó node elhelyezhető utána.",
+      "restrictions": [
+        "Mindig ez legyen az elsődleges fő lánc első node-ja."
+      ]
+    }
+  },
+  "add_sequence_values": {
+    "purpose": "Referencia értékek megadása pl. görbeillesztéshez. Az itt megadott adatsor az X tengely helyeit (osztályait) képezi a csatlakoztatott lépésnél.",
+    "usage": "A referencia változó nevének megadása után annak értékei vesszővel elválasztva megadhatók az X értékek mezőben. Vesszővel elválasztott értékek (.csv) betölthetők a tallózás gombbal is. Szabályos növekvő sor esetén az Értékek generálása almenüvel le is generálhatók a vesszővel elválasztott X osztályok.",
+    "inputs": "Az elemnek nincs bemenete",
+    "parameters": [
+      {
+        "name": "Változó neve",
+        "description": "A referencia adatsor neve, amely a csatlakoztatott lépésnél X tengely névként jelenik meg."
+      },
+      {
+        "name": "X értékek",
+        "description": "Vesszővel elválasztott referencia értékek. Alternatívaként .csv fájlból is betölthető."
+      },
+      {
+        "name": "Értékek generálása",
+        "description": "Szintek száma, kezdőérték és lépésköz alapján automatikusan előállítja a szabályos növekvő X osztályokat."
+      }
+    ],
+    "outputs": "Szöveges referencia adatsor, amelyet a Görbe illesztés node X tengely adataként használ.",
+    "placement": {
+      "before": "Nincs kötelező előzmény node.",
+      "after": "Önálló fő láncban nem folytatható IMAGE bemenetű node-okkal.",
+      "restrictions": [
+        "A Referencia értékek node csak a Görbe illesztés node másodlagos bemeneteként használható.",
+        "Nem helyezhető el önállóan a fő feldolgozási láncban."
+      ]
+    }
+  },
+  "select_channel": {
+    "purpose": "Színtér- és csatornakiválasztás. Átalakítja a bemeneti képeket a megadott színtérbe, és kiválasztja annak adott csatornáját.",
+    "usage": "A megfelelő színtér (BGR, HSV, Lab, Szürkeárnyalatos) és a feldolgozáshoz szükséges csatorna kiválasztása javasolt. A kimenet a kiválasztott csatornából egycsatornás (szürkeárnyalatos) kép.",
+    "inputs": "Bemeneti képek",
+    "parameters": [
+      {
+        "name": "Szín-tér",
+        "description": "A szín-tér, amelyre konvertálni szeretnél. BGR: piros-zöld-kék; HSV: árnyalat-telítettség-fényesség; LAB: fényesség-szín-szín; GRAY: szürkeárnyalat."
+      },
+      {
+        "name": "Csatorna",
+        "description": "A kiválasztani kívánt csatorna a megadott szín-térből. Az eredmény egycsatornás szürkeárnyalatos kép lesz."
+      }
+    ],
+    "outputs": "Szürkeárnyalatos képek a kiválasztott csatornából",
+    "placement": {
+      "before": "Képeket előállító node szükséges előtte.",
+      "after": "Kép (image) bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Bemenet és kimenet oldalon is kép típusú kapcsolódás javasolt."
+      ]
+    }
+  },
+  "apply_threshold": {
+    "purpose": "A szürkeárnyalatos képek intenzitás szerinti küszöbölése, amellyel bináris maszk vagy korlátozott intenzitású kimenet állítható elő.",
+    "usage": "A Küszöbérték és Max. érték beállítása után választható a működési mód. A Mód alatti intenzitásdiagram segít a küszöbök beállításában: a függőleges jelölők a megadott értékeket mutatják.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Küszöbérték",
+        "description": "Az a határérték, amelyhez a pixelintenzitások viszonyítva módosulnak."
+      },
+      {
+        "name": "Max. érték",
+        "description": "A kimeneti intenzitás felső célértéke a bináris módoknál."
+      },
+      {
+        "name": "Mód",
+        "description": "Bináris és fordított bináris módban maszk jellegű kimenet készül, míg a Levágás és Nullázás módok szürkeárnyalatos kimenetet adnak."
+      }
+    ],
+    "outputs": "A kiválasztott módtól függően: maszk jellegű kép vagy szürkeárnyalatosan módosított kép.",
+    "placement": {
+      "before": "Szürkeárnyalatos képet adó node szükséges előtte.",
+      "after": "A módtól függően maszkot vagy szürkeárnyalatot fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el.",
+        "A Mód értéke dinamikusan befolyásolja az utána húzható kompatibilis node-okat."
+      ]
+    }
+  },
+  "calculate_histograms": {
+    "purpose": "Hisztogram számítása a bemeneti szürkeárnyalatos képek intenzitáseloszlásáról.",
+    "usage": "A node a képekből osztásokra bontott intenzitáseloszlást számol. A képi információt nem adja tovább a fő láncban, csak hisztogram adatot állít elő elemzési célra.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Osztások száma",
+        "description": "A hisztogram binjeinek száma. Nagyobb érték részletesebb eloszlást mutat."
+      },
+      {
+        "name": "Tartomány min / max",
+        "description": "Az intenzitástartomány alsó és felső határa, amelyen a hisztogram számítás történik."
+      }
+    ],
+    "outputs": "Hisztogram adatok",
+    "placement": {
+      "before": "Szürkeárnyalatos képet adó node szükséges előtte.",
+      "after": "Hisztogram bemenetet fogadó elemzési node helyezhető utána.",
+      "restrictions": [
+        "A node nem képkimenetet ad tovább a fő láncban, ezért képet fogadó node nem helyezhető utána.",
+        "A tartomány max érték legyen nagyobb a tartomány min értéknél."
+      ]
+    }
+  },
+  "calculate_intensity_stats": {
+    "purpose": "Intenzitás statisztikák számítása a kiválasztott képtartományról, hogy mérhető és összehasonlítható numerikus jellemzők álljanak rendelkezésre.",
+    "usage": "A node a bemeneti képekből számolja a fő statisztikai értékeket (például minimum, maximum, átlag, medián, szórás), valamint a megadott percentiliseket. A percentilisek vesszővel elválasztva adhatók meg.",
+    "inputs": "Szürkeárnyalatos képek (javasoltan Tartomány maszk lépés után)",
+    "parameters": [
+      {
+        "name": "Percentilisek",
+        "description": "A számítandó percentilis értékek listája 0-100 tartományban (például: 5,25,50,75,95)."
+      }
+    ],
+    "outputs": "Numerikus statisztikai adatok",
+    "placement": {
+      "before": "Szürkeárnyalatos képet adó node szükséges előtte, tipikusan Tartomány maszk lépés.",
+      "after": "Numerikus vagy statisztikai bemenetet fogadó elemzési node helyezhető utána.",
+      "restrictions": [
+        "A node nem képkimenetet ad tovább a fő láncban, ezért képet fogadó node nem helyezhető utána.",
+        "A statisztikák értelmezéséhez javasolt előtte Tartomány maszkot használni.",
+        "A percentilis lista csak 0 és 100 közötti számokat tartalmazzon."
+      ]
+    }
+  },
+  "apply_range_mask": {
+    "purpose": "Intenzitás tartomány szerinti maszkolás, amellyel csak a kívánt fényességtartományba eső pixelek tarthatók meg.",
+    "usage": "Az Alsó határ és Felső határ értékekkel megadható az elfogadott intenzitástartomány. A Megtartás módnál eldönthető, hogy a tartományon belüli vagy azon kívüli pixelek maradjanak meg.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Alsó határ",
+        "description": "A megtartandó intenzitástartomány alsó értéke."
+      },
+      {
+        "name": "Felső határ",
+        "description": "A megtartandó intenzitástartomány felső értéke."
+      },
+      {
+        "name": "Megtartás",
+        "description": "Tartományon belüli vagy tartományon kívüli pixelek megtartása."
+      }
+    ],
+    "outputs": "Maszkolt szürkeárnyalatos képek",
+    "placement": {
+      "before": "Csak szürkeárnyalatos képet adó node helyezhető elé (például Színtér konverzió).",
+      "after": "Szürkeárnyalatos vagy maszk bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el.",
+        "Az Alsó határ értéknek kisebbnek vagy egyenlőnek kell lennie a Felső határ értékkel."
+      ]
+    }
+  },
+  "apply_blur": {
+    "purpose": "A kép zajának és finom részleteinek szabályozott simítása különböző elmosási módszerekkel.",
+    "usage": "A Módszer kiválasztása után a kernelméret és a kapcsolódó paraméterek állíthatók. Gauss és átlagoló mód általános simításhoz, medián mód impulzuszajhoz, bilaterális mód élmegőrző simításhoz javasolt.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "Módszer",
+        "description": "Az elmosás típusa: Gauss, medián, bilaterális vagy átlagoló szűrés."
+      },
+      {
+        "name": "Kernel méret",
+        "description": "A szűrőablak mérete. Nagyobb érték erősebb simítást ad, és páratlan szám szükséges."
+      },
+      {
+        "name": "Sigma",
+        "description": "Gauss módban az elmosás erősségét szabályozza."
+      },
+      {
+        "name": "Szín sigma / Tér sigma",
+        "description": "Bilaterális módban a hasonló intenzitás és a térbeli közelség súlyozását állítja."
+      }
+    ],
+    "outputs": "Elmosott képek",
+    "placement": {
+      "before": "Képet előállító node szükséges előtte.",
+      "after": "Kép vagy szürkeárnyalatos bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Erős elmosás csökkentheti a finom részletek detektálhatóságát.",
+        "A kernel méretnek páratlannak kell lennie."
+      ]
+    }
+  },
+  "flat_field_correction": {
+    "purpose": "A megvilágítási egyenetlenségek korrekciója szürkeárnyalatos képeken háttérbecsléssel és flat-field normalizálással.",
+    "usage": "A Háttér módszerrel választható a becslés típusa (Gauss vagy lekicsinyített). A Korrekció erősség, percentilis és opcionális zajszűrés paramétereivel finomhangolható az eredmény.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Háttér módszer",
+        "description": "Gauss háttérbecslés vagy lekicsinyített háttérbecslés nagyobb képekhez."
+      },
+      {
+        "name": "Korrekció erősség",
+        "description": "A flat-field osztás hatásának mértéke."
+      },
+      {
+        "name": "NLM zajszűrés",
+        "description": "Bekapcsolva előzetes zajcsökkentés történik a stabilabb háttérbecsléshez."
+      },
+      {
+        "name": "Percentilis alsó / felső",
+        "description": "A kimeneti intenzitástartomány robusztus skálázásának határai."
+      }
+    ],
+    "outputs": "Megvilágításban korrigált szürkeárnyalatos képek",
+    "placement": {
+      "before": "Csak szürkeárnyalatos képet adó node helyezhető elé.",
+      "after": "Szürkeárnyalatos képet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el.",
+        "A percentilis alsó értéknek kisebbnek kell lennie a felső értéknél."
+      ]
+    }
+  },
+  "advanced_illumin_corr": {
+    "purpose": "Haladó, többlépcsős megvilágításkorrekció szürkeárnyalatos képekre (zajszűrés, háttérbecslés, flat-field, robusztus skálázás, opcionális gamma).",
+    "usage": "A node összetett korrekciót végez a homogénebb háttér és stabilabb intenzitásmérés érdekében. Első körben javasolt az alapértékekkel indulni, majd a háttér- és percentilis paramétereket finomhangolni.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Háttér módszer",
+        "description": "Gauss vagy lekicsinyített háttérbecslés az egyenetlen megvilágítás modellezéséhez."
+      },
+      {
+        "name": "Korrekció erősség",
+        "description": "A háttérkompenzáció mértéke."
+      },
+      {
+        "name": "NLM zajszűrés",
+        "description": "Opcionális előszűrés zajos felvételekhez."
+      },
+      {
+        "name": "Gamma használata / Gamma",
+        "description": "A végső tónusgörbe finomhangolása opcionális gamma korrekcióval."
+      }
+    ],
+    "outputs": "Haladóan korrigált szürkeárnyalatos képek",
+    "placement": {
+      "before": "Csak szürkeárnyalatos képet adó node helyezhető elé.",
+      "after": "Szürkeárnyalatos képet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el.",
+        "Nagy korrekciós értékek túlkompenzálást okozhatnak, ezért fokozatos beállítás javasolt."
+      ]
+    }
+  },
+  "mask_rect_roi": {
+    "purpose": "A feldolgozandó érdeklődési terület (ROI) kijelölése és a képek maszkolása ezen tartományra.",
+    "usage": "A ROI típusa lehet téglalap, ellipszis vagy sokszög. A kijelölt területen kívüli képrészletek maszkolásra kerülnek, így a következő lépések célzott régión dolgoznak.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "ROI típusa",
+        "description": "A kijelölés alakja: téglalap, ellipszis vagy sokszög."
+      },
+      {
+        "name": "Pozíció és méret paraméterek",
+        "description": "A választott ROI típushoz tartozó koordináták és méretek."
+      },
+      {
+        "name": "Pontok (JSON)",
+        "description": "Sokszög esetén a csúcspontok listája."
+      },
+      {
+        "name": "Háttér színe",
+        "description": "A ROI-n kívüli terület színe: fekete (0) vagy fehér (255)."
+      }
+    ],
+    "outputs": "ROI-ra maszkolt képek",
+    "placement": {
+      "before": "Képet előállító node szükséges előtte.",
+      "after": "Kép vagy szürkeárnyalatos bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Érvényes ROI nélkül a node nem módosítja érdemben a képet.",
+        "Sokszög esetén legalább 3 pont szükséges."
+      ]
+    }
+  },
+  "histogram_equalization": {
+    "purpose": "A kép kontrasztjának javítása a hisztogram kiegyenlítésével.",
+    "usage": "Szürkeárnyalatos bemeneti képnél alkalmazandó. A Kimenet paraméterrel választható, hogy korrigált képet vagy korrigált hisztogram adatokat adjon tovább.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Kimenet",
+        "description": "Korrigált kép: szürkeárnyalatos képet ad tovább. Korrigált hisztogram: hisztogram adatot ad tovább, ami meghatározza, milyen node húzható utána."
+      }
+    ],
+    "outputs": "A kiválasztott Kimenet módtól függően: korrigált szürkeárnyalatos kép vagy korrigált hisztogram adatok.",
+    "placement": {
+      "before": "Csak szürkeárnyalatos kimenetet adó node helyezhető elé.",
+      "after": "Korrigált kép módban szürkeárnyalatos képet fogadó node-ok, korrigált hisztogram módban hisztogram bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el.",
+        "A Kimenet paraméter módosítása megváltoztatja az utána húzható kompatibilis node-okat."
+      ]
+    }
+  },
+  "apply_clahe": {
+    "purpose": "Lokális kontrasztjavítás kis képrégiókon.",
+    "usage": "Szürkeárnyalatos képeknél használható. A CLA hisztogram kiegyenlítés finom kontrasztkiemelést végez, miközben korlátozza a túlzott zajfelerősítést.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Levágási határ",
+        "description": "A kontrasztnövelés mértékének felső korlátja. Nagyobb érték erősebb hatást ad."
+      },
+      {
+        "name": "Rács X",
+        "description": "A feldolgozási rács vízszintes felosztása."
+      },
+      {
+        "name": "Rács Y",
+        "description": "A feldolgozási rács függőleges felosztása."
+      }
+    ],
+    "outputs": "Kontrasztjavított szürkeárnyalatos képek",
+    "placement": {
+      "before": "Szürkeárnyalatos képet adó node szükséges előtte.",
+      "after": "Szürkeárnyalatos képet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el."
+      ]
+    }
+  },
+  "normalize_images": {
+    "purpose": "A kép intenzitásértékeinek egységes skálára hozása.",
+    "usage": "A normalizálás a képek intenzitástartományát a megadott minimum és maximum értékekhez igazítja, illetve L1 vagy L2 norma szerint skálázza azokat.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "Minimum",
+        "description": "A normalizálás alsó célértéke Min-Max mód esetén."
+      },
+      {
+        "name": "Maximum",
+        "description": "A normalizálás felső célértéke Min-Max mód esetén."
+      },
+      {
+        "name": "Típus",
+        "description": "A normalizálás módja: Min-Max skálázás, L1 norma vagy L2 norma."
+      }
+    ],
+    "outputs": "Normalizált képek",
+    "placement": {
+      "before": "Képet előállító node szükséges előtte.",
+      "after": "Kép bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Kép-kép átalakító node, ezért előtte és utána is kép típusú kapcsolódás szükséges."
+      ]
+    }
+  },
+  "brightness_contrast": {
+    "purpose": "A kép világosságának és kontrasztjának egyszerű beállítása.",
+    "usage": "A Fényerő a kép egészét világosítja vagy sötétíti, a Kontraszt pedig növeli vagy csökkenti a tónuskülönbségeket.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "Fényerő",
+        "description": "Pozitív értéknél világosít, negatív értéknél sötétít."
+      },
+      {
+        "name": "Kontraszt",
+        "description": "Nagyobb értéknél erősebb tónuskülönbséget eredményez."
+      }
+    ],
+    "outputs": "Fényerőben vagy kontrasztban módosított képek",
+    "placement": {
+      "before": "Képet előállító node szükséges előtte.",
+      "after": "Kép bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Kép-kép átalakító node, ezért előtte és utána is kép típusú kapcsolódás szükséges."
+      ]
+    }
+  },
+  "gamma_correction": {
+    "purpose": "A kép középtónusainak gamma alapú korrekciója.",
+    "usage": "A gamma érték a kép világosságérzetét módosítja: kisebb érték világosít, nagyobb érték sötétít.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "Gamma",
+        "description": "A korrekció mértéke. 1 körül nincs jelentős változás, kisebb érték világosít, nagyobb sötétít."
+      }
+    ],
+    "outputs": "Gamma szerint korrigált képek",
+    "placement": {
+      "before": "Képet előállító node szükséges előtte.",
+      "after": "Kép bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Kép-kép átalakító node, ezért előtte és utána is kép típusú kapcsolódás szükséges."
+      ]
+    }
+  },
+  "robust_stretch_gamma": {
+    "purpose": "A szürkeárnyalatos képek kontrasztjának javítása percentilis alapú intenzitásnyújtással, opcionális gamma korrekcióval.",
+    "usage": "Az Alsó percentilis és Felső percentilis értékek kijelölik azt az intenzitástartományt, amelyet a node teljes kimeneti tartományra feszít. A Gamma paraméterrel ezután a középtónusok tovább finomíthatók.",
+    "inputs": "Szürkeárnyalatos képek",
+    "parameters": [
+      {
+        "name": "Alsó percentilis",
+        "description": "Az alsó intenzitáshatár meghatározása percentilis alapján. Az ennél sötétebb képrészletek a minimális kimeneti értékhez közel kerülnek."
+      },
+      {
+        "name": "Felső percentilis",
+        "description": "A felső intenzitáshatár meghatározása percentilis alapján. Az ennél világosabb képrészletek a maximális kimeneti értékhez közel kerülnek."
+      },
+      {
+        "name": "Gamma",
+        "description": "A nyújtás után alkalmazott tónuskorrekció. 1 körül alig változtat, kisebb érték világosít, nagyobb érték sötétít."
+      }
+    ],
+    "outputs": "Kontrasztban javított, szürkeárnyalatos képek",
+    "placement": {
+      "before": "Szürkeárnyalatos képet adó node szükséges előtte.",
+      "after": "Szürkeárnyalatos képet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el.",
+        "Az Alsó percentilis értéknek kisebbnek kell lennie a Felső percentilis értéknél."
+      ]
+    }
+  },
+  "resize_images": {
+    "purpose": "A bemeneti képek méretének egységes kicsinyítése a megadott skálázási aránnyal.",
+    "usage": "A Skálázási arány értéke határozza meg, hogy a képek eredeti méretükhöz képest mekkorára változzanak. 1 esetén a méret változatlan marad, 1 alatti értéknél kicsinyítés, 1 feletti értéknél nagyítás történik.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "Skálázási arány",
+        "description": "A képméretek szorzója. A csúszka 0 és 1 közötti tartományra van optimalizálva, de kézi megadással 1-nél nagyobb érték is beírható."
+      }
+    ],
+    "outputs": "Átméretezett képek",
+    "placement": {
+      "before": "Képet előállító node szükséges előtte.",
+      "after": "Kép bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "Kép-kép átalakító node, ezért előtte és utána is kép típusú kapcsolódás szükséges.",
+        "A skálázási aránynak 0-nál nagyobbnak kell lennie."
+      ]
+    }
+  }
+}

@@ -51,8 +51,10 @@ const CATEGORY_ORDER = ['io', 'adjustment', 'filter', 'analysis', 'detection'];
           @for (step of group.steps; track step.id) {
             <div
               class="tool-item"
+              [class.preview-selected]="previewStepId === step.id"
               cdkDrag
               [cdkDragData]="step"
+              (click)="onSingleClick(step)"
               (cdkDragStarted)="onDragStarted(step)"
               (dblclick)="onDoubleClick(step)"
             >
@@ -144,6 +146,11 @@ const CATEGORY_ORDER = ['io', 'adjustment', 'filter', 'analysis', 'detection'];
       background: #3a3a3a;
     }
 
+    .tool-item.preview-selected {
+      background: #2c3f5a;
+      outline: 1px solid #4f7fb5;
+    }
+
     .tool-item:active {
       cursor: grabbing;
     }
@@ -188,14 +195,23 @@ const CATEGORY_ORDER = ['io', 'adjustment', 'filter', 'analysis', 'detection'];
 })
 export class StepToolboxComponent implements OnInit, OnDestroy {
   categoryGroups: CategoryGroup[] = [];
+  previewStepId: string | null = null;
   private sub?: Subscription;
 
   constructor(private pipelineState: PipelineStateService) {}
 
   ngOnInit(): void {
-    this.sub = this.pipelineState.stepCatalog$.subscribe((catalog) => {
-      this.categoryGroups = this.groupByCategory(catalog);
-    });
+    this.sub = new Subscription();
+    this.sub.add(
+      this.pipelineState.stepCatalog$.subscribe((catalog) => {
+        this.categoryGroups = this.groupByCategory(catalog);
+      })
+    );
+    this.sub.add(
+      this.pipelineState.toolboxPreviewStepId$.subscribe((id) => {
+        this.previewStepId = id;
+      })
+    );
   }
 
   ngOnDestroy(): void {
@@ -208,6 +224,10 @@ export class StepToolboxComponent implements OnInit, OnDestroy {
 
   onDoubleClick(step: StepDefinition): void {
     this.pipelineState.addStep(step.id);
+  }
+
+  onSingleClick(step: StepDefinition): void {
+    this.pipelineState.setToolboxPreviewStep(step.id);
   }
 
   private groupByCategory(catalog: StepDefinition[]): CategoryGroup[] {

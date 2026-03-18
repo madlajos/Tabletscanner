@@ -116,3 +116,55 @@ def delete_recipe(name: str) -> Tuple[bool, Optional[str]]:
             return True, None
         except OSError as e:
             return False, f"Recept törlési hiba: {e}"
+
+
+def update_recipe_description(name: str, description: str) -> Tuple[bool, Optional[str]]:
+    """Update only the description field of a recipe."""
+    path = _recipe_path(name)
+    with _recipe_lock:
+        if not os.path.isfile(path):
+            return False, f"A recept nem található: {name}"
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["description"] = description
+            data["modified_at"] = datetime.now(timezone.utc).isoformat()
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True, None
+        except (json.JSONDecodeError, OSError) as e:
+            return False, f"Recept módosítási hiba: {e}"
+
+
+def duplicate_recipe(name: str) -> Tuple[Optional[str], Optional[str]]:
+    """Duplicate a recipe, returning (new_name, None) on success or (None, error)."""
+    path = _recipe_path(name)
+    with _recipe_lock:
+        if not os.path.isfile(path):
+            return None, f"A recept nem található: {name}"
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            return None, f"Recept olvasási hiba: {e}"
+
+    base_new_name = f"{name} (másolat)"
+    new_name = base_new_name
+    counter = 2
+    while os.path.isfile(_recipe_path(new_name)):
+        new_name = f"{base_new_name} {counter}"
+        counter += 1
+
+    now = datetime.now(timezone.utc).isoformat()
+    data["name"] = new_name
+    data["created_at"] = now
+    data["modified_at"] = now
+
+    new_path = _recipe_path(new_name)
+    with _recipe_lock:
+        try:
+            with open(new_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return new_name, None
+        except OSError as e:
+            return None, f"Recept másolási hiba: {e}"

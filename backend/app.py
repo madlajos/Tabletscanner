@@ -39,6 +39,7 @@ import pipeline_steps
 import pipeline_engine
 import pipeline_validators
 import recipe_manager
+import calibration_manager
 from pipeline_types import PipelineDocument
 
 
@@ -2904,6 +2905,23 @@ def import_explicit_values():
         return jsonify({"error": "Váratlan hiba az import során."}), 500
 
 
+@app.route('/api/pipeline/calibrations', methods=['GET'])
+def list_calibrations():
+    """List saved calibration equations."""
+    records = calibration_manager.list_calibrations()
+    return jsonify({"calibrations": records}), 200
+
+
+@app.route('/api/pipeline/calibrations', methods=['POST'])
+def save_calibration():
+    """Save a calibration equation with metadata."""
+    payload = request.get_json(silent=True) or {}
+    rec, err = calibration_manager.save_calibration(payload)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"message": "Kalibráció mentve", "calibration": rec}), 200
+
+
 @app.route('/api/pipeline/preview', methods=['POST'])
 def preview_pipeline():
     """Execute pipeline up to a selected step and return the result image + side outputs."""
@@ -3007,6 +3025,27 @@ def delete_recipe(name):
     if not success:
         return jsonify({'error': error, 'code': ErrorCode.RECIPE_NOT_FOUND, 'popup': True}), 404
     return jsonify({'message': 'Recept törölve'}), 200
+
+
+@app.route('/api/recipes/<name>/description', methods=['PATCH'])
+def update_recipe_description(name):
+    """Update only the description of a recipe."""
+    data = request.get_json(silent=True)
+    if not data or 'description' not in data:
+        return jsonify({'error': 'Hiányzó leírás mező', 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 400
+    success, error = recipe_manager.update_recipe_description(name, str(data['description']))
+    if not success:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_NOT_FOUND, 'popup': True}), 404
+    return jsonify({'message': 'Leírás frissítve'}), 200
+
+
+@app.route('/api/recipes/<name>/duplicate', methods=['POST'])
+def duplicate_recipe(name):
+    """Duplicate a recipe."""
+    new_name, error = recipe_manager.duplicate_recipe(name)
+    if error:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 400
+    return jsonify({'message': 'Recept másolva', 'new_name': new_name}), 200
 
 
 # --- Compiled-mode route restriction ---

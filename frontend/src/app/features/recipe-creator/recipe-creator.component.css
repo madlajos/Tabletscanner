@@ -132,6 +132,7 @@
 .load-dialog {
   max-height: 60vh;
   overflow-y: auto;
+  position: relative;
 }
 
 .dialog-title {
@@ -189,6 +190,13 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+}
+
+.recipe-name-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .recipe-name {
@@ -199,6 +207,115 @@
 .recipe-meta {
   color: #888;
   font-size: 11px;
+  flex-shrink: 0;
+}
+
+.recipe-desc-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.recipe-description {
+  color: #999;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipe-description.empty {
+  color: #555;
+  font-style: italic;
+}
+
+.recipe-desc-edit-btn {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.recipe-desc-edit-btn mat-icon {
+  font-size: 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.recipe-desc-edit-btn:hover {
+  color: #3b82f6;
+}
+
+.recipe-desc-edit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.recipe-desc-input {
+  flex: 1;
+  padding: 4px 8px;
+  background: #1e1e1e;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.recipe-desc-save,
+.recipe-desc-cancel {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+
+.recipe-desc-save mat-icon,
+.recipe-desc-cancel mat-icon {
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.recipe-desc-save {
+  color: #34d399;
+}
+
+.recipe-desc-save:hover {
+  color: #6ee7b7;
+}
+
+.recipe-desc-cancel {
+  color: #888;
+}
+
+.recipe-desc-cancel:hover {
+  color: #ef4444;
+}
+
+.recipe-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.recipe-action-btn {
+  color: #888;
+  transform: scale(0.8);
+}
+
+.recipe-action-btn:hover {
+  color: #3b82f6;
 }
 
 .recipe-delete {
@@ -208,4 +325,68 @@
 
 .recipe-delete:hover {
   color: #ef4444;
+}
+
+/* Delete confirmation overlay */
+.delete-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  border-radius: 8px;
+}
+
+.delete-confirm-dialog {
+  background: #2a2a2a;
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 300px;
+}
+
+.delete-confirm-text {
+  color: #e0e0e0;
+  font-size: 13px;
+  text-align: center;
+}
+
+.delete-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.delete-confirm-yes {
+  padding: 6px 16px;
+  background: #dc2626;
+  border: 1px solid #ef4444;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.delete-confirm-yes:hover {
+  background: #b91c1c;
+}
+
+.delete-confirm-no {
+  padding: 6px 16px;
+  background: #333;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.delete-confirm-no:hover {
+  background: #444;
 }
