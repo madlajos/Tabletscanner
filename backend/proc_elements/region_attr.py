@@ -15,6 +15,7 @@ def detect_particles(
     draw_only_filtered=False,
     draw_label_key="label",
     replace_images=False,
+    excluded_ids=None,
     debug=False
 ):
     """
@@ -56,6 +57,8 @@ def detect_particles(
 
     if filters is None:
         filters = {}
+
+    excluded_set = set(excluded_ids) if excluded_ids else set()
 
     if not isinstance(selected_features, (list, tuple)):
         data["error"] = "E3004"
@@ -234,7 +237,9 @@ def detect_particles(
                 key: particle.get(key, None) for key in selected_features
             }
 
-            keep = passes_filters(particle, filters)
+            is_excluded = particle["particle_id"] in excluded_set
+            particle["excluded"] = is_excluded
+            keep = passes_filters(particle, filters) and not is_excluded
             particle["passed_filters"] = bool(keep)
 
             image_particles.append(particle)
@@ -243,9 +248,14 @@ def detect_particles(
                 image_particles_filtered.append(particle)
 
             if draw:
-                should_draw = keep if draw_only_filtered else True
-
-                if should_draw:
+                if is_excluded:
+                    # Always draw excluded particles in yellow
+                    color = (0, 255, 255)
+                    cv2.polylines(vis, [pts], True, color, max(1, int(contour_thickness)))
+                else:
+                    should_draw = keep if draw_only_filtered else True
+                    if not should_draw:
+                        continue
                     color = (0, 255, 0) if keep else (0, 0, 255)
                     cv2.polylines(vis, [pts], True, color, max(1, int(contour_thickness)))
 

@@ -1059,6 +1059,9 @@ def _exec_detect_particles(data: dict, params: dict) -> dict:
     draw_label = bool(params.get("draw_label", False))
     draw_only_filtered = bool(params.get("draw_only_filtered", False))
     draw_label_key = params.get("draw_label_key", "area_px")
+    excluded_ids = params.get("excluded_ids", [])
+    if not isinstance(excluded_ids, list):
+        excluded_ids = []
 
     return _pe_detect_particles(
         data,
@@ -1069,6 +1072,7 @@ def _exec_detect_particles(data: dict, params: dict) -> dict:
         draw_only_filtered=draw_only_filtered,
         draw_label_key=draw_label_key,
         replace_images=draw,
+        excluded_ids=excluded_ids,
     )
 
 

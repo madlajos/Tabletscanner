@@ -193,6 +193,18 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
                 }
               </svg>
             }
+            @if (particleOverlayActive && particlesForOverlay.length > 0) {
+              <svg class="particle-overlay"
+                   [attr.viewBox]="'0 0 ' + particleImgW + ' ' + particleImgH">
+                @for (p of particlesForOverlay; track p.particle_id) {
+                  <polygon [attr.points]="particlePolygonStr(p)"
+                           [class.excluded]="isParticleExcluded(p.particle_id)"
+                           [class.filtered-out]="!p.passed_filters && !p.excluded"
+                           (click)="onParticleClick(p, $event)"
+                           class="particle-hitarea" />
+                }
+              </svg>
+            }
             @if (showRoiContextMenu) {
               <div class="roi-context-menu-overlay"
                    [style.left.px]="roiContextMenuScreenX"
@@ -408,6 +420,37 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
 
     .roi-context-menu-overlay button:hover {
       background: #3b82f6;
+    }
+
+    .particle-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .particle-hitarea {
+      fill: transparent;
+      stroke: transparent;
+      stroke-width: 0;
+      pointer-events: all;
+      cursor: pointer;
+    }
+
+    .particle-hitarea:hover {
+      fill: rgba(255, 255, 0, 0.18);
+    }
+
+    .particle-hitarea.excluded {
+      fill: rgba(255, 200, 0, 0.15);
+    }
+
+    .particle-hitarea.filtered-out {
+      pointer-events: none;
+      cursor: default;
     }
 
     .no-preview {
@@ -665,6 +708,15 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private roiDragStart = { mx: 0, my: 0, ox: 0, oy: 0, ow: 0, oh: 0 };
   private roiSelectedStepIndex = -1;
 
+  // Particle contour click overlay
+  particleOverlayActive = false;
+  particlesForOverlay: any[] = [];
+  particleExcludedIds: Set<string> = new Set();
+  particleImgW = 100;
+  particleImgH = 100;
+  private particleStepIndex = -1;
+  private particleClickPending = false;
+
   private subs: Subscription[] = [];
 
   constructor(
@@ -675,7 +727,10 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.subs.push(
       this.pipelineState.previewImage$.subscribe((img) => (this.imageSrc = img)),
-      this.pipelineState.previewLoading$.subscribe((l) => (this.loading = l)),
+      this.pipelineState.previewLoading$.subscribe((l) => {
+        if (this.particleClickPending) return;
+        this.loading = l;
+      }),
       this.pipelineState.imageCount$.subscribe((c) => (this.imageCount = c)),
       this.pipelineState.previewImageIndex$.subscribe((i) => (this.currentIndex = i)),
       this.pipelineState.sideOutputs$.subscribe((so) => {
@@ -725,6 +780,36 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           this.roiPolygonDrawing = false;
           this.roiEllipseDrawing = false;
           this.roiEllipseGuidePoints = [];
+        }
+      }),
+      // Track particle overlay when detect_particles step is selected
+      combineLatest([
+        this.pipelineState.pipeline$,
+        this.pipelineState.selectedStepIndex$,
+        this.pipelineState.sideOutputs$,
+        this.pipelineState.previewImageIndex$,
+        this.pipelineState.imageDims$,
+      ]).subscribe(([pipeline, idx, sideOutputs, imgIdx, dims]) => {
+        if (idx >= 0 && idx < pipeline.steps.length &&
+            pipeline.steps[idx].step_def_id === 'detect_particles') {
+          this.particleStepIndex = idx;
+          this.particleImgW = dims.w || 100;
+          this.particleImgH = dims.h || 100;
+          const particles = sideOutputs?.['meta']?.['particles'];
+          if (Array.isArray(particles) && particles[imgIdx]) {
+            this.particlesForOverlay = particles[imgIdx];
+          } else {
+            this.particlesForOverlay = [];
+          }
+          const step = pipeline.steps[idx];
+          const excludedArr: string[] = step.param_values?.['excluded_ids'] ?? [];
+          this.particleExcludedIds = new Set(excludedArr);
+          this.particleOverlayActive = true;
+        } else {
+          this.particleOverlayActive = false;
+          this.particlesForOverlay = [];
+          this.particleExcludedIds = new Set();
+          this.particleStepIndex = -1;
         }
       }),
     );
@@ -833,6 +918,37 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   goToImage(oneBasedIndex: number): void {
     const idx = Math.round(oneBasedIndex) - 1;
     this.pipelineState.setPreviewImageIndex(idx);
+  }
+
+  // --- Particle contour click ---
+
+  particlePolygonStr(particle: any): string {
+    const pts: number[][] = particle.polygon ?? particle.contour;
+    if (!Array.isArray(pts)) return '';
+    return pts.map((p: number[]) => `${p[0]},${p[1]}`).join(' ');
+  }
+
+  isParticleExcluded(particleId: string): boolean {
+    return this.particleExcludedIds.has(particleId);
+  }
+
+  onParticleClick(particle: any, event: MouseEvent): void {
+    event.stopPropagation();
+    if (!particle.passed_filters && !particle.excluded) return;
+    const pipeline = this.pipelineState.getPipeline();
+    if (this.particleStepIndex < 0 || this.particleStepIndex >= pipeline.steps.length) return;
+    const step = pipeline.steps[this.particleStepIndex];
+    const particleId: string = particle.particle_id;
+    const currentExcluded: string[] = [...(step.param_values?.['excluded_ids'] ?? [])];
+    const idx = currentExcluded.indexOf(particleId);
+    if (idx >= 0) {
+      currentExcluded.splice(idx, 1);
+    } else {
+      currentExcluded.push(particleId);
+    }
+    this.particleClickPending = true;
+    const updated = { ...step.param_values, excluded_ids: currentExcluded };
+    this.pipelineState.updateParams(this.particleStepIndex, updated);
   }
 
   // --- Graph viewer ---
@@ -1249,8 +1365,11 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (img) {
       this.roiImgW = img.naturalWidth;
       this.roiImgH = img.naturalHeight;
-      // Reset zoom and fit image into the container
-      this.zoomLevel = 1.0;
+      if (this.particleClickPending) {
+        this.particleClickPending = false;
+      } else {
+        this.zoomLevel = 1.0;
+      }
       this.applyImageTransform();
     }
   }
