@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "Szemcsedetektálás",
-  "description": "",
+  "description": "Szemcseméret méréshez szolgáló mintarecept",
   "steps": [
     {
       "instance_id": "94341600-639c-4ba8-9953-23750a3e1ef4",
@@ -80,5 +80,5 @@
     }
   ],
   "created_at": "2026-03-18T13:21:41.418753+00:00",
-  "modified_at": "2026-03-18T13:40:24.169525+00:00"
+  "modified_at": "2026-03-20T08:44:54.331155+00:00"
 }

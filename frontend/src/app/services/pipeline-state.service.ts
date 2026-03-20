@@ -24,6 +24,9 @@ const STEP_IO_OVERRIDES: Record<string, StepIoOverride> = {
   // Source nodes: no primary input in the main chain.
   load_image: { direction: 'source', inputType: null },
   add_sequence_values: { direction: 'source', inputType: null },
+  // Sink node: explicit save action as final step.
+  save_images: { direction: 'sink', outputType: null },
+  save_array: { direction: 'sink', outputType: null },
   // Explicit grayscale transform override to keep drag/drop compatibility stable.
   robust_stretch_gamma: { inputType: 'GRAYSCALE', outputType: 'GRAYSCALE' },
 };
@@ -82,7 +85,7 @@ export class PipelineStateService {
   private pipelineChangedSubject = new Subject<void>();
 
   /** Emitted when a chart should be maximized in the preview area. */
-  private maximizeGraphSubject = new Subject<{ data: any; omittedIndices: Set<number> }>();
+  private maximizeGraphSubject = new Subject<{ data: any; omittedIndices: Set<number>; sourceStepIndex: number }>();
   maximizeGraph$ = this.maximizeGraphSubject.asObservable();
 
   /** Recipe dirty flag. */
@@ -352,6 +355,10 @@ export class PipelineStateService {
                pipeline.steps[index].step_def_id === 'fit_curve' && index > 0) {
       // Fit curve runs manually, but inspector still needs upstream outputs for dynamic Y options.
       this.requestPreviewForStep(index - 1);
+    } else if (index >= 0 && index < pipeline.steps.length &&
+               pipeline.steps[index].step_def_id === 'predict_node' && index > 0) {
+      // Predict node needs upstream intensity_stats for Y field dropdown.
+      this.requestPreviewForStep(index - 1);
     } else {
       // Trigger preview for the newly selected step
       this.pipelineChangedSubject.next();
@@ -403,6 +410,21 @@ export class PipelineStateService {
 
   getSelectedStepIndex(): number {
     return this.selectedStepIndexSubject.value;
+  }
+
+  getStepOutputType(stepIndex: number): DataType | null {
+    const pipeline = this.getPipeline();
+    if (stepIndex < 0 || stepIndex >= pipeline.steps.length) {
+      return null;
+    }
+
+    const step = pipeline.steps[stepIndex];
+    const defn = this.getStepDefinition(step.step_def_id);
+    if (!defn) {
+      return null;
+    }
+
+    return this.getOutputType(defn, step);
   }
 
   getImageCount(): number {
@@ -567,8 +589,8 @@ export class PipelineStateService {
   }
 
   /** Request maximizing a chart in the preview area. */
-  requestMaximizeGraph(data: any, omittedIndices: Set<number>): void {
-    this.maximizeGraphSubject.next({ data, omittedIndices });
+  requestMaximizeGraph(data: any, omittedIndices: Set<number>, sourceStepIndex: number): void {
+    this.maximizeGraphSubject.next({ data, omittedIndices, sourceStepIndex });
   }
 
   private createTemporaryStep(stepDefId: string): StepInstance {
@@ -735,7 +757,12 @@ export class PipelineStateService {
           return false;
         }
 
-        if (!this.areTypesCompatible(prevOutput, currInput)) {
+        // Data-array save can only follow numeric outputs.
+        if (currDef.id === 'save_array') {
+          if (!(prevOutput === 'SCALAR' || prevOutput === 'HISTOGRAM' || prevOutput === 'CONTOURS')) {
+            return false;
+          }
+        } else if (!this.areTypesCompatible(prevOutput, currInput)) {
           return false;
         }
       }

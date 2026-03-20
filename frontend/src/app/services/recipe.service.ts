@@ -27,6 +27,19 @@ export interface CalibrationRecord {
   created_at?: string;
 }
 
+export interface SaveImagesResponse {
+  saved_count: number;
+  saved_paths: string[];
+  output_folder: string;
+}
+
+export interface SaveArrayResponse {
+  saved_path: string;
+  row_count: number;
+  col_count: number;
+  source_key: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class RecipeService {
   constructor(private http: HttpClient) {}
@@ -57,6 +70,22 @@ export class RecipeService {
       preview_image_index: previewImageIndex,
       single_image_only: singleImageOnly,
       omitted_indices: omittedIndices,
+    });
+  }
+
+  /** Execute batch image saving for a save_images node. */
+  savePipelineImages(pipeline: PipelineDocument, stepIndex: number): Observable<SaveImagesResponse> {
+    return this.http.post<SaveImagesResponse>(`${BASE_URL}/pipeline/save-images`, {
+      pipeline,
+      step_index: stepIndex,
+    });
+  }
+
+  /** Execute CSV save for a save_array node. */
+  savePipelineArray(pipeline: PipelineDocument, stepIndex: number): Observable<SaveArrayResponse> {
+    return this.http.post<SaveArrayResponse>(`${BASE_URL}/pipeline/save-array`, {
+      pipeline,
+      step_index: stepIndex,
     });
   }
 

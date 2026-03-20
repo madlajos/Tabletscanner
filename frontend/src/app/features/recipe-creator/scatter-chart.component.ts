@@ -14,11 +14,44 @@ export interface CurveFitData {
   fitted_y: number[];
   coefficients: number[];
   model: string;
-  degree: number;
+  degree: number | null;
   r2: number;
   x_name: string;
   y_name: string;
   point_colors?: (string | null)[];
+  calibration?: {
+    indices: number[];
+    x_values: number[];
+    y_values: number[];
+    fitted_y: number[];
+    metrics: {
+      sse: number;
+      dfe: number;
+      rmse: number | null;
+      r2: number;
+      adj_r2: number | null;
+      sample_count: number;
+      param_count: number;
+    };
+  };
+  validation?: {
+    indices: number[];
+    x_values: number[];
+    y_values: number[];
+    predicted_y: number[];
+    metrics: {
+      sse: number;
+      rmse: number | null;
+      sample_count: number;
+    };
+  } | null;
+  split?: {
+    enabled: boolean;
+    manual_split: boolean;
+    validation_ratio: number;
+    split_method: string;
+    random_seed?: number | null;
+  };
 }
 
 @Component({
@@ -37,6 +70,24 @@ export interface CurveFitData {
             <button class="copy-equation-btn" (click)="copyEquation()" title="Egyenlet másolása">⧉</button>
           </div>
           <div class="fit-r2">R² = {{ data.r2.toFixed(6) }}</div>
+          @if (hasSplitStats()) {
+            <div class="fit-extra-block">
+              <div class="fit-extra-title">Kalibracio</div>
+              <div class="fit-extra-grid">
+                <span>RMSE</span><span>{{ formatMetric(data.calibration?.metrics?.rmse, 6) }}</span>
+                <span>AdjR2</span><span>{{ formatMetric(data.calibration?.metrics?.adj_r2, 6) }}</span>
+                <span>SSE</span><span>{{ formatMetric(data.calibration?.metrics?.sse, 4) }}</span>
+              </div>
+            </div>
+            <div class="fit-extra-block">
+              <div class="fit-extra-title">Validacio</div>
+              <div class="fit-extra-grid">
+                <span>RMSE</span><span>{{ formatMetric(data.validation?.metrics?.rmse, 6) }}</span>
+                <span>SSE</span><span>{{ formatMetric(data.validation?.metrics?.sse, 4) }}</span>
+                <span>n</span><span>{{ data.validation?.metrics?.sample_count ?? 0 }}</span>
+              </div>
+            </div>
+          }
         </div>
       }
     </div>
@@ -104,6 +155,34 @@ export interface CurveFitData {
       color: #888;
       margin-top: 2px;
     }
+
+    .fit-extra-block {
+      color: #8b93a1;
+      margin-top: 6px;
+      padding-top: 4px;
+      border-top: 1px solid #2d3137;
+    }
+
+    .fit-extra-title {
+      color: #a8b1bf;
+      margin-bottom: 2px;
+      font-weight: 600;
+    }
+
+    .fit-extra-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 2px 10px;
+      line-height: 1.25;
+    }
+
+    .fit-extra-grid span:nth-child(odd) {
+      color: #7f8792;
+    }
+
+    .fit-extra-grid span:nth-child(even) {
+      color: #d2d9e3;
+    }
   `],
 })
 export class ScatterChartComponent implements AfterViewInit, OnChanges {
@@ -134,6 +213,12 @@ export class ScatterChartComponent implements AfterViewInit, OnChanges {
     if (this.data.model === 'linear' || (this.data.model === 'poly' && this.data.degree === 1)) {
       return `y = ${c[0].toFixed(4)}x + ${c[1].toFixed(4)}`;
     }
+    if (this.data.model === 'log') {
+      return `y = ${c[0].toFixed(4)}\u00B7ln(x) + ${c[1].toFixed(4)}`;
+    }
+    if (this.data.model === 'exp') {
+      return `y = ${c[0].toFixed(4)}\u00B7e^(${c[1].toFixed(4)}x)`;
+    }
     // Polynomial
     return c
       .map((coeff, i) => {
@@ -150,6 +235,16 @@ export class ScatterChartComponent implements AfterViewInit, OnChanges {
     const text = this.getFormulaText();
     if (!text) return;
     navigator.clipboard.writeText(text).catch(() => undefined);
+  }
+
+  hasSplitStats(): boolean {
+    if (!this.data) return false;
+    return Boolean(this.data.split?.enabled && this.data.calibration?.metrics && this.data.validation?.metrics);
+  }
+
+  formatMetric(value: number | null | undefined, digits = 4): string {
+    if (value === null || value === undefined || Number.isNaN(value)) return '-';
+    return Number(value).toFixed(digits);
   }
 
   private draw(): void {

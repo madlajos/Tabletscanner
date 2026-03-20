@@ -1,13 +1,14 @@
 import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit, ChangeDetectorRef } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { CommonModule, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription, combineLatest } from 'rxjs';
+import { DataType } from '../../models/pipeline.models';
 import { PipelineStateService } from '../../services/pipeline-state.service';
 
 @Component({
   selector: 'app-pipeline-preview',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, DecimalPipe],
   template: `
     <div class="preview-wrapper" #previewContainer
          (wheel)="onWheel($event)"
@@ -18,6 +19,72 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
          (dblclick)="resetZoom()"
          (auxclick)="onAuxClick($event)"
          [style.cursor]="getCursor()">
+
+      <!-- Image Tools Toolbar -->
+      <div class="image-toolbar">
+        <div class="toolbar-content">
+          <div class="toolbar-tools">
+            <button class="tool-btn icon-tool-btn" [class.active]="rulerActive"
+                    (click)="toggleRuler()" title="Vonalz\u00f3 (t\u00e1vols\u00e1gm\u00e9r\u00e9s)">
+              \uD83D\uDCCF
+            </button>
+            <button class="tool-btn icon-tool-btn" [class.active]="scaleActive"
+                    (click)="toggleScale()" title="Sk\u00e1la eszk\u00f6z">
+              \uD83D\uDCD0
+            </button>
+            <button class="tool-btn icon-btn icon-tool-btn" (click)="saveAnnotatedImage()" title="K\u00e9p ment\u00e9se"
+                    [disabled]="!imageSrc">
+              \uD83D\uDCBE
+            </button>
+            <button class="tool-btn icon-tool-btn" [class.active]="pixelActive"
+                    (click)="togglePixelTool()" title="Pixel m\u00e9r\u00e9s">
+              \uD83D\uDD0D
+            </button>
+          </div>
+          @if (pixelActive) {
+            <span class="pixel-color-space">{{ pixelColorSpace }}</span>
+            <div class="pixel-values-display">
+              @for (val of pixelGridValues; track $index) {
+                <span class="pixel-value-item">{{ val }}</span>
+              }
+            </div>
+            <button class="tool-btn icon-btn" (click)="copyPixelValues()"
+                    title="Értékek másolása" [disabled]="!pixelCurrentPos && !pixelFrozenPos">
+              \u2398
+            </button>
+          }
+          @if (rulerActive) {
+            @for (i of rulerSlots; track i) {
+              <input type="text" class="ruler-measurement-box" readonly
+                     [value]="getRulerMeasurement(i)"
+                     [class.used]="i < rulerLines.length || (i === rulerLines.length && rulerDrawingStart)">
+            }
+            <button class="tool-btn icon-btn" (click)="copyRulerMeasurements()"
+                    title="M\u00e9r\u00e9sek m\u00e1sol\u00e1sa" [disabled]="rulerLines.length === 0">
+              \u2398
+            </button>
+            <button class="tool-btn icon-btn" (click)="clearAllRulerLines()"
+                    title="Vonalak t\u00f6rl\u00e9se" [disabled]="rulerLines.length === 0">
+              \u2715
+            </button>
+          }
+          @if (scaleActive) {
+            @if (pxPerMm > 0) {
+              <span class="scale-ratio-display">{{ pxPerMm | number:'1.2-2' }} px/mm</span>
+            }
+            <span class="scale-label">Val\u00f3s t\u00e1vols\u00e1g:</span>
+            <input type="number" class="scale-mm-input" [(ngModel)]="scaleMm"
+                   placeholder="0" min="0" step="0.1"
+                   (ngModelChange)="onScaleMmChange()">
+            <span class="scale-unit">mm</span>
+            <label class="scale-checkbox-label">
+              <input type="checkbox" [(ngModel)]="showScaleBar"
+                     (ngModelChange)="onShowScaleBarChange()">
+              <span>Sk\u00e1la mutat\u00e1sa</span>
+            </label>
+          }
+        </div>
+      </div>
       @if (loading) {
         <div class="loading-overlay">
           <div class="spinner"></div>
@@ -67,7 +134,10 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
           @if (showGraphContextMenu) {
             <div class="graph-context-menu"
                  [style.left.px]="graphContextMenuX"
-                 [style.top.px]="graphContextMenuY">
+                 [style.top.px]="graphContextMenuY"
+                 (mousedown)="$event.stopPropagation()"
+                 (click)="$event.stopPropagation()"
+                 (contextmenu)="$event.stopPropagation()">
               @if (isContextPointOmitted()) {
                 <button (click)="restoreContextPoint()">Adatpont tartalmazása</button>
               } @else {
@@ -204,6 +274,138 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
                            class="particle-hitarea" />
                 }
               </svg>
+            }
+            <!-- Measurement & annotation overlay -->
+            @if (rulerActive || scaleActive || pixelActive || hasAnnotations) {
+              <svg class="ruler-overlay"
+                   [attr.viewBox]="'0 0 ' + rulerImgW + ' ' + rulerImgH"
+                   [style.pointer-events]="(rulerActive || scaleActive || pixelActive) ? 'auto' : 'none'"
+                   [style.cursor]="(rulerActive || scaleActive || pixelActive) ? 'crosshair' : 'default'"
+                   (mousedown)="onToolMouseDown($event)"
+                   (mousemove)="onToolMouseMove($event)"
+                   (mouseleave)="onToolMouseLeave()"
+                   (click)="onToolClick($event)">
+                <!-- Completed ruler lines -->
+                @for (line of rulerLines; track $index) {
+                  <g (contextmenu)="onRulerLineContextMenu($event, $index)">
+                    <line [attr.x1]="line.start.x" [attr.y1]="line.start.y"
+                          [attr.x2]="line.end.x" [attr.y2]="line.end.y"
+                          stroke="transparent" [attr.stroke-width]="12 * rulerScale"
+                          style="pointer-events:stroke"/>
+                    <line [attr.x1]="line.start.x" [attr.y1]="line.start.y"
+                          [attr.x2]="line.end.x" [attr.y2]="line.end.y"
+                          stroke="#1a5fb4" [attr.stroke-width]="2 * rulerScale"/>
+                    <circle [attr.cx]="line.start.x" [attr.cy]="line.start.y" [attr.r]="6 * rulerScale"
+                            fill="#1a5fb4" stroke="#fff" [attr.stroke-width]="1.5 * rulerScale"/>
+                    <circle [attr.cx]="line.end.x" [attr.cy]="line.end.y" [attr.r]="6 * rulerScale"
+                            fill="#1a5fb4" stroke="#fff" [attr.stroke-width]="1.5 * rulerScale"/>
+                    <text [attr.x]="(line.start.x + line.end.x) / 2 + 12 * rulerScale"
+                          [attr.y]="(line.start.y + line.end.y) / 2 - 10 * rulerScale"
+                          fill="#fff" [attr.font-size]="13 * rulerScale" font-family="monospace"
+                          stroke="#000" [attr.stroke-width]="3 * rulerScale" paint-order="stroke">
+                      {{ line.distance | number:'1.1-1' }} px
+                    </text>
+                  </g>
+                }
+                <!-- Line being drawn (ruler) -->
+                @if (rulerDrawingStart && rulerActive) {
+                  <circle [attr.cx]="rulerDrawingStart.x" [attr.cy]="rulerDrawingStart.y" [attr.r]="6 * rulerScale"
+                          fill="#1a5fb4" stroke="#fff" [attr.stroke-width]="1.5 * rulerScale"/>
+                  @if (rulerDrawingCurrent) {
+                    <line [attr.x1]="rulerDrawingStart.x" [attr.y1]="rulerDrawingStart.y"
+                          [attr.x2]="rulerDrawingCurrent.x" [attr.y2]="rulerDrawingCurrent.y"
+                          stroke="#1a5fb4" [attr.stroke-width]="2 * rulerScale"
+                          [attr.stroke-dasharray]="(8 * rulerScale) + ' ' + (5 * rulerScale)"/>
+                    <text [attr.x]="rulerDrawingCurrent.x + 16 * rulerScale"
+                          [attr.y]="rulerDrawingCurrent.y - 12 * rulerScale"
+                          fill="#fff" [attr.font-size]="14 * rulerScale" font-family="monospace"
+                          stroke="#000" [attr.stroke-width]="3 * rulerScale" paint-order="stroke">
+                      {{ rulerDrawingDistance | number:'1.1-1' }} px
+                    </text>
+                  }
+                }
+                <!-- Scale line (only show while drawing, hide once calibrated) -->
+                @if (scaleStart && !(scaleEnd && scaleMm > 0)) {
+                  <circle [attr.cx]="scaleStart.x" [attr.cy]="scaleStart.y" [attr.r]="6 * rulerScale"
+                          fill="#e67e22" stroke="#fff" [attr.stroke-width]="1.5 * rulerScale"/>
+                  @if (scaleEnd) {
+                    <line [attr.x1]="scaleStart.x" [attr.y1]="scaleStart.y"
+                          [attr.x2]="scaleEnd.x" [attr.y2]="scaleEnd.y"
+                          stroke="#e67e22" [attr.stroke-width]="2 * rulerScale"/>
+                    <circle [attr.cx]="scaleEnd.x" [attr.cy]="scaleEnd.y" [attr.r]="6 * rulerScale"
+                            fill="#e67e22" stroke="#fff" [attr.stroke-width]="1.5 * rulerScale"/>
+                  } @else if (scaleCurrentPos) {
+                    <line [attr.x1]="scaleStart.x" [attr.y1]="scaleStart.y"
+                          [attr.x2]="scaleCurrentPos.x" [attr.y2]="scaleCurrentPos.y"
+                          stroke="#e67e22" [attr.stroke-width]="2 * rulerScale"
+                          [attr.stroke-dasharray]="(8 * rulerScale) + ' ' + (5 * rulerScale)"/>
+                  }
+                }
+                <!-- Pixel measurement 3x3 grid -->
+                @if (pixelActive && (pixelCurrentPos !== null || pixelFrozenPos !== null)) {
+                  @let pos = pixelFrozenPos || pixelCurrentPos;
+                  @if (pos) {
+                    @for (val of pixelGridValues; track $index) {
+                      @let row = Math.floor($index / 3) - 1;
+                      @let col = ($index % 3) - 1;
+                        @let cx = pos.x + col * pixelGridSpacing + pixelGridOffsetX;
+                        @let cy = pos.y + row * pixelGridSpacing + pixelGridOffsetY;
+                        @let lines = getPixelDisplayLines(val);
+                    <g>
+                        <rect [attr.x]="cx - pixelGridHalfSize" [attr.y]="cy - pixelGridHalfSize"
+                              [attr.width]="pixelGridCellSize" [attr.height]="pixelGridCellSize"
+                            [attr.fill]="pixelGridColors[$index]"
+                              stroke="#fff" [attr.stroke-width]="pixelGridStrokeWidth"/>
+                        <text [attr.x]="cx" [attr.y]="getPixelTextStartY(cy, lines.length)"
+                            [attr.fill]="isColorBright(pixelGridColors[$index]) ? '#000' : '#fff'"
+                              [attr.font-size]="pixelGridFontSize" font-family="monospace"
+                            text-anchor="middle">
+                          @for (line of lines; track $index) {
+                            <tspan [attr.x]="cx" [attr.dy]="$index === 0 ? 0 : pixelGridLineHeight">{{ line }}</tspan>
+                          }
+                      </text>
+                    </g>
+                    }
+                  }
+                }
+                <!-- Scale bar overlay -->
+                @if (showScaleBar && pxPerMm > 0 && scaleBarPx > 0) {
+                  <rect [attr.x]="rulerImgW - scaleBarPx - 35 * rulerScale"
+                        [attr.y]="rulerImgH - 58 * rulerScale"
+                        [attr.width]="scaleBarPx + 30 * rulerScale"
+                        [attr.height]="44 * rulerScale"
+                        fill="rgba(0,0,0,0.55)" [attr.rx]="4 * rulerScale"/>
+                  <line [attr.x1]="rulerImgW - scaleBarPx - 20 * rulerScale"
+                        [attr.y1]="rulerImgH - 25 * rulerScale"
+                        [attr.x2]="rulerImgW - 20 * rulerScale"
+                        [attr.y2]="rulerImgH - 25 * rulerScale"
+                        stroke="#fff" [attr.stroke-width]="3 * rulerScale"/>
+                  <line [attr.x1]="rulerImgW - scaleBarPx - 20 * rulerScale"
+                        [attr.y1]="rulerImgH - 34 * rulerScale"
+                        [attr.x2]="rulerImgW - scaleBarPx - 20 * rulerScale"
+                        [attr.y2]="rulerImgH - 16 * rulerScale"
+                        stroke="#fff" [attr.stroke-width]="2 * rulerScale"/>
+                  <line [attr.x1]="rulerImgW - 20 * rulerScale"
+                        [attr.y1]="rulerImgH - 34 * rulerScale"
+                        [attr.x2]="rulerImgW - 20 * rulerScale"
+                        [attr.y2]="rulerImgH - 16 * rulerScale"
+                        stroke="#fff" [attr.stroke-width]="2 * rulerScale"/>
+                  <text [attr.x]="rulerImgW - scaleBarPx / 2 - 20 * rulerScale"
+                        [attr.y]="rulerImgH - 42 * rulerScale"
+                        fill="#fff" [attr.font-size]="13 * rulerScale" font-family="sans-serif"
+                        text-anchor="middle">
+                    {{ scaleBarMm }} mm
+                  </text>
+                }
+              </svg>
+            }
+            @if (showRulerContextMenu) {
+              <div class="ruler-context-menu"
+                   [style.left.px]="rulerContextMenuScreenX"
+                   [style.top.px]="rulerContextMenuScreenY"
+                   (mousedown)="$event.stopPropagation()">
+                <button (click)="deleteRulerLineFromContext()">Kijel\u00f6l\u00e9s t\u00f6rl\u00e9se</button>
+              </div>
             }
             @if (showRoiContextMenu) {
               <div class="roi-context-menu-overlay"
@@ -585,6 +787,217 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
       flex-shrink: 0;
     }
 
+    /* === Image Tools Toolbar === */
+
+    .image-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      background: #2a2a2a;
+      border-bottom: 1px solid #333;
+      flex-shrink: 0;
+      min-height: 28px;
+    }
+
+    .toolbar-content {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tool-btn {
+      background-color: #333;
+      color: #ccc;
+      border: 1px solid #555;
+      border-radius: 4px;
+      padding: 3px 8px;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+    }
+
+    .tool-btn:hover:not(:disabled) {
+      background-color: #444;
+      color: #fff;
+    }
+
+    .tool-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .tool-btn.active {
+      background-color: #1e3a5f;
+      color: #fff;
+      border-color: #1e3a5f;
+    }
+
+    .ruler-measurement-box {
+      width: 72px;
+      padding: 2px 4px;
+      background: #222;
+      border: 1px solid #444;
+      border-radius: 3px;
+      color: #666;
+      font-size: 11px;
+      font-family: monospace;
+      text-align: center;
+    }
+
+    .ruler-measurement-box.used {
+      color: #e0e0e0;
+      border-color: #1a5fb4;
+      background: #1a2a3a;
+    }
+
+    .icon-btn {
+      font-size: 14px;
+      filter: grayscale(1);
+    }
+
+    .icon-tool-btn {
+      width: 32px;
+      min-width: 32px;
+      height: 24px;
+      padding: 0;
+      flex-shrink: 0;
+      filter: grayscale(1);
+    }
+
+    .scale-label {
+      color: #999;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .scale-mm-input {
+      width: 44px;
+      padding: 2px 4px;
+      background: #222;
+      border: 1px solid #555;
+      border-radius: 3px;
+      color: #e0e0e0;
+      font-size: 11px;
+      text-align: center;
+      -moz-appearance: textfield;
+    }
+
+    .scale-mm-input::-webkit-outer-spin-button,
+    .scale-mm-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .scale-unit {
+      color: #666;
+      font-size: 11px;
+    }
+
+    .scale-ratio-display {
+      color: #4fc3f7;
+      font-size: 11px;
+      font-family: monospace;
+      padding: 2px 6px;
+      background: #1a2a3a;
+      border: 1px solid #1a5fb4;
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+
+    .scale-checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: #ccc;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .scale-checkbox-label input[type="checkbox"] {
+      accent-color: #3b82f6;
+    }
+
+    .ruler-context-menu {
+      position: absolute;
+      background: #2a2a2a;
+      border: 1px solid #555;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      z-index: 10;
+    }
+
+    .ruler-context-menu button {
+      display: block;
+      width: 100%;
+      padding: 8px 16px;
+      background: none;
+      border: none;
+      color: #e0e0e0;
+      font-size: 13px;
+      cursor: pointer;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .ruler-context-menu button:hover {
+      background: #3b82f6;
+    }
+
+    /* === Pixel measurement tool === */
+
+    .pixel-color-space {
+      color: #999;
+      font-size: 11px;
+      white-space: nowrap;
+      border-right: 1px solid #444;
+      padding-right: 8px;
+      margin-right: 4px;
+    }
+
+    .pixel-values-display {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .pixel-value-item {
+      color: #e0e0e0;
+      font-size: 11px;
+      font-family: monospace;
+      background: #1a2a3a;
+      border: 1px solid #444;
+      border-radius: 3px;
+      padding: 2px 4px;
+      min-width: 32px;
+      text-align: center;
+    }
+
+    /* === Ruler SVG Overlay === */
+
+    .ruler-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      z-index: 5;
+    }
+
     .page-btn {
       background: #333;
       border: 1px solid #555;
@@ -660,6 +1073,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   graphSelectedPoint = -1;
   private graphData: any = null;
   private graphOmittedIndices: Set<number> = new Set();
+  private graphViewerStepIndex = -1;
   private imageNames: string[] = [];
 
   // Graph context menu
@@ -717,6 +1131,112 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private particleStepIndex = -1;
   private particleClickPending = false;
 
+  // Ruler tool state (multi-ruler: up to 5 lines)
+  rulerActive = false;
+  rulerLines: Array<{start: {x: number; y: number}, end: {x: number; y: number}, distance: number}> = [];
+  rulerDrawingStart: {x: number; y: number} | null = null;
+  rulerDrawingCurrent: {x: number; y: number} | null = null;
+  rulerDrawingDistance = 0;
+  readonly RULER_MAX_LINES = 5;
+  readonly rulerSlots = [0, 1, 2, 3, 4];
+  rulerImgW = 100;
+  rulerImgH = 100;
+
+  // Scale tool state
+  scaleActive = false;
+  scaleStart: {x: number; y: number} | null = null;
+  scaleEnd: {x: number; y: number} | null = null;
+  scaleCurrentPos: {x: number; y: number} | null = null;
+  scaleLinePx = 0;
+  scaleMm = 0;
+  showScaleBar = false;
+  scaleBarPx = 0;
+  scaleBarMm = 0;
+
+  // Pixel measurement tool state
+  pixelActive = false;
+  pixelCurrentPos: {x: number; y: number} | null = null;
+  pixelFrozenPos: {x: number; y: number} | null = null;
+  pixelGridValues: string[] = ['', '', '', '', '', '', '', '', ''];
+  pixelGridColors: string[] = ['#000', '#000', '#000', '#000', '#000', '#000', '#000', '#000', '#000'];
+  pixelColorSpace = 'RGB';
+  pixelOutputType: DataType | null = null;
+  pixelImgW = 100;
+  pixelImgH = 100;
+  private pixelCanvasCache: HTMLCanvasElement | null = null;
+  private pixelImageDataCache: ImageData | null = null;
+
+  readonly Math = Math;
+
+  get pxPerMm(): number {
+    if (this.scaleLinePx > 0 && this.scaleMm > 0) {
+      return this.scaleLinePx / this.scaleMm;
+    }
+    return 0;
+  }
+
+  get rulerScale(): number {
+    return Math.max(1, Math.max(this.rulerImgW, this.rulerImgH) / 1000);
+  }
+
+  get pixelDisplayScale(): number {
+    const img = this.previewImg?.nativeElement;
+    if (img?.clientWidth && img.naturalWidth) {
+      return Math.max(img.clientWidth / img.naturalWidth, 0.01);
+    }
+    return Math.max(this.baseFitScale * this.zoomLevel, 0.01);
+  }
+
+  get pixelGridCoordScale(): number {
+    return 1 / this.pixelDisplayScale;
+  }
+
+  get pixelGridCellSize(): number {
+    return 30 * this.pixelGridCoordScale;
+  }
+
+  get pixelGridHalfSize(): number {
+    return this.pixelGridCellSize / 2;
+  }
+
+  get pixelGridSpacing(): number {
+    return 34 * this.pixelGridCoordScale;
+  }
+
+  get pixelGridOffsetX(): number {
+    return 96 * this.pixelGridCoordScale;
+  }
+
+  get pixelGridOffsetY(): number {
+    return -82 * this.pixelGridCoordScale;
+  }
+
+  get pixelGridFontSize(): number {
+    return 10 * this.pixelGridCoordScale;
+  }
+
+  get pixelGridLineHeight(): number {
+    return 9.5 * this.pixelGridCoordScale;
+  }
+
+  get pixelGridStrokeWidth(): number {
+    return Math.max(1.25 * this.pixelGridCoordScale, 1 / this.pixelDisplayScale);
+  }
+
+  // Ruler line context menu
+  showRulerContextMenu = false;
+  rulerContextMenuScreenX = 0;
+  rulerContextMenuScreenY = 0;
+  private rulerContextLineIndex = -1;
+
+  get hasAnnotations(): boolean {
+    return this.rulerLines.length > 0 ||
+           this.rulerDrawingStart !== null ||
+           (this.scaleStart !== null && !(this.scaleEnd && this.scaleMm > 0)) ||
+           (this.showScaleBar && this.pxPerMm > 0) ||
+           (this.pixelActive && (this.pixelCurrentPos !== null || this.pixelFrozenPos !== null));
+  }
+
   private subs: Subscription[] = [];
 
   constructor(
@@ -726,7 +1246,17 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.subs.push(
-      this.pipelineState.previewImage$.subscribe((img) => (this.imageSrc = img)),
+      this.pipelineState.previewImage$.subscribe((img) => {
+        this.imageSrc = img;
+        this.clearAllRulerLines();
+        this.clearScaleLine();
+        this.pixelCurrentPos = null;
+        this.pixelFrozenPos = null;
+        this.pixelGridValues = ['', '', '', '', '', '', '', '', ''];
+        this.pixelGridColors = ['#000', '#000', '#000', '#000', '#000', '#000', '#000', '#000', '#000'];
+        this.pixelCanvasCache = null;
+        this.pixelImageDataCache = null;
+      }),
       this.pipelineState.previewLoading$.subscribe((l) => {
         if (this.particleClickPending) return;
         this.loading = l;
@@ -744,13 +1274,37 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           }
         }
       }),
-      this.pipelineState.maximizeGraph$.subscribe(({ data, omittedIndices }) => {
-        this.openGraphViewer(data, omittedIndices);
+      this.pipelineState.maximizeGraph$.subscribe(({ data, omittedIndices, sourceStepIndex }) => {
+        this.openGraphViewer(data, omittedIndices, sourceStepIndex);
+      }),
+      this.pipelineState.omittedPoints$.subscribe(({ indices, imageNames }) => {
+        this.graphOmittedIndices = new Set(indices);
+        if (imageNames.length > 0) {
+          this.imageNames = [...imageNames];
+        }
+        if (this.showGraphViewer) {
+          this.drawGraph();
+        }
+      }),
+      this.pipelineState.selectedStepIndex$.subscribe((idx) => {
+        if (this.showGraphViewer && this.graphViewerStepIndex >= 0 && idx !== this.graphViewerStepIndex) {
+          this.closeGraphViewer();
+        }
       }),
       this.pipelineState.pipeline$.subscribe((pipeline) => {
         if (pipeline.steps.length === 0 && this.showGraphViewer) {
           this.closeGraphViewer();
         }
+      }),
+      combineLatest([
+        this.pipelineState.pipeline$,
+        this.pipelineState.selectedStepIndex$,
+        this.pipelineState.stepCatalog$,
+      ]).subscribe(([pipeline, idx]) => {
+        this.pixelOutputType = idx >= 0 && idx < pipeline.steps.length
+          ? this.pipelineState.getStepOutputType(idx)
+          : null;
+        this.detectColorSpace();
       }),
       // Track ROI editing when an ROI step is selected
       combineLatest([
@@ -874,7 +1428,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   getCursor(): string {
     if (this.showGraphViewer) return 'default';
-    if (this.zoomLevel > 1.0) return this.isDragging ? 'grabbing' : 'grab';
+    if (this.pixelActive) return 'crosshair';
+    if (this.zoomLevel > 1.0 && !this.rulerActive && !this.scaleActive) return this.isDragging ? 'grabbing' : 'grab';
     return 'default';
   }
 
@@ -953,9 +1508,10 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   // --- Graph viewer ---
 
-  openGraphViewer(data: any, omittedIndices: Set<number>): void {
+  openGraphViewer(data: any, omittedIndices: Set<number>, sourceStepIndex: number): void {
     this.graphData = data;
     this.graphOmittedIndices = new Set(omittedIndices);
+    this.graphViewerStepIndex = sourceStepIndex;
     this.graphSelectedPoint = -1;
     this.graphZoom = 1.0;
     this.graphPanX = 0;
@@ -968,6 +1524,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   closeGraphViewer(): void {
     this.showGraphViewer = false;
     this.showGraphContextMenu = false;
+    this.graphViewerStepIndex = -1;
   }
 
   getOmittedIndices(): Set<number> {
@@ -1348,7 +1905,6 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   onGraphMouseLeave(): void {
     this.graphDragging = false;
-    this.showGraphContextMenu = false;
   }
 
   resetGraphTransform(): void {
@@ -1365,6 +1921,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (img) {
       this.roiImgW = img.naturalWidth;
       this.roiImgH = img.naturalHeight;
+      this.rulerImgW = img.naturalWidth;
+      this.rulerImgH = img.naturalHeight;
       if (this.particleClickPending) {
         this.particleClickPending = false;
       } else {
@@ -1848,5 +2406,576 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (lenSq === 0) return Math.hypot(px - ax, py - ay);
     const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
     return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+
+  // === Ruler tool methods (multi-ruler, up to 5 lines) ===
+
+  toggleRuler(): void {
+    this.rulerActive = !this.rulerActive;
+    if (this.rulerActive) {
+      this.scaleActive = false;
+    }
+    this.rulerDrawingStart = null;
+    this.rulerDrawingCurrent = null;
+    this.rulerDrawingDistance = 0;
+  }
+
+  clearAllRulerLines(): void {
+    this.rulerLines = [];
+    this.rulerDrawingStart = null;
+    this.rulerDrawingCurrent = null;
+    this.rulerDrawingDistance = 0;
+  }
+
+  getRulerMeasurement(index: number): string {
+    if (index < this.rulerLines.length) {
+      return this.rulerLines[index].distance.toFixed(1) + ' px';
+    }
+    if (index === this.rulerLines.length && this.rulerDrawingStart && this.rulerDrawingDistance > 0) {
+      return this.rulerDrawingDistance.toFixed(1) + ' px';
+    }
+    return '';
+  }
+
+  copyRulerMeasurements(): void {
+    if (this.rulerLines.length === 0) return;
+    const values = this.rulerLines.map(l => l.distance.toFixed(1)).join('\t');
+    navigator.clipboard.writeText(values).catch(() => undefined);
+  }
+
+  // === Scale tool methods ===
+
+  toggleScale(): void {
+    this.scaleActive = !this.scaleActive;
+    if (this.scaleActive) {
+      this.rulerActive = false;
+      this.rulerDrawingStart = null;
+      this.rulerDrawingCurrent = null;
+      this.rulerDrawingDistance = 0;
+    }
+  }
+
+  clearScaleLine(): void {
+    this.scaleStart = null;
+    this.scaleEnd = null;
+    this.scaleCurrentPos = null;
+    this.scaleLinePx = 0;
+  }
+
+  onScaleMmChange(): void {
+    this.computeScaleBar();
+  }
+
+  onShowScaleBarChange(): void {
+    this.computeScaleBar();
+  }
+
+  private computeScaleBar(): void {
+    const pm = this.pxPerMm;
+    if (pm <= 0) {
+      this.scaleBarPx = 0;
+      this.scaleBarMm = 0;
+      return;
+    }
+    const targetPx = this.rulerImgW / 5;
+    const targetMm = targetPx / pm;
+    const niceValues = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+    let best = niceValues[0];
+    let bestDiff = Math.abs(targetMm - best);
+    for (const v of niceValues) {
+      const diff = Math.abs(targetMm - v);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = v;
+      }
+    }
+    this.scaleBarMm = best;
+    this.scaleBarPx = best * pm;
+  }
+
+  // === Unified tool event handlers ===
+
+  onToolClick(event: MouseEvent): void {
+    this.showRulerContextMenu = false;
+    if (this.rulerActive) {
+      this.handleRulerClick(event);
+    } else if (this.scaleActive) {
+      this.handleScaleClick(event);
+    } else if (this.pixelActive) {
+      this.handlePixelClick(event);
+    }
+  }
+
+  onToolMouseMove(event: MouseEvent): void {
+    if (this.rulerActive) {
+      this.handleRulerMouseMove(event);
+    } else if (this.scaleActive) {
+      this.handleScaleMouseMove(event);
+    } else if (this.pixelActive) {
+      this.handlePixelMouseMove(event);
+    }
+  }
+
+  onToolMouseLeave(): void {
+    if (this.rulerActive && this.rulerDrawingStart) {
+      this.rulerDrawingStart = null;
+      this.rulerDrawingCurrent = null;
+      this.rulerDrawingDistance = 0;
+    }
+    if (this.scaleActive && this.scaleStart && !this.scaleEnd) {
+      this.scaleStart = null;
+      this.scaleCurrentPos = null;
+    }
+    if (this.pixelActive && !this.pixelFrozenPos) {
+      this.pixelCurrentPos = null;
+    }
+  }
+
+  onToolMouseDown(event: MouseEvent): void {
+    if (this.rulerActive || this.scaleActive) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
+  // === Ruler click/move handlers ===
+
+  private handleRulerClick(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const pos = this.toolSvgCoords(event);
+    if (!pos) return;
+
+    if (!this.rulerDrawingStart) {
+      if (this.rulerLines.length >= this.RULER_MAX_LINES) return;
+      this.rulerDrawingStart = pos;
+      this.rulerDrawingCurrent = pos;
+      this.rulerDrawingDistance = 0;
+    } else {
+      const dist = this.calcDistance(this.rulerDrawingStart, pos);
+      this.rulerLines = [...this.rulerLines, { start: this.rulerDrawingStart, end: pos, distance: dist }];
+      this.rulerDrawingStart = null;
+      this.rulerDrawingCurrent = null;
+      this.rulerDrawingDistance = 0;
+    }
+  }
+
+  private handleRulerMouseMove(event: MouseEvent): void {
+    if (!this.rulerDrawingStart) return;
+
+    const pos = this.toolSvgCoords(event);
+    if (!pos) return;
+
+    this.rulerDrawingCurrent = pos;
+    this.rulerDrawingDistance = this.calcDistance(this.rulerDrawingStart, pos);
+  }
+
+  // === Ruler line context menu ===
+
+  onRulerLineContextMenu(event: MouseEvent, index: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.rulerContextLineIndex = index;
+    const container = this.imageRoiContainer?.nativeElement;
+    if (container) {
+      const containerRect = container.getBoundingClientRect();
+      this.rulerContextMenuScreenX = event.clientX - containerRect.left;
+      this.rulerContextMenuScreenY = event.clientY - containerRect.top;
+    }
+    this.showRulerContextMenu = true;
+  }
+
+  deleteRulerLineFromContext(): void {
+    this.showRulerContextMenu = false;
+    if (this.rulerContextLineIndex >= 0 && this.rulerContextLineIndex < this.rulerLines.length) {
+      this.rulerLines = this.rulerLines.filter((_, i) => i !== this.rulerContextLineIndex);
+    }
+    this.rulerContextLineIndex = -1;
+  }
+
+  // === Scale click/move handlers ===
+
+  private handleScaleClick(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const pos = this.toolSvgCoords(event);
+    if (!pos) return;
+
+    if (this.scaleEnd) {
+      // Restart scale line
+      this.scaleStart = pos;
+      this.scaleEnd = null;
+      this.scaleCurrentPos = pos;
+      this.scaleLinePx = 0;
+    } else if (!this.scaleStart) {
+      this.scaleStart = pos;
+      this.scaleCurrentPos = pos;
+    } else {
+      this.scaleEnd = pos;
+      this.scaleCurrentPos = null;
+      this.scaleLinePx = this.calcDistance(this.scaleStart, this.scaleEnd);
+      this.computeScaleBar();
+    }
+  }
+
+  private handleScaleMouseMove(event: MouseEvent): void {
+    if (!this.scaleStart || this.scaleEnd) return;
+
+    const pos = this.toolSvgCoords(event);
+    if (!pos) return;
+
+    this.scaleCurrentPos = pos;
+  }
+
+  // === Save image with annotations ===
+
+  async saveAnnotatedImage(): Promise<void> {
+    if (!this.imageSrc) return;
+
+    const img = this.previewImg?.nativeElement;
+    if (!img) return;
+
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.drawImage(img, 0, 0);
+
+    const s = this.rulerScale;
+
+    // Draw completed ruler lines
+    for (const line of this.rulerLines) {
+      ctx.beginPath();
+      ctx.moveTo(line.start.x, line.start.y);
+      ctx.lineTo(line.end.x, line.end.y);
+      ctx.strokeStyle = '#1a5fb4';
+      ctx.lineWidth = 2 * s;
+      ctx.stroke();
+
+      for (const pt of [line.start, line.end]) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 6 * s, 0, Math.PI * 2);
+        ctx.fillStyle = '#1a5fb4';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5 * s;
+        ctx.stroke();
+      }
+
+      const mx = (line.start.x + line.end.x) / 2 + 12 * s;
+      const my = (line.start.y + line.end.y) / 2 - 10 * s;
+      const text = line.distance.toFixed(1) + ' px';
+      ctx.font = `${13 * s}px monospace`;
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 3 * s;
+      ctx.strokeText(text, mx, my);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(text, mx, my);
+    }
+
+    // Draw scale line (only if not fully calibrated)
+    if (this.scaleStart && this.scaleEnd && !(this.scaleMm > 0)) {
+      ctx.beginPath();
+      ctx.moveTo(this.scaleStart.x, this.scaleStart.y);
+      ctx.lineTo(this.scaleEnd.x, this.scaleEnd.y);
+      ctx.strokeStyle = '#e67e22';
+      ctx.lineWidth = 2 * s;
+      ctx.stroke();
+
+      for (const pt of [this.scaleStart, this.scaleEnd]) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 6 * s, 0, Math.PI * 2);
+        ctx.fillStyle = '#e67e22';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5 * s;
+        ctx.stroke();
+      }
+    }
+
+    // Draw scale bar
+    if (this.showScaleBar && this.pxPerMm > 0 && this.scaleBarPx > 0) {
+      const barX = w - this.scaleBarPx - 20 * s;
+      const barEndX = w - 20 * s;
+      const barY = h - 25 * s;
+
+      // Background
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(barX - 15 * s, h - 58 * s, this.scaleBarPx + 30 * s, 44 * s);
+
+      // Bar line
+      ctx.beginPath();
+      ctx.moveTo(barX, barY);
+      ctx.lineTo(barEndX, barY);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3 * s;
+      ctx.stroke();
+
+      // End caps
+      for (const capX of [barX, barEndX]) {
+        ctx.beginPath();
+        ctx.moveTo(capX, barY - 9 * s);
+        ctx.lineTo(capX, barY + 9 * s);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2 * s;
+        ctx.stroke();
+      }
+
+      // Label
+      const label = `${this.scaleBarMm} mm`;
+      ctx.font = `${13 * s}px sans-serif`;
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, barX + this.scaleBarPx / 2, h - 42 * s);
+      ctx.textAlign = 'start';
+    }
+
+    // Save via file picker or download fallback
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) return;
+
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: 'annotated_image.png',
+          types: [{
+            description: 'PNG Image',
+            accept: { 'image/png': ['.png'] },
+          }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+      }
+    }
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'annotated_image.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }
+
+  // === Shared utility ===
+
+  private toolSvgCoords(event: MouseEvent): { x: number; y: number } | null {
+    const svg = (event.currentTarget ?? event.target) as SVGSVGElement;
+    if (!svg) return null;
+    const rect = svg.getBoundingClientRect();
+    const sx = this.rulerImgW / rect.width;
+    const sy = this.rulerImgH / rect.height;
+    return {
+      x: Math.max(0, Math.min(this.rulerImgW, (event.clientX - rect.left) * sx)),
+      y: Math.max(0, Math.min(this.rulerImgH, (event.clientY - rect.top) * sy)),
+    };
+  }
+
+  private calcDistance(
+    a: { x: number; y: number },
+    b: { x: number; y: number }
+  ): number {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // === Pixel measurement tool ===
+
+  togglePixelTool(): void {
+    this.pixelActive = !this.pixelActive;
+    if (this.pixelActive) {
+      this.rulerActive = false;
+      this.scaleActive = false;
+      this.rulerDrawingStart = null;
+      this.scaleStart = null;
+      this.pixelCurrentPos = null;
+      this.pixelFrozenPos = null;
+      this.pixelCanvasCache = null;
+      this.pixelImageDataCache = null;
+    }
+  }
+
+  private handlePixelClick(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const pos = this.toolSvgCoords(event);
+    if (!pos) return;
+
+    if (this.pixelFrozenPos) {
+      this.pixelFrozenPos = null;
+    } else {
+      this.pixelFrozenPos = pos;
+      this.updatePixelGrid(pos);
+    }
+  }
+
+  private handlePixelMouseMove(event: MouseEvent): void {
+    if (this.pixelFrozenPos) return;
+
+    const pos = this.toolSvgCoords(event);
+    if (!pos) return;
+
+    this.pixelCurrentPos = pos;
+    this.updatePixelGrid(pos);
+  }
+
+  private updatePixelGrid(centerPos: {x: number; y: number}): void {
+    const img = this.previewImg?.nativeElement;
+    if (!img || !img.complete) return;
+
+    const x = Math.round(centerPos.x);
+    const y = Math.round(centerPos.y);
+
+    const imageData = this.getImageData(img);
+    if (!imageData) return;
+
+    const width = imageData.width;
+    const height = imageData.height;
+    const data = imageData.data;
+    const channels = data.length / (width * height);
+
+    this.pixelGridValues = [];
+    this.pixelGridColors = [];
+
+    for (let row = -1; row <= 1; row++) {
+      for (let col = -1; col <= 1; col++) {
+        const px = x + col;
+        const py = y + row;
+
+        if (px < 0 || px >= width || py < 0 || py >= height) {
+          this.pixelGridValues.push('---');
+          this.pixelGridColors.push('#333');
+          continue;
+        }
+
+        const idx = (py * width + px) * channels;
+        const values: number[] = [];
+        for (let c = 0; c < Math.min(channels, 4); c++) {
+          values.push(data[idx + c] || 0);
+        }
+
+          const displayValue = this.formatPixelValue(values, channels);
+        const hexColor = this.rgbToHex(values[0] || 0, values[1] || 0, values[2] || 0);
+
+        this.pixelGridValues.push(displayValue);
+        this.pixelGridColors.push(hexColor);
+      }
+    }
+
+    this.detectColorSpace();
+    this.cdr.markForCheck();
+  }
+
+  private getImageData(img: HTMLImageElement): ImageData | null {
+    try {
+      if (!img.complete || !img.naturalWidth || !img.naturalHeight) {
+        return null;
+      }
+
+      if (this.pixelImageDataCache) {
+        return this.pixelImageDataCache;
+      }
+
+      if (!this.pixelCanvasCache) {
+        this.pixelCanvasCache = document.createElement('canvas');
+      }
+
+      const canvas = this.pixelCanvasCache;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      this.pixelImageDataCache = imageData;
+      return imageData;
+    } catch (e) {
+      console.error('Failed to get image data:', e);
+      return null;
+    }
+  }
+
+  private formatPixelValue(values: number[], channels: number): string {
+    if (this.pixelOutputType === 'GRAYSCALE' || this.pixelOutputType === 'MASK') {
+      return values[0].toString();
+    }
+
+    if (channels >= 3) {
+      return `${values[0]},${values[1]},${values[2]}`;
+    }
+
+    return values.join(',');
+  }
+
+  private detectColorSpace(): void {
+    if (this.pixelOutputType === 'GRAYSCALE') {
+      this.pixelColorSpace = 'Grayscale';
+      return;
+    }
+
+    if (this.pixelOutputType === 'MASK') {
+      this.pixelColorSpace = 'Mask';
+      return;
+    }
+
+    this.pixelColorSpace = 'RGB';
+  }
+
+  private rgbToHex(r: number, g: number, b: number): string {
+    return '#' + [r, g, b].map(x => {
+      const hex = x.toString(16);
+      return hex.length === 1 ? '0' + hex : hex;
+    }).join('');
+  }
+
+  isColorBright(hexColor: string): boolean {
+    const r = parseInt(hexColor.substring(1, 3), 16);
+    const g = parseInt(hexColor.substring(3, 5), 16);
+    const b = parseInt(hexColor.substring(5, 7), 16);
+    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+    return brightness > 128;
+  }
+
+  getPixelDisplayLines(val: string): string[] {
+    if (!val || val === '---') {
+      return ['-'];
+    }
+
+    return val.split(',').map((part) => part.trim());
+  }
+
+  getPixelTextStartY(centerY: number, lineCount: number): number {
+    return centerY - ((lineCount - 1) * this.pixelGridLineHeight) / 2 + this.pixelGridFontSize * 0.35;
+  }
+
+  getPixelDisplayValue(val: string): string {
+    if (val === '---') return '~';
+    const parts = val.split(',');
+    return parts.map(p => {
+      const n = parseInt(p, 10);
+      if (isNaN(n)) return '~';
+      return Math.round(n / 51).toString();
+    }).join(',');
+  }
+
+  copyPixelValues(): void {
+    if (this.pixelGridValues.length === 0) return;
+    const values = this.pixelGridValues.join(' | ');
+    navigator.clipboard.writeText(values).catch(() => undefined);
   }
 }

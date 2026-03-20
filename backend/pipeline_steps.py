@@ -12,6 +12,8 @@ results, metadata, and history.  Processing elements live in
 proc_elements/ and are wrapped here with parameter mapping.
 """
 import json
+import os
+import re
 
 from pipeline_types import (
     DataType, ParamSchema, StepDefinition,
@@ -103,6 +105,174 @@ def _exec_load_image(data: dict, params: dict) -> dict:
 
 
 _register(_load_image_def, _exec_load_image)
+
+
+# ---------------------------------------------------------------------------
+# 1/b. Save Images  (output sink)
+# ---------------------------------------------------------------------------
+_save_images_def = StepDefinition(
+    id="save_images",
+    name="Kép mentése",
+    category="io",
+    description="A feldolgozott képek mentése mappába az eredeti fájlnév prefix/suffix formátumával.",
+    icon="save",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="output_folder", label="Kimeneti mappa", type="file_path",
+                    default="", required=True,
+                    description="A mentett képek célmappája"),
+        ParamSchema(name="name_prefix", label="Név előtag", type="string",
+                    default="", required=False,
+                    description="A mentett fájlnév elejére kerül"),
+        ParamSchema(name="name_suffix", label="Név utótag", type="string",
+                    default="", required=False,
+                    description="A mentett fájlnév végére kerül az eredeti név után"),
+    ],
+    side_output_types={"save_preview": "SCALAR"},
+)
+
+
+def _sanitize_filename_part(value: str) -> str:
+    return re.sub(r'[<>:"/\\|?*]', '_', str(value or ''))
+
+
+def _exec_save_images(data: dict, params: dict) -> dict:
+    # This node is an explicit sink action in the UI. Preview/normal pipeline
+    # execution should not write files as a side effect.
+    if not isinstance(data, dict):
+        return data
+
+    paths = data.get("_original_paths", data.get("paths", []))
+    if paths:
+        first_name = os.path.basename(paths[0])
+    else:
+        first_name = "image_001.png"
+
+    stem, ext = os.path.splitext(first_name)
+    if not ext:
+        ext = ".png"
+
+    prefix = _sanitize_filename_part(params.get("name_prefix", ""))
+    suffix = _sanitize_filename_part(params.get("name_suffix", ""))
+    preview_name = f"{prefix}{_sanitize_filename_part(stem)}{suffix}{ext}"
+
+    results = data.setdefault("results", {})
+    results["save_preview"] = {
+        "example_original": first_name,
+        "example_saved": preview_name,
+    }
+    return data
+
+
+_register(_save_images_def, _exec_save_images)
+
+
+# ---------------------------------------------------------------------------
+# 1/c. Save Data Array  (output sink)
+# ---------------------------------------------------------------------------
+_save_array_def = StepDefinition(
+    id="save_array",
+    name="Adattömb mentése",
+    category="io",
+    description="Numerikus eredmények mentése CSV formátumban.",
+    icon="table_view",
+    input_type=DataType.SCALAR,
+    output_type=DataType.SCALAR,
+    params=[
+        ParamSchema(name="output_folder", label="Mentési hely", type="file_path",
+                    default="", required=True,
+                    description="A CSV fájl célmappája"),
+        ParamSchema(name="filename", label="Fájlnév", type="string",
+                    default="adattomb.csv", required=True,
+                    description="A kimeneti CSV fájl neve"),
+    ],
+    side_output_types={"array_save_preview": "SCALAR"},
+)
+
+
+def _is_numeric_scalar(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _table_from_value(value):
+    if value is None:
+        return None, None
+
+    if isinstance(value, dict):
+        if value and all(_is_numeric_scalar(v) for v in value.values()):
+            rows = [[str(k), v] for k, v in value.items()]
+            return ["key", "value"], rows
+        return None, None
+
+    if isinstance(value, list):
+        if not value:
+            return None, None
+
+        if all(isinstance(r, dict) for r in value):
+            keys = []
+            seen = set()
+            for rec in value:
+                for k in rec.keys():
+                    if k not in seen:
+                        seen.add(k)
+                        keys.append(str(k))
+            rows = [[rec.get(k, "") for k in keys] for rec in value]
+            return keys, rows
+
+        if all(isinstance(r, (list, tuple)) for r in value):
+            width = max((len(r) for r in value), default=0)
+            rows = [list(r) + [""] * max(0, width - len(r)) for r in value]
+            headers = [f"col_{i + 1}" for i in range(width)]
+            return headers, rows
+
+        if all(_is_numeric_scalar(v) for v in value):
+            return ["value"], [[v] for v in value]
+
+    return None, None
+
+
+def _exec_save_array(data: dict, params: dict) -> dict:
+    # Preview-only sink: do not write to disk during pipeline preview execution.
+    if not isinstance(data, dict):
+        return data
+
+    results = data.get("results", {}) if isinstance(data.get("results", {}), dict) else {}
+
+    source_key = ""
+    headers = []
+    rows = []
+    for key, value in results.items():
+        h, r = _table_from_value(value)
+        if h and r:
+            source_key = str(key)
+            headers = h
+            rows = r
+            break
+
+    if not headers:
+        preview = {
+            "source_key": "",
+            "headers": [],
+            "rows": [],
+            "message": "Nem található menthető numerikus adattömb az előző lépésekben.",
+        }
+    else:
+        max_cols = min(10, len(headers))
+        preview = {
+            "source_key": source_key,
+            "headers": headers[:max_cols],
+            "rows": [list(r[:max_cols]) for r in rows[:10]],
+            "total_rows": len(rows),
+            "total_cols": len(headers),
+        }
+
+    out_results = data.setdefault("results", {})
+    out_results["array_save_preview"] = preview
+    return data
+
+
+_register(_save_array_def, _exec_save_array)
 
 
 # ---------------------------------------------------------------------------
@@ -365,20 +535,17 @@ _fit_curve_def = StepDefinition(
     id="fit_curve",
     name="Görbe illesztés",
     category="analysis",
-    description="Lineáris vagy polinomiális görbe illesztése a referencia értékek és az intenzitás statisztikák alapján.",
+    description="Görbe illesztése a referencia értékek és az intenzitás statisztikák alapján (lineáris, polinom, logaritmikus, exponenciális).",
     icon="show_chart",
     input_type=DataType.IMAGE,
     output_type=DataType.IMAGE,
     params=[
         ParamSchema(name="y_name", label="Y tengely értékei", type="string",
-                    default="mean",
+                    default="mean", required=False,
                     description="A görbe illesztéshez használt Y mező"),
-        ParamSchema(name="y_label", label="Y tengely neve", type="string",
-                    default="mean",
-                    description="A grafikonon megjelenő Y tengelyfelirat"),
         ParamSchema(name="model", label="Illesztett görbe", type="enum",
                     default="linear",
-                    options=["linear", "poly"]),
+                    options=["linear", "poly", "log", "exp"]),
         ParamSchema(name="degree", label="Polinom fok", type="int",
                     default=2, min=1, max=10, step=1,
                     description="Polinom illesztés fokszáma (poly módban)"),
@@ -391,8 +558,17 @@ _fit_curve_def = StepDefinition(
         ParamSchema(name="merge_ab_pairs", label="Tablettaoldalak összevonása", type="bool",
                     default=False, required=False,
                     description="_a/_b utótagú X értékek összevonása"),
+        ParamSchema(name="split_enabled", label="Kalibráció/validáció felosztás", type="bool",
+                    default=False, required=False,
+                    description="Automatikus kalibráció/validáció split engedélyezése"),
+        ParamSchema(name="validation_ratio", label="Validáló halmaz aránya", type="int",
+                default=20, min=0, max=99, step=1, required=False,
+                description="A validáló halmaz aránya százalékban (0-99%)"),
+        ParamSchema(name="split_method", label="Felosztás módja", type="enum",
+                    default="random", options=["random", "ordered"], required=False,
+                    description="Automatikus split módja (véletlenszerű vagy sorrend)"),
     ],
-    side_output_types={"r2": "SCALAR", "coefficients": "SCALAR"},
+    side_output_types={"calibration_metrics": "SCALAR", "validation_metrics": "SCALAR", "coefficients": "SCALAR"},
     secondary_inputs=["add_sequence_values"],
 )
 
@@ -409,16 +585,21 @@ def _exec_fit_curve(data: dict, params: dict) -> dict:
             x_name = fallback
 
     y_name = params.get("y_name", "mean")
-    y_label = params.get("y_label")
     model = params.get("model", "linear")
     degree = int(params.get("degree", 2))
     aggregate = bool(params.get("aggregate", False))
     agg_method = params.get("agg_method", "mean")
     merge_ab_pairs = bool(params.get("merge_ab_pairs", False))
+    split_enabled = bool(params.get("split_enabled", False))
+    raw_validation_ratio = float(params.get("validation_ratio", 20))
+    validation_ratio = raw_validation_ratio / 100.0 if raw_validation_ratio >= 1 else raw_validation_ratio
+    split_method = params.get("split_method", "random")
     return _pe_fit_curve(data, x_name=x_name, y_name=y_name, model=model,
                          degree=degree, aggregate=aggregate,
                          agg_method=agg_method, merge_ab_pairs=merge_ab_pairs,
-                         y_display_name=y_label)
+                         split_enabled=split_enabled,
+                         validation_ratio=validation_ratio,
+                         split_method=split_method)
 
 
 _register(_fit_curve_def, _exec_fit_curve)
@@ -433,21 +614,15 @@ _predict_node_def = StepDefinition(
     category="analysis",
     description="Előrejelzés kalibrációs egyenlet alapján (kézi egyenlet vagy mentett kalibráció).",
     icon="trending_up",
-    input_type=DataType.IMAGE,
+    input_type=DataType.SCALAR,
     output_type=DataType.IMAGE,
     params=[
         ParamSchema(name="equation", label="Kalibrációs egyenlet", type="string",
                     default="", required=False,
                     description="y = f(x) alakú egyenlet. Pl: y = 1.23x + 0.4"),
         ParamSchema(name="y_name", label="Bemeneti Y mező", type="string",
-                    default="mean", required=True,
+                    default="mean", required=False,
                     description="Melyik intenzitás mezőből számoljon predikciót"),
-        ParamSchema(name="x_min", label="Keresési tartomány min", type="float",
-                    default=0.0, required=False,
-                    description="Az inverz keresés alsó X határa"),
-        ParamSchema(name="x_max", label="Keresési tartomány max", type="float",
-                    default=255.0, required=False,
-                    description="Az inverz keresés felső X határa"),
         ParamSchema(name="fit_index", label="Görbe illesztés index", type="int",
                     default=0, min=0, max=100, step=1,
                     description="Legacy: melyik korábbi görbét használja, ha nincs egyenlet"),
@@ -460,16 +635,12 @@ def _exec_predict_node(data: dict, params: dict) -> dict:
     fit_index = int(params.get("fit_index", 0))
     equation = str(params.get("equation", "")).strip()
     y_name = str(params.get("y_name", "mean")).strip() or "mean"
-    x_min = params.get("x_min", None)
-    x_max = params.get("x_max", None)
     return _pe_predict_node(
         model_data=data,
         input_data=data,
         fit_index=fit_index,
         equation=equation,
         y_name=y_name,
-        x_min=x_min,
-        x_max=x_max,
     )
 
 

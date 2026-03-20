@@ -2983,6 +2983,274 @@ def preview_pipeline():
     return jsonify(response_data), 200
 
 
+def _safe_filename_part(value: str) -> str:
+    value = str(value or '')
+    invalid = '<>:"/\\|?*'
+    for ch in invalid:
+        value = value.replace(ch, '_')
+    return value
+
+
+def _prepare_image_for_disk(image: np.ndarray) -> np.ndarray:
+    if image is None:
+        return image
+    if image.dtype == np.uint8 or image.dtype == np.uint16:
+        return image
+    if image.dtype == np.bool_:
+        return (image.astype(np.uint8) * 255)
+
+    arr = image.astype(np.float32)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return np.zeros_like(arr, dtype=np.uint8)
+
+    min_v = float(np.min(finite))
+    max_v = float(np.max(finite))
+    if max_v <= min_v:
+        return np.zeros_like(arr, dtype=np.uint8)
+
+    arr = (arr - min_v) / (max_v - min_v)
+    arr = np.clip(arr * 255.0, 0, 255)
+    return arr.astype(np.uint8)
+
+
+def _next_available_path(folder: str, filename: str) -> str:
+    base, ext = os.path.splitext(filename)
+    candidate = os.path.join(folder, filename)
+    index = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(folder, f"{base}_{index}{ext}")
+        index += 1
+    return candidate
+
+
+def _is_numeric_scalar(value) -> bool:
+    return isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool)
+
+
+def _table_from_value(value):
+    if value is None:
+        return None, None
+
+    if isinstance(value, dict):
+        if value and all(_is_numeric_scalar(v) for v in value.values()):
+            rows = [[str(k), v] for k, v in value.items()]
+            return ["key", "value"], rows
+        return None, None
+
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return ["value"], [[value.item()]]
+        if value.ndim == 1:
+            return [f"col_{i + 1}" for i in range(value.shape[0])], [value.tolist()]
+        if value.ndim >= 2:
+            arr2 = value.reshape(value.shape[0], -1)
+            headers = [f"col_{i + 1}" for i in range(arr2.shape[1])]
+            return headers, arr2.tolist()
+
+    if isinstance(value, list):
+        if not value:
+            return None, None
+
+        if all(isinstance(r, dict) for r in value):
+            keys = []
+            seen = set()
+            for rec in value:
+                for k in rec.keys():
+                    if k not in seen:
+                        seen.add(k)
+                        keys.append(str(k))
+            rows = [[rec.get(k, "") for k in keys] for rec in value]
+            return keys, rows
+
+        if all(isinstance(r, (list, tuple)) for r in value):
+            width = max((len(r) for r in value), default=0)
+            headers = [f"col_{i + 1}" for i in range(width)]
+            rows = [list(r) + [""] * max(0, width - len(r)) for r in value]
+            return headers, rows
+
+        if all(_is_numeric_scalar(v) for v in value):
+            return ["value"], [[v] for v in value]
+
+    return None, None
+
+
+def _pick_numeric_table(data_dict: dict):
+    results = data_dict.get('results', {}) if isinstance(data_dict.get('results', {}), dict) else {}
+    for key, value in results.items():
+        headers, rows = _table_from_value(value)
+        if headers and rows:
+            return str(key), headers, rows
+    return '', [], []
+
+
+def _ensure_csv_filename(raw_name: str) -> str:
+    name = str(raw_name or '').strip() or 'adattomb.csv'
+    name = _safe_filename_part(name)
+    base, ext = os.path.splitext(name)
+    if ext.lower() != '.csv':
+        name = f"{base or 'adattomb'}.csv"
+    return name
+
+
+@app.route('/api/pipeline/save-images', methods=['POST'])
+def pipeline_save_images():
+    """Execute pipeline up to save_images node input and write all resulting images to disk."""
+    data = request.get_json(silent=True) or {}
+    pipeline_data = data.get('pipeline')
+    step_index = data.get('step_index')
+
+    if pipeline_data is None or step_index is None:
+        return jsonify({'error': 'Hiányzó pipeline vagy step_index mező.'}), 400
+
+    try:
+        step_index = int(step_index)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Érvénytelen step_index.'}), 400
+
+    try:
+        doc = PipelineDocument.from_dict(pipeline_data)
+    except Exception as e:
+        return jsonify({'error': f'Érvénytelen pipeline dokumentum: {e}'}), 400
+
+    if step_index < 0 or step_index >= len(doc.steps):
+        return jsonify({'error': 'A step_index tartományon kívül esik.'}), 400
+
+    step = doc.steps[step_index]
+    if step.step_def_id != 'save_images':
+        return jsonify({'error': 'A kiválasztott lépés nem Kép mentése típusú.'}), 400
+
+    params = step.param_values or {}
+    output_folder = str(params.get('output_folder', '')).strip()
+    name_prefix = _safe_filename_part(params.get('name_prefix', ''))
+    name_suffix = _safe_filename_part(params.get('name_suffix', ''))
+
+    if not output_folder:
+        return jsonify({'error': 'A kimeneti mappa kötelező.'}), 400
+
+    try:
+        os.makedirs(output_folder, exist_ok=True)
+    except Exception as e:
+        return jsonify({'error': f'A mappa nem hozható létre: {e}'}), 400
+
+    exec_result = pipeline_engine.execute_pipeline(doc, up_to_step=step_index - 1)
+    if not exec_result.success:
+        return jsonify({
+            'error': 'A pipeline futtatása sikertelen a mentés előtt.',
+            'errors': [e.to_dict() for e in exec_result.errors],
+        }), 400
+
+    run_data = exec_result.data or {}
+    images = run_data.get('images', [])
+    original_paths = run_data.get('_original_paths', run_data.get('paths', []))
+
+    if not isinstance(images, list) or not images:
+        return jsonify({'error': 'Nincs menthető kép a kimeneten.'}), 400
+
+    saved_paths: list[str] = []
+    for idx, img in enumerate(images):
+        if img is None:
+            continue
+
+        original_name = ''
+        if isinstance(original_paths, list) and idx < len(original_paths):
+            original_name = os.path.basename(str(original_paths[idx]))
+        if not original_name:
+            original_name = f'image_{idx + 1:03d}.png'
+
+        stem, ext = os.path.splitext(original_name)
+        if not ext:
+            ext = '.png'
+
+        safe_name = f"{name_prefix}{_safe_filename_part(stem)}{name_suffix}{ext}"
+        target_path = _next_available_path(output_folder, safe_name)
+
+        image_to_save = _prepare_image_for_disk(img)
+        if image_to_save is None:
+            continue
+
+        ok = cv2.imwrite(target_path, image_to_save)
+        if ok:
+            saved_paths.append(target_path)
+
+    return jsonify({
+        'saved_count': len(saved_paths),
+        'saved_paths': saved_paths,
+        'output_folder': output_folder,
+    }), 200
+
+
+@app.route('/api/pipeline/save-array', methods=['POST'])
+def pipeline_save_array():
+    """Execute pipeline before save_array node and write first numeric table to CSV."""
+    data = request.get_json(silent=True) or {}
+    pipeline_data = data.get('pipeline')
+    step_index = data.get('step_index')
+
+    if pipeline_data is None or step_index is None:
+        return jsonify({'error': 'Hiányzó pipeline vagy step_index mező.'}), 400
+
+    try:
+        step_index = int(step_index)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Érvénytelen step_index.'}), 400
+
+    try:
+        doc = PipelineDocument.from_dict(pipeline_data)
+    except Exception as e:
+        return jsonify({'error': f'Érvénytelen pipeline dokumentum: {e}'}), 400
+
+    if step_index < 0 or step_index >= len(doc.steps):
+        return jsonify({'error': 'A step_index tartományon kívül esik.'}), 400
+
+    step = doc.steps[step_index]
+    if step.step_def_id != 'save_array':
+        return jsonify({'error': 'A kiválasztott lépés nem Adattömb mentése típusú.'}), 400
+
+    params = step.param_values or {}
+    output_folder = str(params.get('output_folder', '')).strip()
+    filename = _ensure_csv_filename(params.get('filename', 'adattomb.csv'))
+
+    if not output_folder:
+        return jsonify({'error': 'A mentési hely kötelező.'}), 400
+
+    try:
+        os.makedirs(output_folder, exist_ok=True)
+    except Exception as e:
+        return jsonify({'error': f'A mappa nem hozható létre: {e}'}), 400
+
+    exec_result = pipeline_engine.execute_pipeline(doc, up_to_step=step_index - 1)
+    if not exec_result.success:
+        return jsonify({
+            'error': 'A pipeline futtatása sikertelen a mentés előtt.',
+            'errors': [e.to_dict() for e in exec_result.errors],
+        }), 400
+
+    run_data = exec_result.data or {}
+    source_key, headers, rows = _pick_numeric_table(run_data)
+    if not headers or not rows:
+        return jsonify({'error': 'Nem található menthető numerikus adattömb.'}), 400
+
+    target_path = _next_available_path(output_folder, filename)
+
+    try:
+        import csv
+        with open(target_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow(row)
+    except Exception as e:
+        return jsonify({'error': f'CSV mentési hiba: {e}'}), 500
+
+    return jsonify({
+        'saved_path': target_path,
+        'row_count': len(rows),
+        'col_count': len(headers),
+        'source_key': source_key,
+    }), 200
+
+
 @app.route('/api/recipes', methods=['GET'])
 def list_recipes():
     """List all saved recipes."""

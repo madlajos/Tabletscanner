@@ -178,6 +178,9 @@ interface NodeHelpContent {
                       [ngModel]="getParamValue(param.name)"
                       (ngModelChange)="onNumericTextChange(param, $event)"
                     />
+                    @if (isFitCurveValidationRatioParam(param.name)) {
+                      <span class="inline-unit">%</span>
+                    }
                   </div>
                 }
                 @case ('float') {
@@ -202,33 +205,30 @@ interface NodeHelpContent {
                 }
                 @case ('bool') {
                   @if (isFitCurveDataMergeParam(param.name)) {
-                    <div class="aggregation-block">
-                      <div class="param-label">Adatösszevonás</div>
-                      <div class="aggregation-radio-grid">
-                        <label class="merge-mode-option">
-                          <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'none'" (change)="setFitCurveMergeMode('none')" />
-                          <span>Nincs</span>
-                        </label>
-                        <label class="merge-mode-option">
-                          <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'tablet'" (change)="setFitCurveMergeMode('tablet')" />
-                          <span>Tablettánként</span>
-                        </label>
-                        <label class="merge-mode-option with-inline-select">
-                          <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'level'" (change)="setFitCurveMergeMode('level')" />
-                          <span>Szintenként</span>
-                          @if (getFitCurveMergeMode() === 'level') {
-                            <select
-                              id="param-agg_method"
-                              [ngModel]="getParamValue('agg_method')"
-                              (ngModelChange)="onParamChange('agg_method', $event)"
-                            >
-                              @for (opt of getFitCurveAggMethodOptions(); track opt) {
-                                <option [value]="opt">{{ opt }}</option>
-                              }
-                            </select>
-                          }
-                        </label>
-                      </div>
+                    <div class="aggregation-radio-grid">
+                      <label class="merge-mode-option">
+                        <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'none'" (change)="setFitCurveMergeMode('none')" />
+                        <span>Nincs</span>
+                      </label>
+                      <label class="merge-mode-option">
+                        <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'tablet'" (change)="setFitCurveMergeMode('tablet')" />
+                        <span>Tablettánként</span>
+                      </label>
+                      <label class="merge-mode-option with-inline-select">
+                        <input type="radio" name="fit-merge-mode" [checked]="getFitCurveMergeMode() === 'level'" (change)="setFitCurveMergeMode('level')" />
+                        <span>Szintenként</span>
+                        @if (getFitCurveMergeMode() === 'level') {
+                          <select
+                            id="param-agg_method"
+                            [ngModel]="getParamValue('agg_method')"
+                            (ngModelChange)="onParamChange('agg_method', $event)"
+                          >
+                            @for (opt of getFitCurveAggMethodOptions(); track opt) {
+                              <option [value]="opt">{{ getFitCurveAggMethodDisplayLabel(opt) }}</option>
+                            }
+                          </select>
+                        }
+                      </label>
                     </div>
                   } @else {
                     <div class="param-control">
@@ -278,7 +278,7 @@ interface NodeHelpContent {
                         (ngModelChange)="onParamChange(param.name, $event)"
                       >
                         @for (opt of getFitCurveYOptions(); track opt) {
-                          <option [value]="opt">{{ opt }}</option>
+                          <option [value]="opt">{{ getYKeyLabel(opt) }}</option>
                         }
                       </select>
                     </div>
@@ -290,7 +290,7 @@ interface NodeHelpContent {
                         (ngModelChange)="onParamChange(param.name, $event)"
                       >
                         @for (opt of getPredictYOptions(); track opt) {
-                          <option [value]="opt">{{ opt }}</option>
+                          <option [value]="opt">{{ getYKeyLabel(opt) }}</option>
                         }
                       </select>
                     </div>
@@ -337,6 +337,86 @@ interface NodeHelpContent {
               }
             </div>
             }
+          }
+
+          @if (isSaveImagesStep()) {
+            <div class="save-images-section">
+              <div class="param-row">
+                <label class="param-label" for="save-output-folder">Kimeneti mappa</label>
+                <div class="param-control file-path-control">
+                  <input
+                    type="text"
+                    id="save-output-folder"
+                    [ngModel]="getParamValue('output_folder')"
+                    (ngModelChange)="onParamChange('output_folder', $event)"
+                    placeholder="Mappa elérési útja..."
+                  />
+                  <button class="browse-btn" (click)="browseFolder('output_folder')" title="Mappa tallózása"><mat-icon>folder_open</mat-icon></button>
+                </div>
+              </div>
+
+              <div class="param-row">
+                <label class="param-label" for="save-name-prefix">Név előtag</label>
+                <div class="param-control">
+                  <input
+                    type="text"
+                    id="save-name-prefix"
+                    [ngModel]="getParamValue('name_prefix')"
+                    (ngModelChange)="onParamChange('name_prefix', $event)"
+                    placeholder="Pl. feldolgozott_"
+                  />
+                </div>
+              </div>
+
+              <div class="param-row">
+                <label class="param-label" for="save-name-suffix">Név utótag</label>
+                <div class="param-control">
+                  <input
+                    type="text"
+                    id="save-name-suffix"
+                    [ngModel]="getParamValue('name_suffix')"
+                    (ngModelChange)="onParamChange('name_suffix', $event)"
+                    placeholder="Pl. _szerkesztett"
+                  />
+                </div>
+              </div>
+
+              <div class="user-result-item">
+                <span class="user-result-label">Névminta előnézet:</span>
+                <span class="user-result-value">{{ getSaveNamePreview() }}</span>
+              </div>
+            </div>
+          }
+
+          @if (isSaveArrayStep()) {
+            <div class="save-images-section">
+              <div class="param-row">
+                <label class="param-label" for="save-array-folder">Mentési hely</label>
+                <div class="param-control file-path-control">
+                  <input
+                    type="text"
+                    id="save-array-folder"
+                    [ngModel]="getParamValue('output_folder')"
+                    (ngModelChange)="onParamChange('output_folder', $event)"
+                    placeholder="Mappa elérési útja..."
+                  />
+                  <button class="browse-btn" (click)="browseFolder('output_folder')" title="Mappa tallózása"><mat-icon>folder_open</mat-icon></button>
+                </div>
+              </div>
+
+              <div class="param-row">
+                <label class="param-label" for="save-array-filename">Fájlnév</label>
+                <div class="param-control">
+                  <input
+                    type="text"
+                    id="save-array-filename"
+                    [ngModel]="getParamValue('filename')"
+                    (ngModelChange)="onParamChange('filename', $event)"
+                    placeholder="adattomb.csv"
+                  />
+                </div>
+              </div>
+            </div>
           }
 
           @if (step?.step_def_id === 'detect_particles') {
@@ -587,7 +667,7 @@ interface NodeHelpContent {
               @if (step?.step_def_id === 'load_image') {
                 <div class="user-result-item">
                   <span class="user-result-label">Betöltött képek száma:</span>
-                  <span class="user-result-value">{{ sideOutputs['image_count'] ?? '-' }}</span>
+                  <span class="user-result-value">{{ getLoadedImageCount() }}</span>
                 </div>
               }
 
@@ -651,13 +731,76 @@ interface NodeHelpContent {
                 }
                 @if (omittedEntries.length > 0) {
                   <div class="omitted-section">
-                    <div class="omitted-title">Kihagyott adatpontok ({{ omittedEntries.length }})</div>
+                    <div class="omitted-header">
+                      <div class="omitted-title">Kihagyott adatpontok ({{ omittedEntries.length }})</div>
+                      <button class="omitted-restore-btn" (click)="restoreAllOmittedPoints()">Visszaállítás</button>
+                    </div>
                     @for (entry of omittedEntries; track entry.index) {
                       <div class="omitted-item">
                         <span class="omitted-idx">#{{ entry.index + 1 }}</span>
                         <span class="omitted-name">{{ entry.name }}</span>
                       </div>
                     }
+                  </div>
+                }
+              }
+
+              @if (step?.step_def_id === 'save_images') {
+                <button class="run-fit-btn" (click)="savePipelineImages()" [disabled]="previewLoading || saveImagesInProgress || isPreviewMode">
+                  {{ saveImagesInProgress ? '⏳ Mentés...' : '💾 Képek mentése' }}
+                </button>
+                @if (saveImagesResultText) {
+                  <div class="user-result-item">
+                    <span class="user-result-label">Mentés eredménye:</span>
+                    <span class="user-result-value">{{ saveImagesResultText }}</span>
+                  </div>
+                }
+              }
+
+              @if (step?.step_def_id === 'save_array') {
+                <button class="run-fit-btn" (click)="savePipelineArray()" [disabled]="previewLoading || saveArrayInProgress || isPreviewMode">
+                  {{ saveArrayInProgress ? '⏳ Mentés...' : '💾 Adattömb mentése' }}
+                </button>
+                @if (saveArrayResultText) {
+                  <div class="user-result-item">
+                    <span class="user-result-label">Mentés eredménye:</span>
+                    <span class="user-result-value">{{ saveArrayResultText }}</span>
+                  </div>
+                }
+                @if (getArraySavePreview(); as preview) {
+                  @if (preview.source_key) {
+                    <div class="user-result-item">
+                      <span class="user-result-label">Forrás:</span>
+                      <span class="user-result-value">{{ preview.source_key }}</span>
+                    </div>
+                  }
+                  <div class="array-preview-wrap">
+                    <div class="array-preview-scroll">
+                      <table class="array-preview-table">
+                        <thead>
+                          <tr>
+                            @for (h of preview.headers; track $index) {
+                              <th>{{ h }}</th>
+                            }
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (row of preview.rows; track $index) {
+                            <tr>
+                              @for (cell of row; track $index) {
+                                <td>{{ cell }}</td>
+                              }
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="array-preview-meta">
+                      Előnézet: {{ preview.rows?.length || 0 }} sor × {{ preview.headers?.length || 0 }} oszlop
+                      @if (preview.total_rows && preview.total_cols) {
+                        <span>(teljes: {{ preview.total_rows }} × {{ preview.total_cols }})</span>
+                      }
+                    </div>
                   </div>
                 }
               }
@@ -719,6 +862,10 @@ interface NodeHelpContent {
                 <div class="calibration-eq-box">{{ pendingCalibrationEquation }}</div>
               </div>
               <div class="param-row">
+                <label class="param-label">Y paraméter</label>
+                <div class="calibration-eq-box">{{ getYKeyLabel(pendingCalibrationYKey) }}</div>
+              </div>
+              <div class="param-row">
                 <label class="param-label" for="calibration-name">Név</label>
                 <input id="calibration-name" class="gen-input" type="text" [(ngModel)]="pendingCalibrationName" />
               </div>
@@ -751,6 +898,9 @@ interface NodeHelpContent {
                       <div class="cal-list-main">
                         <div class="cal-list-name">{{ cal.name }}</div>
                         <div class="cal-list-eq">{{ cal.equation }}</div>
+                        @if (cal.y_key) {
+                          <div class="cal-list-comment">Y: {{ getYKeyLabel(cal.y_key) }}</div>
+                        }
                         @if (cal.comment) {
                           <div class="cal-list-comment">{{ cal.comment }}</div>
                         }
@@ -1040,6 +1190,13 @@ interface NodeHelpContent {
       box-sizing: border-box;
     }
 
+    .inline-unit {
+      color: #aeb6c2;
+      font-size: 12px;
+      min-width: 14px;
+      text-align: left;
+    }
+
     .slider-number,
     .gen-input[type="number"],
     .param-control input[type="number"] {
@@ -1299,6 +1456,51 @@ interface NodeHelpContent {
     .run-fit-btn:hover:not(:disabled) { background: #1f5ba8; border-color: #3b82f6; }
     .run-fit-btn:disabled { opacity: 0.5; cursor: default; }
 
+    .array-preview-wrap {
+      margin-top: 8px;
+      border: 1px solid #3a3f46;
+      border-radius: 6px;
+      background: #1d1f22;
+      overflow: hidden;
+    }
+
+    .array-preview-scroll {
+      max-width: 100%;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .array-preview-table {
+      border-collapse: collapse;
+      width: max-content;
+      min-width: 100%;
+      font-size: 11px;
+      color: #dde2ea;
+    }
+
+    .array-preview-table th,
+    .array-preview-table td {
+      border: 1px solid #363b42;
+      padding: 4px 6px;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .array-preview-table th {
+      position: sticky;
+      top: 0;
+      background: #2a2d33;
+      z-index: 1;
+      font-weight: 600;
+    }
+
+    .array-preview-meta {
+      font-size: 11px;
+      color: #aab3bf;
+      padding: 6px 8px;
+      border-top: 1px solid #363b42;
+    }
+
     .maximize-btn {
       position: absolute; top: 2px; right: 2px;
       background: rgba(40,40,40,0.8); border: 1px solid #555; border-radius: 4px;
@@ -1318,12 +1520,40 @@ interface NodeHelpContent {
       border: 1px solid #333;
     }
 
+    .omitted-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
     .omitted-title {
       font-size: 10px;
       font-weight: 600;
       color: #ef4444;
       text-transform: uppercase;
-      margin-bottom: 4px;
+      min-width: 0;
+    }
+
+    .omitted-restore-btn {
+      background: #2a2a2a;
+      border: 1px solid #555;
+      border-radius: 4px;
+      color: #d1d5db;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 1;
+      padding: 4px 8px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .omitted-restore-btn:hover {
+      background: #374151;
+      border-color: #9ca3af;
+      color: #fff;
     }
 
     .omitted-item { display: flex; gap: 6px; font-size: 11px; padding: 1px 0; }
@@ -1535,6 +1765,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   pendingCalibrationEquation = '';
   pendingCalibrationName = '';
   pendingCalibrationComment = '';
+  pendingCalibrationYKey = '';
 
   showCalibrationBrowser = false;
   calibrationRecords: CalibrationRecord[] = [];
@@ -1549,6 +1780,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
   // Preview loading state (to disable run button)
   previewLoading = false;
+  saveImagesInProgress = false;
+  saveImagesResultText = '';
+  saveArrayInProgress = false;
+  saveArrayResultText = '';
 
   // Image dimensions for ROI slider limits
   private imgDimsW = 0;
@@ -1564,6 +1799,17 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     'flat_field_correction', 'robust_stretch_gamma', 'advanced_illumin_corr',
     'mask_rect_roi', 'apply_range_mask', 'add_sequence_values',
   ]);
+
+  /** User-friendly labels for intensity stat Y-axis keys */
+  private readonly Y_KEY_LABELS: Record<string, string> = {
+    mean: 'Átlag (mean)',
+    median: 'Medián (median)',
+    std: 'Szórás (std)',
+    min: 'Minimum (min)',
+    max: 'Maximum (max)',
+    pixel_count: 'Pixelszám',
+    dynamic_range: 'Dinamikus tart. (P95–P5)',
+  };
 
   private selectedIndex = -1;
   private subs: Subscription[] = [];
@@ -1623,6 +1869,8 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
           this.loadedImageNames = [];
           this.imageOrderIndices = [];
           this.referenceGroups = [];
+          this.saveImagesResultText = '';
+          this.saveArrayResultText = '';
           return;
         }
 
@@ -1638,10 +1886,20 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
           this.stepErrors = errors.filter((e) => e.step_index === idx);
           // Clear results if this step has validation errors
           this.sideOutputs = this.stepErrors.length > 0 ? {} : (sideOutputs ?? {});
+          if (this.step.step_def_id !== 'save_images') {
+            this.saveImagesResultText = '';
+          }
+          if (this.step.step_def_id !== 'save_array') {
+            this.saveArrayResultText = '';
+          }
           this.syncFitCurveDefaultsFromContext();
+          this.syncPredictNodeDefaultsFromContext();
           // Populate loaded image names from side outputs
-          const paths: string[] = sideOutputs?.['loaded_paths'] ?? [];
-          if (paths.length > 0 && paths.length !== this.loadedImageNames.length) {
+          const paths: string[] = Array.isArray(sideOutputs?.['loaded_paths']) ? sideOutputs['loaded_paths'] : [];
+          const pathsChanged =
+            paths.length !== this.loadedImageNames.length ||
+            paths.some((path, index) => path !== this.loadedImageNames[index]);
+          if (pathsChanged) {
             this.loadedImageNames = [...paths];
             this.imageOrderIndices = paths.map((_, i) => i);
             this.selectedImageIdx = 0;
@@ -1654,6 +1912,8 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
           this.sideOutputs = {};
           this.loadedImageNames = [];
           this.imageOrderIndices = [];
+          this.saveImagesResultText = '';
+          this.saveArrayResultText = '';
         }
 
         if (this.step?.step_def_id === 'add_sequence_values') {
@@ -1683,7 +1943,22 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   getParamValue(paramName: string): any {
-    return this.step?.param_values?.[paramName];
+    if (!this.step) return undefined;
+    const explicit = this.step.param_values?.[paramName];
+
+    if (this.step.step_def_id === 'fit_curve' && (paramName === 'validation_ratio' || paramName === 'split_method')) {
+      if (explicit === undefined || explicit === null || explicit === '') {
+        return this.getParamDefaultValue(paramName);
+      }
+    }
+
+    if (explicit !== undefined) return explicit;
+    return this.getParamDefaultValue(paramName);
+  }
+
+  private getParamDefaultValue(paramName: string): any {
+    const param = this.definition?.params.find(p => p.name === paramName);
+    return param?.default;
   }
 
   getSliderMin(param: ParamSchema): number {
@@ -1738,13 +2013,12 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
     // Mutual exclusivity: aggregate vs merge_ab_pairs
     if (this.step.step_def_id === 'fit_curve') {
-      if (paramName === 'y_name') {
-        const oldY = String(this.step.param_values?.['y_name'] ?? '');
-        const oldLabel = String(this.step.param_values?.['y_label'] ?? '').trim();
-        const suggestedOld = this.makeAxisLabel(oldY);
-        const shouldSyncLabel = !oldLabel || oldLabel === oldY || oldLabel === suggestedOld;
-        if (shouldSyncLabel) {
-          updated['y_label'] = this.makeAxisLabel(String(value ?? ''));
+      if (paramName === 'split_enabled' && value) {
+        if (updated['validation_ratio'] === undefined || updated['validation_ratio'] === null || updated['validation_ratio'] === '') {
+          updated['validation_ratio'] = this.getParamDefaultValue('validation_ratio') ?? 20;
+        }
+        if (updated['split_method'] === undefined || updated['split_method'] === null || updated['split_method'] === '') {
+          updated['split_method'] = this.getParamDefaultValue('split_method') ?? 'random';
         }
       }
       if (paramName === 'aggregate' && value) {
@@ -1902,6 +2176,13 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   shouldHideParam(param: ParamSchema): boolean {
+    if (this.step?.step_def_id === 'save_images') {
+      return param.name === 'output_folder' || param.name === 'name_prefix' || param.name === 'name_suffix';
+    }
+    if (this.step?.step_def_id === 'save_array') {
+      return param.name === 'output_folder' || param.name === 'filename';
+    }
+
     if (this.step?.step_def_id === 'predict_node' && param.name === 'fit_index') return true;
 
     if (this.step?.step_def_id === 'detect_particles') {
@@ -1914,13 +2195,17 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (param.name === 'agg_method') return true;
     if (param.name === 'merge_ab_pairs') return true;
     if (param.name === 'degree' && this.getParamValue('model') !== 'poly') return true;
+    if (!this.getParamValue('split_enabled')) {
+      if (param.name === 'validation_ratio') return true;
+      if (param.name === 'split_method') return true;
+    }
     return false;
   }
 
   getDisplayParamLabel(param: ParamSchema): string {
+    if (this.step?.step_def_id === 'predict_node' && param.name === 'y_name') return 'Bemeneti Y mező';
     if (this.step?.step_def_id !== 'fit_curve') return param.label;
     if (param.name === 'y_name') return 'Y tengely értékei';
-    if (param.name === 'y_label') return 'Y tengely neve';
     if (param.name === 'model') return 'Illesztett görbe';
     if (param.name === 'aggregate') return 'Adatösszevonás';
     return param.label;
@@ -1934,6 +2219,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return this.step?.step_def_id === 'fit_curve' && paramName === 'y_name';
   }
 
+  isFitCurveValidationRatioParam(paramName: string): boolean {
+    return this.step?.step_def_id === 'fit_curve' && paramName === 'validation_ratio';
+  }
+
   isPredictYAxisParam(paramName: string): boolean {
     return this.step?.step_def_id === 'predict_node' && paramName === 'y_name';
   }
@@ -1945,6 +2234,14 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   getFitCurveAggMethodOptions(): string[] {
     const param = this.getParamByName('agg_method');
     return param?.options ?? ['mean', 'median'];
+  }
+
+  getFitCurveAggMethodDisplayLabel(option: string): string {
+    const map: Record<string, string> = {
+      mean: 'Átlag',
+      median: 'Medián',
+    };
+    return map[option] ?? option;
   }
 
   getFitCurveMergeMode(): 'none' | 'tablet' | 'level' {
@@ -1980,6 +2277,14 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return options;
   }
 
+  getYKeyLabel(key: string): string {
+    if (this.Y_KEY_LABELS[key]) return this.Y_KEY_LABELS[key];
+    // Percentile keys like p5, p25, p50, p75, p95
+    const pMatch = key.match(/^p(\d+(?:\.\d+)?)$/i);
+    if (pMatch) return `P${pMatch[1]} percentilis`;
+    return key;
+  }
+
   isBoolParamDisabled(paramName: string): boolean {
     return false;
   }
@@ -1988,6 +2293,38 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
   isLoadImageStep(): boolean {
     return this.step?.step_def_id === 'load_image';
+  }
+
+  isSaveImagesStep(): boolean {
+    return this.step?.step_def_id === 'save_images';
+  }
+
+  isSaveArrayStep(): boolean {
+    return this.step?.step_def_id === 'save_array';
+  }
+
+  getSaveNamePreview(): string {
+    const original = this.getCurrentLoadedImageName();
+    const extIdx = original.lastIndexOf('.');
+    const stem = extIdx > 0 ? original.slice(0, extIdx) : original;
+    const ext = extIdx > 0 ? original.slice(extIdx) : '.png';
+    const prefix = String(this.getParamValue('name_prefix') ?? '');
+    const suffix = String(this.getParamValue('name_suffix') ?? '');
+    return `${prefix}${stem}${suffix}${ext}`;
+  }
+
+  private getCurrentLoadedImageName(): string {
+    if (this.loadedImageNames.length > 0) {
+      const idx = Math.max(0, Math.min(this.previewImageIndex, this.loadedImageNames.length - 1));
+      return this.loadedImageNames[idx];
+    }
+    return 'image_001.png';
+  }
+
+  getArraySavePreview(): any | null {
+    const preview = this.sideOutputs['array_save_preview'];
+    if (!preview || typeof preview !== 'object') return null;
+    return preview;
   }
 
   moveImage(direction: 'up' | 'down' | 'top' | 'bottom'): void {
@@ -2040,13 +2377,29 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (!this.step) return false;
     if (this.IMAGE_ONLY_STEPS.has(this.step.step_def_id)) return false;
     const id = this.step.step_def_id;
-    if (id === 'load_image') return this.sideOutputs['image_count'] != null;
+    if (id === 'load_image') return this.getLoadedImageCount() !== '-';
     if (id === 'calculate_histograms') return !!this.getHistogramData();
     if (id === 'histogram_equalization') return !!this.getHisteqInputData() || !!this.getHisteqOutputData();
     if (id === 'calculate_intensity_stats') return this.getIntensityStatsEntries().length > 0;
     if (id === 'fit_curve') return true;
+    if (id === 'save_images') return true;
+    if (id === 'save_array') return true;
     if (id === 'predict_node') return (this.getPredictions()?.length ?? 0) > 0;
     return false;
+  }
+
+  getLoadedImageCount(): number | string {
+    if (this.loadedImageNames.length > 0) {
+      return this.loadedImageNames.length;
+    }
+
+    const imageCount = this.pipelineState.getImageCount();
+    if (imageCount > 0) {
+      return imageCount;
+    }
+
+    const sideOutputCount = Number(this.sideOutputs['image_count']);
+    return Number.isFinite(sideOutputCount) && sideOutputCount > 0 ? sideOutputCount : '-';
   }
 
   getHistogramData(): number[] | null {
@@ -2150,10 +2503,69 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return this.currentOmittedIndices;
   }
 
+  restoreAllOmittedPoints(): void {
+    if (this.isPreviewMode || this.omittedEntries.length === 0) return;
+    this.pipelineState.notifyOmittedPoints(new Set<number>(), []);
+  }
+
   getPredictions(): any[] | null {
     const preds = this.sideOutputs['predictions'];
     if (!Array.isArray(preds)) return null;
     return preds;
+  }
+
+  savePipelineImages(): void {
+    if (this.isPreviewMode) return;
+    if (!this.step || this.step.step_def_id !== 'save_images') return;
+
+    const outputFolder = String(this.getParamValue('output_folder') ?? '').trim();
+    if (!outputFolder) {
+      alert('A kimeneti mappa kötelező.');
+      return;
+    }
+
+    const pipeline = this.pipelineState.getPipeline();
+    this.saveImagesInProgress = true;
+
+    this.recipeService.savePipelineImages(pipeline, this.selectedIndex).subscribe({
+      next: (res) => {
+        this.saveImagesInProgress = false;
+        this.saveImagesResultText = `${res.saved_count} kép mentve`;
+        this.showCopyToast(`Képek mentve (${res.saved_count})`);
+      },
+      error: (err) => {
+        this.saveImagesInProgress = false;
+        const msg = err?.error?.error ?? 'Képek mentése sikertelen.';
+        alert(msg);
+      },
+    });
+  }
+
+  savePipelineArray(): void {
+    if (this.isPreviewMode) return;
+    if (!this.step || this.step.step_def_id !== 'save_array') return;
+
+    const outputFolder = String(this.getParamValue('output_folder') ?? '').trim();
+    if (!outputFolder) {
+      alert('A mentési hely kötelező.');
+      return;
+    }
+
+    const pipeline = this.pipelineState.getPipeline();
+    this.saveArrayInProgress = true;
+
+    this.recipeService.savePipelineArray(pipeline, this.selectedIndex).subscribe({
+      next: (res) => {
+        this.saveArrayInProgress = false;
+        this.saveArrayResultText = `${res.row_count} sor mentve (${res.col_count} oszlop)`;
+        this.showCopyToast('Adattömb CSV mentve');
+      },
+      error: (err) => {
+        this.saveArrayInProgress = false;
+        const msg = err?.error?.error ?? 'Adattömb mentése sikertelen.';
+        alert(msg);
+      },
+    });
   }
 
   formatFloat4(val: any): string {
@@ -2280,6 +2692,32 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       return map[option] ?? option;
     }
 
+    if (this.step?.step_def_id === 'fit_curve' && param.name === 'model') {
+      const map: Record<string, string> = {
+        linear: 'Lineáris',
+        poly: 'Polinom',
+        log: 'Logaritmikus',
+        exp: 'Exponenciális',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'fit_curve' && param.name === 'split_method') {
+      const map: Record<string, string> = {
+        random: 'Véletlenszerű',
+        ordered: 'Sorrend szerinti',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'fit_curve' && param.name === 'agg_method') {
+      const map: Record<string, string> = {
+        mean: 'Átlag',
+        median: 'Medián',
+      };
+      return map[option] ?? option;
+    }
+
     if (this.step?.step_def_id !== 'select_channel') {
       return option;
     }
@@ -2383,6 +2821,12 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (fit.model === 'linear' || (fit.model === 'poly' && fit.degree === 1)) {
       return `y = ${c[0].toFixed(6)}x + ${c[1].toFixed(6)}`;
     }
+    if (fit.model === 'log') {
+      return `y = ${c[0].toFixed(6)}\u00B7ln(x) + ${c[1].toFixed(6)}`;
+    }
+    if (fit.model === 'exp') {
+      return `y = ${c[0].toFixed(6)}\u00B7e^(${c[1].toFixed(6)}x)`;
+    }
     const expr = c
       .map((coeff, i) => {
         const power = c.length - 1 - i;
@@ -2403,16 +2847,27 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     const yOptions = this.getFitCurveYOptions(this.getParamByName('y_name')?.options ?? []);
     const nextY = yOptions.includes(currentY) ? currentY : (yOptions[0] ?? currentY ?? '');
 
-    const currentLabel = String(this.step.param_values?.['y_label'] ?? '').trim();
-    const oldSuggested = this.makeAxisLabel(currentY);
-    const shouldSyncLabel = !currentLabel || currentLabel === currentY || currentLabel === oldSuggested;
-    const nextLabel = shouldSyncLabel ? this.makeAxisLabel(nextY) : currentLabel;
-
-    if ((nextY && nextY !== currentY) || nextLabel !== currentLabel) {
+    if (nextY && nextY !== currentY) {
       const updated = {
         ...this.step.param_values,
         y_name: nextY || currentY || 'mean',
-        y_label: nextLabel || this.makeAxisLabel(nextY || currentY || 'mean'),
+      };
+      this.pipelineState.updateParams(this.selectedIndex, updated);
+    }
+  }
+
+  private syncPredictNodeDefaultsFromContext(): void {
+    if (this.isPreviewMode) return;
+    if (!this.step || this.step.step_def_id !== 'predict_node') return;
+
+    const currentY = String(this.step.param_values?.['y_name'] ?? '').trim();
+    const yOptions = this.getPredictYOptions();
+    const nextY = yOptions.includes(currentY) ? currentY : (yOptions[0] ?? currentY ?? '');
+
+    if (nextY && nextY !== currentY) {
+      const updated = {
+        ...this.step.param_values,
+        y_name: nextY || currentY || 'mean',
       };
       this.pipelineState.updateParams(this.selectedIndex, updated);
     }
@@ -2558,6 +3013,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     this.pendingCalibrationEquation = this.getCurveFitEquation(fit);
     this.pendingCalibrationName = `Kalibráció ${new Date().toLocaleString('hu-HU')}`;
     this.pendingCalibrationComment = '';
+    this.pendingCalibrationYKey = (fit as any).y_key ?? String(this.step?.param_values?.['y_name'] ?? fit.y_name ?? 'mean');
     this.showSaveCalibrationDialog = true;
   }
 
@@ -2581,6 +3037,8 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       return;
     }
 
+    const yKey = (fit as any).y_key ?? String(this.step?.param_values?.['y_name'] ?? fit.y_name ?? 'mean');
+
     this.savingCalibration = true;
     this.recipeService.saveCalibration({
       name,
@@ -2588,9 +3046,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       comment: this.pendingCalibrationComment.trim(),
       x_name: fit.x_name,
       y_name: fit.y_name,
-      y_key: (fit as any).y_key ?? fit.y_name,
+      y_key: yKey,
       model: fit.model,
-      degree: fit.degree,
+      degree: fit.degree ?? undefined,
       coefficients: fit.coefficients,
       x_min: (fit as any).x_min,
       x_max: (fit as any).x_max,
@@ -2638,8 +3096,6 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       ...this.step.param_values,
       equation: selected.equation ?? '',
       y_name: selected.y_key || selected.y_name || this.step.param_values['y_name'] || 'mean',
-      x_min: selected.x_min ?? this.step.param_values['x_min'],
-      x_max: selected.x_max ?? this.step.param_values['x_max'],
     };
     this.pipelineState.updateParams(this.selectedIndex, updated);
     this.showCalibrationBrowser = false;
@@ -2651,7 +3107,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   maximizeChart(data: any): void {
     if (this.isPreviewMode) return;
     const omitted = this.pipelineState.getOmittedPoints();
-    this.pipelineState.requestMaximizeGraph(data, omitted.indices);
+    this.pipelineState.requestMaximizeGraph(data, omitted.indices, this.selectedIndex);
   }
 
   // --- Run curve fit manually ---

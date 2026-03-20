@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "Görbeillesztés",
-  "description": "",
+  "description": "Kalibrációs görbe illesztéséhez szolgáló mintarecept",
   "steps": [
     {
       "instance_id": "040daec2-4528-45da-8041-ed6aa33a65b1",
@@ -82,5 +82,5 @@
     }
   ],
   "created_at": "2026-03-12T12:24:31.733906+00:00",
-  "modified_at": "2026-03-12T20:22:28.975944+00:00"
+  "modified_at": "2026-03-20T08:44:17.852086+00:00"
 }
