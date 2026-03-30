@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 
 
 def select_channel(data, space="BGR", channel="R", debug=False):
@@ -51,18 +52,33 @@ def select_channel(data, space="BGR", channel="R", debug=False):
                 data["error"] = "E2101"
                 return data
 
-            idx = channel_map[space].get(channel)
-            if idx is None:
-                data["error"] = "E2102"
-                return data
+            # Handle "ALL" option: stack all three channels back into a 3-channel image
+            if channel == "ALL":
+                # Convert back to BGR for preview/display purposes
+                if space == "HSV":
+                    channel_img = cv2.cvtColor(converted, cv2.COLOR_HSV2BGR)
+                elif space == "LAB":
+                    channel_img = cv2.cvtColor(converted, cv2.COLOR_LAB2BGR)
+                else:
+                    channel_img = converted
+            else:
+                idx = channel_map[space].get(channel)
+                if idx is None:
+                    data["error"] = "E2102"
+                    return data
 
-            channel_img = converted[:, :, idx]
+                channel_img = converted[:, :, idx]
 
         output_images.append(channel_img)
 
     data["images"] = output_images
     data["count"] = len(output_images)
     data["meta"]["channel"] = {
+        "space": space,
+        "channel": channel
+    }
+    # Also store with select_channel key for pipeline consumption
+    data["meta"]["select_channel"] = {
         "space": space,
         "channel": channel
     }

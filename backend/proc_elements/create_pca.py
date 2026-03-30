@@ -29,6 +29,8 @@ def histogram_pca(
 
     if not isinstance(histograms, list) or len(histograms) == 0:
         data["error"] = "E2402"
+        if debug:
+            print(f"[PCA DEBUG] No histograms found. data['results'] keys: {data['results'].keys()}")
         return data
 
     try:
@@ -45,6 +47,11 @@ def histogram_pca(
 
     if n_samples < 2:
         data["error"] = "E2405"
+        if debug:
+            print(f"[PCA DEBUG] Insufficient samples for PCA. n_samples={n_samples}, n_features={n_features}")
+            print(f"[PCA DEBUG] histograms list length: {len(histograms)}")
+            if len(histograms) > 0:
+                print(f"[PCA DEBUG] First histogram length: {len(histograms[0])}")
         return data
 
     if not isinstance(max_components, int) or max_components <= 0:

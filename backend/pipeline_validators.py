@@ -68,6 +68,22 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
                         message=f"A(z) '{defn.name}' lépéshez szükséges egy '{sec_name}' lépés előtte.",
                     ))
 
+        # Validate color_thresh specific requirements
+        if step_inst.step_def_id == "color_thresh":
+            # Find the preceding select_channel step
+            preceding_steps = {s.step_def_id: s for s in doc.steps[:i]}
+            if "select_channel" in preceding_steps:
+                select_channel_step = preceding_steps["select_channel"]
+                channel = select_channel_step.param_values.get("channel", "")
+                # Check if "ALL" option is chosen
+                if channel != "ALL":
+                    errors.append(StepError(
+                        step_index=i,
+                        step_def_id="color_thresh",
+                        error_code="E3005",
+                        message="A 'Szín alapú küszöb' lépéshez a megelőző 'Színtér konverzió' lépésnél az 'ALL' (összes csatorna) opciót kell választani.",
+                    ))
+
         # Validate parameters
         param_errors = _validate_params(i, step_inst, defn)
         errors.extend(param_errors)

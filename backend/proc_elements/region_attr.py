@@ -251,13 +251,13 @@ def detect_particles(
                 if is_excluded:
                     # Always draw excluded particles in yellow
                     color = (0, 255, 255)
-                    cv2.polylines(vis, [pts], True, color, max(1, int(contour_thickness)))
+                    cv2.polylines(vis, [cnt], True, color, max(1, int(contour_thickness)))
                 else:
                     should_draw = keep if draw_only_filtered else True
                     if not should_draw:
                         continue
                     color = (0, 255, 0) if keep else (0, 0, 255)
-                    cv2.polylines(vis, [pts], True, color, max(1, int(contour_thickness)))
+                    cv2.polylines(vis, [cnt], True, color, max(1, int(contour_thickness)))
 
                     if draw_label:
                         value = particle.get(draw_label_key, particle.get("label", "?"))

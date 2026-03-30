@@ -98,7 +98,7 @@ export class PipelineStateService {
 
   /** Steps that aggregate across all images and must not use single-image mode. */
   private readonly AGGREGATING_STEPS = new Set([
-    'fit_curve', 'predict_node', 'add_sequence_values',
+    'fit_curve', 'predict_node', 'add_sequence_values', 'histogram_pca',
   ]);
 
   constructor(private recipeService: RecipeService) {
@@ -689,8 +689,9 @@ export class PipelineStateService {
     }
 
     // GRAYSCALE input accepts grayscale-like outputs and auto-converts from IMAGE.
+    // Also accepts HISTOGRAM output (e.g., from calculate_histograms for histogram_pca).
     if (inputType === 'GRAYSCALE') {
-      return outputType === 'GRAYSCALE' || outputType === 'MASK' || outputType === 'IMAGE';
+      return outputType === 'GRAYSCALE' || outputType === 'MASK' || outputType === 'IMAGE' || outputType === 'HISTOGRAM';
     }
 
     // MASK input accepts mask outputs.

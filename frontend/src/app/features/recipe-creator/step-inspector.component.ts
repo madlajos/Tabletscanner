@@ -18,6 +18,7 @@ import {
 } from '../../models/pipeline.models';
 import { HistogramChartComponent } from './histogram-chart.component';
 import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
+import { PCAChartComponent, PCAData } from './pca-chart.component';
 
 interface NodeHelpParameter {
   name: string;
@@ -42,7 +43,7 @@ interface NodeHelpContent {
 @Component({
   selector: 'app-step-inspector',
   standalone: true,
-  imports: [CommonModule, FormsModule, MatIconModule, HistogramChartComponent, ScatterChartComponent],
+  imports: [CommonModule, FormsModule, MatIconModule, HistogramChartComponent, ScatterChartComponent, PCAChartComponent],
   template: `
     <div class="inspector-wrapper">
       @if (!definition) {
@@ -162,26 +163,88 @@ interface NodeHelpContent {
 
               @switch (param.type) {
                 @case ('int') {
-                  <div class="param-control slider-control">
-                    <input
-                      type="range"
-                      [id]="'param-' + param.name"
-                      [min]="getSliderMin(param)"
-                      [max]="getSliderMax(param)"
-                      [step]="param.odd_only ? 2 : (param.step ?? 1)"
-                      [ngModel]="getParamValue(param.name)"
-                      (ngModelChange)="onParamChange(param.name, $event)"
-                    />
-                    <input
-                      type="number"
-                      class="slider-number"
-                      [ngModel]="getParamValue(param.name)"
-                      (ngModelChange)="onNumericTextChange(param, $event)"
-                    />
-                    @if (isFitCurveValidationRatioParam(param.name)) {
-                      <span class="inline-unit">%</span>
+                  @if (step?.step_def_id === 'color_thresh' && isColorThreshMaxParam(param.name); as isMaxParam) {
+                    <!-- Range slider for color_thresh channels -->
+                    @let minParamName = param.name.slice(0, -3) + 'min';
+                    @let minValue = getParamValue(minParamName);
+                    @let maxValue = getParamValue(param.name);
+                    @let minMax = getSliderMinMax(param);
+                    <div class="param-control range-slider-control">
+                      <div class="range-slider-container">
+                        <input
+                          type="range"
+                          class="range-slider-min"
+                          [min]="minMax.min"
+                          [max]="minMax.max"
+                          [step]="param.step ?? 1"
+                          [value]="minValue ?? minMax.min"
+                          (input)="onRangeMinChange(minParamName, $event)"
+                        />
+                        <input
+                          type="range"
+                          class="range-slider-max"
+                          [min]="minMax.min"
+                          [max]="minMax.max"
+                          [step]="param.step ?? 1"
+                          [value]="maxValue ?? minMax.max"
+                          (input)="onRangeMaxChange(param.name, $event)"
+                        />
+                      </div>
+                      <div class="range-slider-values">
+                        <input
+                          type="number"
+                          class="range-number-input"
+                          [min]="minMax.min"
+                          [max]="minMax.max"
+                          [value]="minValue ?? minMax.min"
+                          (ngModelChange)="onParamChange(minParamName, +$event)"
+                        />
+                        <span class="range-separator">–</span>
+                        <input
+                          type="number"
+                          class="range-number-input"
+                          [min]="minMax.min"
+                          [max]="minMax.max"
+                          [value]="maxValue ?? minMax.max"
+                          (ngModelChange)="onParamChange(param.name, +$event)"
+                        />
+                      </div>
+                    </div>
+
+                    @if (getColorThreshHistogramForParam(param.name); as hist) {
+                      <div class="color-thresh-histogram">
+                        <app-histogram-chart
+                          [data]="hist.values"
+                          [rangeMin]="hist.rangeMin"
+                          [rangeMax]="hist.rangeMax"
+                          [label]="hist.channel + ' - Kép ' + (previewImageIndex + 1)"
+                          [markerLines]="getColorThreshMarkerLines(hist.channel)"
+                        />
+                      </div>
                     }
-                  </div>
+                  } @else {
+                    <!-- Standard int slider -->
+                    <div class="param-control slider-control">
+                      <input
+                        type="range"
+                        [id]="'param-' + param.name"
+                        [min]="getSliderMin(param)"
+                        [max]="getSliderMax(param)"
+                        [step]="param.odd_only ? 2 : (param.step ?? 1)"
+                        [ngModel]="getParamValue(param.name)"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                      />
+                      <input
+                        type="number"
+                        class="slider-number"
+                        [ngModel]="getParamValue(param.name)"
+                        (ngModelChange)="onNumericTextChange(param, $event)"
+                      />
+                      @if (isFitCurveValidationRatioParam(param.name)) {
+                        <span class="inline-unit">%</span>
+                      }
+                    </div>
+                  }
                 }
                 @case ('float') {
                   <div class="param-control slider-control">
@@ -745,6 +808,25 @@ interface NodeHelpContent {
                 }
               }
 
+              @if (step?.step_def_id === 'histogram_pca') {
+                <button class="run-fit-btn" (click)="runPCA()" [disabled]="previewLoading || isPreviewMode">
+                  {{ previewLoading ? '⏳ PCA futtatás...' : '▶ PCA futtatása' }}
+                </button>
+                <div class="chart-with-maximize">
+                  @if (getPCAData()) {
+                    <app-pca-chart 
+                      [data]="getPCAData()!" 
+                      (componentChanged)="onPCAComponentChanged($event)"
+                    />
+                    <button class="maximize-btn" (click)="maximizeChart(getPCAData()!)" title="Nagyítás">
+                      <mat-icon>open_in_full</mat-icon>
+                    </button>
+                  } @else {
+                    <div class="no-data-message">PCA adatok nincsenek rendelkezésre. Futtasd a PCA-t!</div>
+                  }
+                </div>
+              }
+
               @if (step?.step_def_id === 'save_images') {
                 <button class="run-fit-btn" (click)="savePipelineImages()" [disabled]="previewLoading || saveImagesInProgress || isPreviewMode">
                   {{ saveImagesInProgress ? '⏳ Mentés...' : '💾 Képek mentése' }}
@@ -1175,8 +1257,103 @@ interface NodeHelpContent {
       margin-top: 8px;
     }
 
+    .color-thresh-histogram {
+      margin-top: 8px;
+      padding: 8px 0;
+      border-top: 1px solid #373c42;
+    }
+
     .slider-control { display: flex; align-items: center; gap: 10px; }
     .slider-control input[type="range"] { flex: 1; accent-color: #224477; }
+
+    .range-slider-control {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .range-slider-container {
+      position: relative;
+      display: flex;
+      align-items: center;
+      height: 24px;
+    }
+
+    .range-slider-min,
+    .range-slider-max {
+      position: absolute;
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: none;
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+      outline: none;
+    }
+
+    .range-slider-min {
+      z-index: 4;
+    }
+
+    .range-slider-max {
+      z-index: 5;
+    }
+
+    .range-slider-min::-webkit-slider-thumb,
+    .range-slider-max::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      pointer-events: auto;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #3b82f6;
+      border: 2px solid #1e40af;
+      cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .range-slider-min::-moz-range-thumb,
+    .range-slider-max::-moz-range-thumb {
+      pointer-events: auto;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #3b82f6;
+      border: 2px solid #1e40af;
+      cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .range-slider-min::-webkit-slider-thumb:hover,
+    .range-slider-max::-webkit-slider-thumb:hover {
+      background: #60a5fa;
+    }
+
+    .range-slider-values {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .range-number-input {
+      width: 70px;
+      padding: 6px;
+      background: #1e2023;
+      border: 1px solid #474b52;
+      border-radius: 6px;
+      color: #d4d9e3;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .range-separator {
+      color: #888;
+      font-weight: 600;
+    }
 
     .slider-number {
       width: 86px;
@@ -1733,6 +1910,15 @@ interface NodeHelpContent {
       outline: none;
       border-color: #3b82f6;
     }
+
+    .no-data-message {
+      padding: 24px;
+      text-align: center;
+      color: #999;
+      font-size: 14px;
+      background: #f5f5f5;
+      border-radius: 8px;
+    }
   `],
 })
 export class StepInspectorComponent implements OnInit, OnDestroy {
@@ -2185,6 +2371,14 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
     if (this.step?.step_def_id === 'predict_node' && param.name === 'fit_index') return true;
 
+    if (this.step?.step_def_id === 'color_thresh') {
+      if (param.name === 'space') return true;
+      // Hide all _min parameters (they're combined in range slider at _max)
+      if (param.name.endsWith('_min')) return true;
+      const channelParams = this.getColorThreshVisibleParams();
+      return !channelParams.has(param.name);
+    }
+
     if (this.step?.step_def_id === 'detect_particles') {
       if (this.DETECT_FILTER_PARAMS.has(param.name)) return true;
       return false;
@@ -2382,6 +2576,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (id === 'histogram_equalization') return !!this.getHisteqInputData() || !!this.getHisteqOutputData();
     if (id === 'calculate_intensity_stats') return this.getIntensityStatsEntries().length > 0;
     if (id === 'fit_curve') return true;
+    if (id === 'histogram_pca') return true;
     if (id === 'save_images') return true;
     if (id === 'save_array') return true;
     if (id === 'predict_node') return (this.getPredictions()?.length ?? 0) > 0;
@@ -2495,6 +2690,29 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return fits[fits.length - 1] as CurveFitData;
   }
 
+  getPCAData(): PCAData | null {
+    const scores = this.sideOutputs['histogram_pca_scores'];
+    const explained_ratio = this.sideOutputs['histogram_pca_explained_ratio'];
+    const cumulative_ratio = this.sideOutputs['histogram_pca_cumulative_ratio'];
+
+    console.log('[DEBUG PCA]', {
+      scores: scores ? `Array(${Array.isArray(scores) ? scores.length : '?'})` : 'undefined',
+      explained_ratio: explained_ratio ? `Array(${Array.isArray(explained_ratio) ? explained_ratio.length : '?'})` : 'undefined',
+      cumulative_ratio: cumulative_ratio ? `Array(${Array.isArray(cumulative_ratio) ? cumulative_ratio.length : '?'})` : 'undefined',
+      allSideOutputKeys: Object.keys(this.sideOutputs).filter(k => k.includes('pca') || k.includes('histogram'))
+    });
+
+    if (!Array.isArray(scores) || scores.length === 0) return null;
+    if (!Array.isArray(explained_ratio) || explained_ratio.length < 2) return null;
+    if (!Array.isArray(cumulative_ratio) || cumulative_ratio.length < 2) return null;
+
+    return {
+      scores,
+      explained_ratio,
+      cumulative_ratio,
+    };
+  }
+
   getOmittedForCurrentChart(): Set<number> {
     const fit: any = this.getLatestCurveFit();
     if (fit?.aggregation?.enabled) {
@@ -2600,9 +2818,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   // --- Dynamic enum filtering ---
 
   private readonly CHANNEL_MAP: Record<string, string[]> = {
-    BGR: ['B', 'G', 'R'],
-    HSV: ['H', 'S', 'V'],
-    LAB: ['L', 'A', 'B'],
+    BGR: ['B', 'G', 'R', 'ALL'],
+    HSV: ['H', 'S', 'V', 'ALL'],
+    LAB: ['L', 'A', 'B', 'ALL'],
     GRAY: ['GRAY'],
   };
 
@@ -2733,8 +2951,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     }
 
     if (param.name === 'channel') {
+      const space = this.getParamValue('space') ?? 'BGR';
       const map: Record<string, string> = {
-        B: 'Blue',
+        B: space === 'LAB' ? 'b' : 'Blue',
         G: 'Green',
         R: 'Red',
         H: 'Hue',
@@ -2743,6 +2962,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
         L: 'L',
         A: 'a',
         GRAY: 'szürkeárnyalat',
+        ALL: 'Összes csatorna',
       };
       return map[option] ?? option;
     }
@@ -3132,5 +3352,238 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     setTimeout(() => {
       sub.unsubscribe();
     }, 12000);
+  }
+
+  // --- Run PCA manually ---
+
+  runPCA(): void {
+    if (this.isPreviewMode) return;
+    const previousScores = this.sideOutputs['histogram_pca_scores'];
+    const previousScoresCount = Array.isArray(previousScores) ? previousScores.length : 0;
+
+    const sub = this.pipelineState.sideOutputs$.subscribe((so) => {
+      const scores = so?.['histogram_pca_scores'];
+      if (!Array.isArray(scores) || scores.length === 0) return;
+      if (scores.length <= previousScoresCount) return;
+      sub.unsubscribe();
+    });
+
+    this.pipelineState.requestPreview(true);
+
+    setTimeout(() => {
+      sub.unsubscribe();
+    }, 12000);
+  }
+
+  onPCAComponentChanged(event: { pcX: number; pcY: number }): void {
+    // This could be used to store the user's component selection preference
+    // For now, it's just a passthrough from the PCA chart component
+  }
+
+  // --- Color Threshold methods ---
+
+  private COLOR_SPACE_CHANNELS: Record<string, { channels: string[]; ranges: Record<string, [number, number]> }> = {
+    BGR: {
+      channels: ['B', 'G', 'R'],
+      ranges: { B: [0, 255], G: [0, 255], R: [0, 255] }
+    },
+    HSV: {
+      channels: ['H', 'S', 'V'],
+      ranges: { H: [0, 179], S: [0, 255], V: [0, 255] }
+    },
+    LAB: {
+      channels: ['L', 'A', 'B'],
+      ranges: { L: [0, 255], A: [0, 255], B: [0, 255] }
+    },
+    GRAY: {
+      channels: ['GRAY'],
+      ranges: { GRAY: [0, 255] }
+    }
+  };
+
+  getColorThreshSpace(): string {
+    if (this.step?.step_def_id !== 'color_thresh') return 'HSV';
+    
+    // Get the pipeline to find the previous select_channel step
+    const pipeline = this.pipelineState.getPipeline();
+    const currentIdx = pipeline.steps.findIndex(s => s.instance_id === this.step?.instance_id);
+    
+    if (currentIdx <= 0) return 'HSV';
+    
+    // Look backwards for select_channel step
+    for (let i = currentIdx - 1; i >= 0; i--) {
+      const step = pipeline.steps[i];
+      if (step.step_def_id === 'select_channel') {
+        const space = step.param_values?.['space'] as string;
+        return space || 'HSV';
+      }
+    }
+    
+    return 'HSV';
+  }
+
+  isColorThreshMaxParam(paramName: string): boolean {
+    if (this.step?.step_def_id !== 'color_thresh') return false;
+    return paramName.endsWith('_max');
+  }
+
+  getColorThreshHistogramForParam(paramName: string): { channel: string; values: number[]; rangeMin: number; rangeMax: number } | null {
+    if (!paramName.endsWith('_max')) return null;
+    
+    const histograms = this.getColorThreshHistograms();
+    if (!histograms) return null;
+    
+    // Extract channel from param name (e.g., 'H_max' -> 'H', 'Lab_B_max' -> 'B')
+    let channel = '';
+    if (paramName === 'Lab_B_max') {
+      channel = 'B';
+    } else if (paramName === 'GRAY_max') {
+      channel = 'GRAY';
+    } else {
+      channel = paramName.slice(0, -4);
+    }
+    
+    return histograms.find(h => h.channel === channel) || null;
+  }
+
+  getColorThreshVisibleParams(space?: string): Set<string> {
+    const detectedSpace = space || this.getColorThreshSpace();
+    const paramSet = new Set<string>();
+    const channels = this.COLOR_SPACE_CHANNELS[detectedSpace]?.channels ?? [];
+    
+    for (const ch of channels) {
+      if (detectedSpace === 'LAB' && ch === 'B') {
+        paramSet.add('Lab_B_min');
+        paramSet.add('Lab_B_max');
+      } else if (detectedSpace === 'GRAY') {
+        paramSet.add('GRAY_min');
+        paramSet.add('GRAY_max');
+      } else {
+        paramSet.add(`${ch}_min`);
+        paramSet.add(`${ch}_max`);
+      }
+    }
+    paramSet.add('invert');
+    return paramSet;
+  }
+
+  getColorThreshHistograms(): Array<{ channel: string; values: number[]; rangeMin: number; rangeMax: number }> | null {
+    if (this.step?.step_def_id !== 'color_thresh') return null;
+    const space = this.getColorThreshSpace();
+    const histograms = this.sideOutputs['color_thresh_channel_histograms'];
+    
+    if (!Array.isArray(histograms) || histograms.length === 0) return null;
+    
+    const idx = Math.min(this.previewImageIndex, histograms.length - 1);
+    const histData = histograms[idx];
+    if (!histData || typeof histData !== 'object') return null;
+
+    const channels = this.COLOR_SPACE_CHANNELS[space]?.channels ?? [];
+    const config = this.COLOR_SPACE_CHANNELS[space];
+    
+    const result: Array<{ channel: string; values: number[]; rangeMin: number; rangeMax: number }> = [];
+    
+    for (const ch of channels) {
+      if (histData[ch]) {
+        const [rangeMin, rangeMax] = config?.ranges[ch] ?? [0, 255];
+        result.push({
+          channel: ch,
+          values: Array.isArray(histData[ch]) ? histData[ch] : [],
+          rangeMin,
+          rangeMax
+        });
+      }
+    }
+    
+    return result.length > 0 ? result : null;
+  }
+
+  getColorThreshInputImage(): string | null {
+    if (this.step?.step_def_id !== 'color_thresh') return null;
+    const inputImages = this.sideOutputs['color_thresh_input_images'];
+    if (!Array.isArray(inputImages) || inputImages.length === 0) return null;
+    const idx = Math.min(this.previewImageIndex, inputImages.length - 1);
+    return inputImages[idx] || null;
+  }
+
+  getColorThreshMarkerLines(forChannel?: string): Array<{ value: number; label?: string; color?: string }> {
+    if (this.step?.step_def_id !== 'color_thresh') return [];
+    
+    const space = this.getColorThreshSpace();
+    const lines: Array<{ value: number; label?: string; color?: string }> = [];
+    
+    // If called with specific channel, only show that channel's lines
+    if (forChannel) {
+      let minKey = '', maxKey = '';
+      
+      if (space === 'LAB' && forChannel === 'B') {
+        minKey = 'Lab_B_min';
+        maxKey = 'Lab_B_max';
+      } else if (space === 'GRAY') {
+        minKey = 'GRAY_min';
+        maxKey = 'GRAY_max';
+      } else {
+        minKey = `${forChannel}_min`;
+        maxKey = `${forChannel}_max`;
+      }
+      
+      const minVal = Number(this.getParamValue(minKey));
+      const maxVal = Number(this.getParamValue(maxKey));
+      
+      if (Number.isFinite(minVal)) {
+        lines.push({ value: minVal, label: `${forChannel} min`, color: '#60a5fa' });
+      }
+      if (Number.isFinite(maxVal)) {
+        lines.push({ value: maxVal, label: `${forChannel} max`, color: '#34d399' });
+      }
+      
+      return lines;
+    }
+    
+    // Show all channels (fallback, shouldn't be used)
+    const channels = this.COLOR_SPACE_CHANNELS[space]?.channels ?? [];
+    for (const ch of channels) {
+      let minKey = '', maxKey = '';
+      
+      if (space === 'LAB' && ch === 'B') {
+        minKey = 'Lab_B_min';
+        maxKey = 'Lab_B_max';
+      } else if (space === 'GRAY') {
+        minKey = 'GRAY_min';
+        maxKey = 'GRAY_max';
+      } else {
+        minKey = `${ch}_min`;
+        maxKey = `${ch}_max`;
+      }
+      
+      const minVal = Number(this.getParamValue(minKey));
+      const maxVal = Number(this.getParamValue(maxKey));
+      
+      if (Number.isFinite(minVal)) {
+        lines.push({ value: minVal, label: `${ch} min`, color: '#60a5fa' });
+      }
+      if (Number.isFinite(maxVal)) {
+        lines.push({ value: maxVal, label: `${ch} max`, color: '#34d399' });
+      }
+    }
+    
+    return lines;
+  }
+
+  getSliderMinMax(param: any): { min: number; max: number } {
+    return {
+      min: this.getSliderMin(param),
+      max: this.getSliderMax(param)
+    };
+  }
+
+  onRangeMinChange(paramName: string, event: Event): void {
+    const value = +(event.target as HTMLInputElement).value;
+    this.onParamChange(paramName, value);
+  }
+
+  onRangeMaxChange(paramName: string, event: Event): void {
+    const value = +(event.target as HTMLInputElement).value;
+    this.onParamChange(paramName, value);
   }
 }

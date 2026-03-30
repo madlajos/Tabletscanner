@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "name": "Lilla_PCA",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "a1c1180d-1264-43af-be39-541a638c74c2",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/Lilla/Desktop/Bence_UV/n",
+        "file_order": ""
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "afd55b19-ed23-42c0-965c-ca27d34deb26",
+      "step_def_id": "resize_images",
+      "param_values": {
+        "scale": 0.2
+      },
+      "order": 1
+    },
+    {
+      "instance_id": "97ad477f-54b2-43b3-b29d-d5e74973ebd0",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "space": "GRAY",
+        "channel": "GRAY"
+      },
+      "order": 2
+    },
+    {
+      "instance_id": "3272de5b-5ca5-42ee-ab81-a964f095cdc4",
+      "step_def_id": "calculate_histograms",
+      "param_values": {
+        "bins": 256,
+        "range_min": 0,
+        "range_max": 256
+      },
+      "order": 3
+    },
+    {
+      "instance_id": "84563398-63df-4501-8103-0c4df3cccb4a",
+      "step_def_id": "histogram_pca",
+      "param_values": {
+        "max_components": 5,
+        "preprocessing": "center"
+      },
+      "order": 4
+    }
+  ],
+  "created_at": "2026-03-30T20:46:28.137631+00:00",
+  "modified_at": "2026-03-30T20:46:28.137631+00:00"
+}

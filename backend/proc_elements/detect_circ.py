@@ -124,6 +124,11 @@ def detect_circles(
             circles_img.extend(_run_hough(gray, "bright"))
             circles_img = _deduplicate(circles_img)
 
+        # Keep only the circle with highest confidence/viability
+        if circles_img:
+            best_circle = max(circles_img, key=lambda c: (c.get("radius", 0),))
+            circles_img = [best_circle]
+
         for c in circles_img:
             color = (0, 0, 255) if c["polarity"] == "dark" else (255, 0, 0)
             cv2.circle(vis, (c["center_x"], c["center_y"]), c["radius"], color, 2)
@@ -154,3 +159,4 @@ def detect_circles(
         cv2.destroyAllWindows()
 
     return data
+

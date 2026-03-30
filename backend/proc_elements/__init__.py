@@ -35,3 +35,4 @@ from proc_elements.region_attr import detect_particles
 from proc_elements.create_pca import histogram_pca
 from proc_elements.detect_circ import detect_circles
 from proc_elements.filter_region import characterize_particles
+from proc_elements.color_thresh import color_threshold

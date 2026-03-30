@@ -275,6 +275,23 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
                 }
               </svg>
             }
+            <!-- Circle detection overlay -->
+            @if (circleOverlayActive && circlesForOverlay.length > 0) {
+              <svg class="circle-overlay"
+                   [attr.viewBox]="'0 0 ' + circleImgW + ' ' + circleImgH">
+                @for (c of circlesForOverlay; track $index) {
+                  <circle [attr.cx]="c.center_x"
+                          [attr.cy]="c.center_y"
+                          [attr.r]="c.radius"
+                          class="detection-circle"
+                          [title]="'Radius: ' + c.radius + 'px'" />
+                  <circle [attr.cx]="c.center_x"
+                          [attr.cy]="c.center_y"
+                          [attr.r]="2"
+                          class="circle-center-point" />
+                }
+              </svg>
+            }
             <!-- Measurement & annotation overlay -->
             @if (rulerActive || scaleActive || pixelActive || hasAnnotations) {
               <svg class="ruler-overlay"
@@ -653,6 +670,35 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
     .particle-hitarea.filtered-out {
       pointer-events: none;
       cursor: default;
+    }
+
+    .circle-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .detection-circle {
+      fill: transparent;
+      stroke: #ff6b6b;
+      stroke-width: 2;
+      pointer-events: none;
+      cursor: default;
+    }
+
+    .detection-circle:hover {
+      stroke: #ffd700;
+      stroke-width: 3;
+      filter: drop-shadow(0 0 4px #ffd700);
+    }
+
+    .circle-center-point {
+      fill: #00ff00;
+      pointer-events: none;
     }
 
     .no-preview {
@@ -1131,6 +1177,13 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private particleStepIndex = -1;
   private particleClickPending = false;
 
+  // Circle detection overlay
+  circleOverlayActive = false;
+  circlesForOverlay: any[] = [];
+  circleImgW = 100;
+  circleImgH = 100;
+  private circleStepIndex = -1;
+
   // Ruler tool state (multi-ruler: up to 5 lines)
   rulerActive = false;
   rulerLines: Array<{start: {x: number; y: number}, end: {x: number; y: number}, distance: number}> = [];
@@ -1263,8 +1316,23 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       }),
       this.pipelineState.imageCount$.subscribe((c) => (this.imageCount = c)),
       this.pipelineState.previewImageIndex$.subscribe((i) => (this.currentIndex = i)),
-      this.pipelineState.sideOutputs$.subscribe((so) => {
+      combineLatest([
+        this.pipelineState.sideOutputs$,
+        this.pipelineState.selectedStepIndex$,
+        this.pipelineState.pipeline$,
+        this.pipelineState.previewImageIndex$
+      ]).subscribe(([so, stepIdx, pipeline, imgIdx]) => {
         this.imageNames = so?.['loaded_paths'] ?? [];
+        
+        // For color_thresh steps, show the mask overlay on top of the original image
+        if (stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'color_thresh') {
+          const maskOverlays = so?.['color_thresh_mask_overlays'];
+          if (Array.isArray(maskOverlays) && maskOverlays.length > 0) {
+            const idx = Math.min(imgIdx, maskOverlays.length - 1);
+            this.imageSrc = maskOverlays[idx] || this.imageSrc;
+          }
+        }
+        
         // Auto-update the maximized chart when a new curve fit arrives
         if (this.showGraphViewer && so?.['curve_fits']) {
           const fits = so['curve_fits'];
@@ -1364,6 +1432,32 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           this.particlesForOverlay = [];
           this.particleExcludedIds = new Set();
           this.particleStepIndex = -1;
+        }
+      }),
+      // Track circle overlay when detect_circles step is selected
+      combineLatest([
+        this.pipelineState.pipeline$,
+        this.pipelineState.selectedStepIndex$,
+        this.pipelineState.sideOutputs$,
+        this.pipelineState.previewImageIndex$,
+        this.pipelineState.imageDims$,
+      ]).subscribe(([pipeline, idx, sideOutputs, imgIdx, dims]) => {
+        if (idx >= 0 && idx < pipeline.steps.length &&
+            pipeline.steps[idx].step_def_id === 'detect_circles') {
+          this.circleStepIndex = idx;
+          this.circleImgW = dims.w || 100;
+          this.circleImgH = dims.h || 100;
+          const circles = sideOutputs?.['circles'];
+          if (Array.isArray(circles) && Array.isArray(circles[imgIdx])) {
+            this.circlesForOverlay = circles[imgIdx];
+          } else {
+            this.circlesForOverlay = [];
+          }
+          this.circleOverlayActive = this.circlesForOverlay.length > 0;
+        } else {
+          this.circleOverlayActive = false;
+          this.circlesForOverlay = [];
+          this.circleStepIndex = -1;
         }
       }),
     );

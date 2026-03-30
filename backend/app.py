@@ -2963,7 +2963,18 @@ def preview_pipeline():
     }
 
     # Encode the requested image from the data dict as preview
-    if result.data and result.data.get("images"):
+    # Prioritize circle overlay images if available
+    if result.data and side_outputs.get("circle_overlay_base64") and len(side_outputs["circle_overlay_base64"]) > 0:
+        # Use circle overlay image if circles were detected
+        img_idx = max(0, min(preview_image_index, len(side_outputs["circle_overlay_base64"]) - 1))
+        response_data['image_base64'] = side_outputs["circle_overlay_base64"][img_idx]
+        # Get dimensions from original image for metadata
+        if result.data.get("images"):
+            img = result.data["images"][img_idx]
+            if img is not None and hasattr(img, 'shape'):
+                response_data['image_width'] = img.shape[1]
+                response_data['image_height'] = img.shape[0]
+    elif result.data and result.data.get("images"):
         img_idx = max(0, min(preview_image_index, len(result.data["images"]) - 1))
         img = result.data["images"][img_idx]
         if img is not None and hasattr(img, 'shape'):
@@ -2978,9 +2989,104 @@ def preview_pipeline():
                 response_data['image_base64'] = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
                 response_data['image_width'] = img.shape[1]
                 response_data['image_height'] = img.shape[0]
-                response_data['image_count'] = result.data.get("_original_count", len(result.data["images"]))
+    
+    if result.data:
+        response_data['image_count'] = result.data.get("_original_count", len(result.data.get("images", [])))
 
     return jsonify(response_data), 200
+
+
+@app.route('/api/pipeline/color-thresh-preview', methods=['POST'])
+def color_thresh_live_preview():
+    """Generate a live preview mask overlay for color_thresh with current parameter values."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        pipeline_dict = payload.get('pipeline', {})
+        preview_index = payload.get('selected_step_index', -1)
+        image_index = payload.get('preview_image_index', 0)
+        current_params = payload.get('current_params', {})  # Current slider values
+        
+        if preview_index < 0 or not pipeline_dict or not pipeline_dict.get('steps'):
+            return jsonify({'error': 'Invalid pipeline'}), 400
+        
+        # Run pipeline up to the color_thresh step
+        try:
+            doc = PipelineDocument.from_dict(pipeline_dict)
+        except Exception as e:
+            return jsonify({'error': f'Invalid pipeline: {e}'}), 400
+        
+        # Run up to selected step with current parameters
+        result = pipeline_engine.execute_pipeline(doc, up_to_step=preview_index, single_image_index=image_index)
+        
+        if not result.success or not result.data or not result.data.get("images"):
+            return jsonify({'error': 'Pipeline execution failed'}), 400
+        
+        # Get the input to color_thresh (the current output)
+        img_idx = min(image_index, len(result.data["images"]) - 1)
+        input_img = result.data["images"][img_idx]
+        
+        # Get metadata for color space
+        space = "HSV"
+        if result.data.get("meta", {}).get("select_channel"):
+            space = result.data["meta"]["select_channel"].get("space", "HSV")
+        
+        # Build thresholds from current_params
+        channel_mapping = {
+            "HSV": [("H", "H_min", "H_max"), ("S", "S_min", "S_max"), ("V", "V_min", "V_max")],
+            "BGR": [("B", "B_min", "B_max"), ("G", "G_min", "G_max"), ("R", "R_min", "R_max")],
+            "LAB": [("L", "L_min", "L_max"), ("A", "A_min", "A_max"), ("B", "Lab_B_min", "Lab_B_max")],
+            "GRAY": [("GRAY", "GRAY_min", "GRAY_max")],
+        }
+        
+        thresholds = {}
+        if space in channel_mapping:
+            for ch_name, min_key, max_key in channel_mapping[space]:
+                min_val = int(current_params.get(min_key, 0))
+                max_val = int(current_params.get(max_key, 255))
+                thresholds[ch_name] = (min_val, max_val)
+        else:
+            return jsonify({'error': f'Unknown color space: {space}'}), 400
+        
+        # Apply color threshold with current parameters
+        invert = bool(current_params.get("invert", False))
+        from proc_elements import color_threshold
+        test_data = {
+            "images": [input_img],
+            "error": None,
+            "count": 1,
+            "meta": result.data.get("meta", {}),
+            "results": {},
+            "history": []
+        }
+        thresh_result = color_threshold(test_data, space=space, thresholds=thresholds, invert=invert)
+        
+        if thresh_result.get("error"):
+            return jsonify({'error': f'Thresholding failed: {thresh_result["error"]}'}), 400
+        
+        # Get the mask overlay (already created by color_threshold)
+        mask_overlays = thresh_result.get("results", {}).get("color_thresh_mask_overlays", [])
+        if not mask_overlays or len(mask_overlays) == 0:
+            return jsonify({'error': 'No mask overlay generated'}), 500
+        
+        overlay = mask_overlays[0]
+        
+        # Encode to base64
+        success, jpeg_buf = cv2.imencode('.jpg', overlay, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if success:
+            import base64
+            b64_str = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
+            return jsonify({
+                'success': True,
+                'image_base64': f'data:image/jpeg;base64,{b64_str}',
+                'image_width': overlay.shape[1],
+                'image_height': overlay.shape[0],
+            }), 200
+        else:
+            return jsonify({'error': 'Failed to encode image'}), 500
+        
+    except Exception as e:
+        app.logger.exception("color_thresh_live_preview failed")
+        return jsonify({'error': f'Preview generation failed: {str(e)[:200]}'}), 500
 
 
 def _safe_filename_part(value: str) -> str:

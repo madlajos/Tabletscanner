@@ -43,6 +43,7 @@ from proc_elements import (
     histogram_pca as _pe_histogram_pca,
     detect_circles as _pe_detect_circles,
     characterize_particles as _pe_characterize_particles,
+    color_threshold as _pe_color_threshold,
 )
 
 # ---------------------------------------------------------------------------
@@ -282,7 +283,7 @@ _select_channel_def = StepDefinition(
     id="select_channel",
     name="Színtér konverzió",
     category="adjustment",
-    description="Színtér konverzió és csatorna kiválasztás (BGR, HSV, LAB, szürkeárnyalat).",
+    description="Színtér konverzió és csatorna kiválasztás (BGR, HSV, LAB, szürkeárnyalat). HSV/LAB esetén az 'ALL' opcióval mind a 3 csatorna kimenetre kerül.",
     icon="palette",
     input_type=DataType.IMAGE,
     output_type=DataType.GRAYSCALE,
@@ -292,8 +293,8 @@ _select_channel_def = StepDefinition(
                     options=["BGR", "HSV", "LAB", "GRAY"]),
         ParamSchema(name="channel", label="Csatorna", type="enum",
                     default="GRAY",
-                    options=["R", "G", "B", "H", "S", "V", "L", "A", "GRAY"],
-                    description="A kiválasztott csatorna a megadott színtérből"),
+                    options=["R", "G", "B", "H", "S", "V", "L", "A", "GRAY", "ALL"],
+                    description="A kiválasztott csatorna a megadott színtérből, vagy 'ALL' az összes csatornához"),
     ],
 )
 
@@ -1303,24 +1304,12 @@ _detect_circles_def = StepDefinition(
         ParamSchema(name="dp", label="Felbontás arány", type="float",
                     default=1.2, min=0.5, max=5.0, step=0.1,
                     description="Az akkumulátor felbontásának inverz aránya"),
-        ParamSchema(name="min_dist", label="Min. távolság", type="int",
-                    default=20, min=1, max=1000, step=1,
-                    description="Minimális távolság a detektált körök középpontjai között"),
         ParamSchema(name="min_radius", label="Min. sugár", type="int",
                     default=20, min=1, max=5000, step=1,
                     description="Minimális kör sugár pixelben"),
         ParamSchema(name="max_radius", label="Max. sugár", type="int",
                     default=25, min=1, max=5000, step=1,
                     description="Maximális kör sugár pixelben"),
-        ParamSchema(name="blur_ksize", label="Elmosás kernel", type="int",
-                    default=5, min=1, max=99, step=2, odd_only=True,
-                    description="Medián elmosás kernel mérete"),
-        ParamSchema(name="edge_threshold", label="Él küszöb", type="int",
-                    default=100, min=1, max=500, step=1,
-                    description="Canny él-detektálás felső küszöbe"),
-        ParamSchema(name="accumulator_threshold", label="Akkumulátor küszöb", type="int",
-                    default=20, min=1, max=300, step=1,
-                    description="Akkumulátor küszöbérték a kör jelöltek elfogadásához"),
         ParamSchema(name="polarity", label="Polaritás", type="enum",
                     default="dark",
                     options=["dark", "bright", "both"],
@@ -1332,13 +1321,14 @@ _detect_circles_def = StepDefinition(
 
 def _exec_detect_circles(data: dict, params: dict) -> dict:
     dp = float(params.get("dp", 1.2))
-    min_dist = int(params.get("min_dist", 20))
     min_radius = int(params.get("min_radius", 20))
     max_radius = int(params.get("max_radius", 25))
-    blur_ksize = int(params.get("blur_ksize", 5))
-    edge_threshold = int(params.get("edge_threshold", 100))
-    accumulator_threshold = int(params.get("accumulator_threshold", 20))
     polarity = params.get("polarity", "dark")
+    # These parameters use fixed defaults (not configurable from UI)
+    min_dist = 20
+    blur_ksize = 5
+    edge_threshold = 100
+    accumulator_threshold = 20
     return _pe_detect_circles(
         data,
         dp=dp,
@@ -1401,3 +1391,121 @@ def _exec_characterize_particles(data: dict, params: dict) -> dict:
 
 
 _register(_characterize_particles_def, _exec_characterize_particles)
+
+
+# ---------------------------------------------------------------------------
+# 26. Color Threshold (color_thresh.py)
+# ---------------------------------------------------------------------------
+_color_thresh_def = StepDefinition(
+    id="color_thresh",
+    name="Szín alapú küszöb",
+    category="adjustment",
+    description="Szín alapú küszöbölés a kiválasztott színtérben. Szükséges: Színtér konverzió lépés 'összes csatorna' opcióval.",
+    icon="palette",
+    input_type=DataType.IMAGE,
+    output_type=DataType.MASK,
+    params=[
+        ParamSchema(name="H_min", label="H min", type="int", default=0, min=0, max=179),
+        ParamSchema(name="H_max", label="H max", type="int", default=179, min=0, max=179),
+        ParamSchema(name="S_min", label="S min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="S_max", label="S max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="V_min", label="V min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="V_max", label="V max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="B_min", label="B min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="B_max", label="B max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="G_min", label="G min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="G_max", label="G max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="R_min", label="R min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="R_max", label="R max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="L_min", label="L min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="L_max", label="L max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="A_min", label="A min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="A_max", label="A max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="Lab_B_min", label="B min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="Lab_B_max", label="B max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="GRAY_min", label="GRAY min", type="int", default=0, min=0, max=255),
+        ParamSchema(name="GRAY_max", label="GRAY max", type="int", default=255, min=0, max=255),
+        ParamSchema(name="invert", label="Invertálás", type="bool",
+                    default=False,
+                    description="A kimeneti maszk invertálása"),
+        ParamSchema(name="white_background", label="Fehér háttér", type="bool",
+                    default=False,
+                    description="A levágott területek fehérrel töltése (alapértelmezés: fekete)"),
+    ],
+    side_output_types={"color_thresh_channel_histograms": "SCALAR", "color_thresh_input_images": "SCALAR", "color_thresh_mask_overlays": "SCALAR"},
+    required_preceding_steps=["select_channel"],
+)
+
+
+def _exec_color_thresh(data: dict, params: dict) -> dict:
+    # Detect color space from the metadata of the previous select_channel step
+    space = "HSV"  # default
+    
+    if "meta" in data and "select_channel" in data["meta"]:
+        space = data["meta"]["select_channel"].get("space", "HSV")
+    
+    invert = bool(params.get("invert", False))
+    white_background = bool(params.get("white_background", False))
+    
+    channel_mapping = {
+        "HSV": [("H", "H_min", "H_max"), ("S", "S_min", "S_max"), ("V", "V_min", "V_max")],
+        "BGR": [("B", "B_min", "B_max"), ("G", "G_min", "G_max"), ("R", "R_min", "R_max")],
+        "LAB": [("L", "L_min", "L_max"), ("A", "A_min", "A_max"), ("B", "Lab_B_min", "Lab_B_max")],
+        "GRAY": [("GRAY", "GRAY_min", "GRAY_max")],
+    }
+    
+    thresholds = {}
+    if space in channel_mapping:
+        for ch_name, min_key, max_key in channel_mapping[space]:
+            min_val = int(params.get(min_key, 0))
+            max_val = int(params.get(max_key, 255))
+            thresholds[ch_name] = (min_val, max_val)
+    else:
+        data["error"] = "E2201"
+        return data
+    
+    result = _pe_color_threshold(data, space=space, thresholds=thresholds, invert=invert, white_background=white_background)
+    
+    # Convert input images and mask overlays to base64 for frontend display
+    if "results" in result:
+        import cv2
+        import base64
+        
+        # Convert input images
+        if "color_thresh_input_images" in result["results"]:
+            input_images = result["results"]["color_thresh_input_images"]
+            if isinstance(input_images, list):
+                b64_images = []
+                for img in input_images:
+                    try:
+                        success, jpeg_buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        if success:
+                            b64_str = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
+                            b64_images.append(f"data:image/jpeg;base64,{b64_str}")
+                        else:
+                            b64_images.append(None)
+                    except Exception:
+                        b64_images.append(None)
+                result["results"]["color_thresh_input_images"] = b64_images
+        
+        # Convert mask overlays
+        if "color_thresh_mask_overlays" in result["results"]:
+            mask_overlays = result["results"]["color_thresh_mask_overlays"]
+            if isinstance(mask_overlays, list):
+                b64_overlays = []
+                for img in mask_overlays:
+                    try:
+                        success, jpeg_buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        if success:
+                            b64_str = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
+                            b64_overlays.append(f"data:image/jpeg;base64,{b64_str}")
+                        else:
+                            b64_overlays.append(None)
+                    except Exception:
+                        b64_overlays.append(None)
+                result["results"]["color_thresh_mask_overlays"] = b64_overlays
+    
+    return result
+
+
+_register(_color_thresh_def, _exec_color_thresh)

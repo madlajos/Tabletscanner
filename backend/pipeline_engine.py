@@ -266,7 +266,11 @@ def _clamp_params(step_def_id: str, params: dict) -> dict:
 def _serialize_value(val: Any) -> Any:
     """Convert numpy types to JSON-serializable Python types."""
     if isinstance(val, np.ndarray):
-        if val.ndim <= 1 and val.size <= 1024:
+        # Allow 2D arrays up to reasonable size (for PCA scores, etc.)
+        total_size = val.size
+        if val.ndim <= 2 and total_size <= 10000:  # ~10k elements for 2D arrays
+            return val.tolist()
+        elif val.ndim <= 1 and val.size <= 1024:
             return val.tolist()
         return f"<array shape={val.shape}>"
     if isinstance(val, (np.integer,)):
@@ -294,10 +298,24 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
 
     # Copy serializable results
     results = data.get("results", {})
-    _skip_result_keys = {"range_masks", "circle_overlay", "region_masks"}
+    _skip_result_keys = {"range_masks", "region_masks"}
     for key, val in results.items():
         if key in _skip_result_keys:
             side[f"{key}_count"] = len(val) if isinstance(val, list) else 0
+            continue
+        elif key == "circle_overlay":
+            # Convert circle overlay images to base64
+            import cv2
+            import base64
+            circle_overlay_b64 = []
+            if isinstance(val, list):
+                for img in val:
+                    if img is not None and hasattr(img, 'shape'):
+                        success, jpeg_buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        if success:
+                            b64_str = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
+                            circle_overlay_b64.append(b64_str)
+            side["circle_overlay_base64"] = circle_overlay_b64
             continue
         side[key] = _serialize_value(val)
 
