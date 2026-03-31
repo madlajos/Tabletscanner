@@ -1310,6 +1310,9 @@ _detect_circles_def = StepDefinition(
         ParamSchema(name="max_radius", label="Max. sugár", type="int",
                     default=25, min=1, max=5000, step=1,
                     description="Maximális kör sugár pixelben"),
+        ParamSchema(name="radius_multiplier", label="Sugár szorzó", type="float",
+                    default=1.0, min=0.1, max=5.0, step=0.1,
+                    description="A detektált körök sugarának szorzója (1.0 = nincs módosítás, 0.8 = 80%, 1.2 = 120%)"),
         ParamSchema(name="polarity", label="Polaritás", type="enum",
                     default="dark",
                     options=["dark", "bright", "both"],
@@ -1323,6 +1326,7 @@ def _exec_detect_circles(data: dict, params: dict) -> dict:
     dp = float(params.get("dp", 1.2))
     min_radius = int(params.get("min_radius", 20))
     max_radius = int(params.get("max_radius", 25))
+    radius_multiplier = float(params.get("radius_multiplier", 1.0))
     polarity = params.get("polarity", "dark")
     # These parameters use fixed defaults (not configurable from UI)
     min_dist = 20
@@ -1339,6 +1343,7 @@ def _exec_detect_circles(data: dict, params: dict) -> dict:
         edge_threshold=edge_threshold,
         accumulator_threshold=accumulator_threshold,
         polarity=polarity,
+        radius_multiplier=radius_multiplier,
     )
 
 

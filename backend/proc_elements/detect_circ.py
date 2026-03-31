@@ -12,6 +12,7 @@ def detect_circles(
     edge_threshold=100,
     accumulator_threshold=20,
     polarity="dark",
+    radius_multiplier=1.0,
     debug=False
 ):
     """
@@ -21,6 +22,11 @@ def detect_circles(
         - "dark"   : sötét körök világos háttéren
         - "bright" : világos körök sötét / közepes háttéren
         - "both"   : mindkettő külön futtatva, majd összevonva
+    
+    radius_multiplier:
+        - 1.0 (default): nincs módosítás
+        - 0.8: sugár 80%-ra csökkentve
+        - 1.5: sugár 150%-ra növelve, stb.
     """
 
     if data["error"] is not None:
@@ -44,6 +50,10 @@ def detect_circles(
 
     if not isinstance(blur_ksize, int) or blur_ksize <= 0 or blur_ksize % 2 == 0:
         data["error"] = "E3605"
+        return data
+
+    if radius_multiplier <= 0:
+        data["error"] = "E3608"
         return data
 
     if "results" not in data or data["results"] is None:
@@ -77,10 +87,11 @@ def detect_circles(
             circles = np.round(circles[0, :]).astype(int)
             for c in circles:
                 x, y, r = int(c[0]), int(c[1]), int(c[2])
+                adjusted_r = max(1, int(r * radius_multiplier))
                 results.append({
                     "center_x": x,
                     "center_y": y,
-                    "radius": r,
+                    "radius": adjusted_r,
                     "polarity": mode
                 })
 
@@ -147,7 +158,8 @@ def detect_circles(
         "blur_ksize": int(blur_ksize),
         "edge_threshold": float(edge_threshold),
         "accumulator_threshold": float(accumulator_threshold),
-        "polarity": polarity
+        "polarity": polarity,
+        "radius_multiplier": float(radius_multiplier)
     }
     data["history"].append("detect_circles")
 
