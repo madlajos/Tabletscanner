@@ -2963,11 +2963,19 @@ def preview_pipeline():
     }
 
     # Encode the requested image from the data dict as preview
-    # Prioritize circle overlay images if available
-    if result.data and side_outputs.get("circle_overlay_base64") and len(side_outputs["circle_overlay_base64"]) > 0:
-        # Use circle overlay image if circles were detected
+    # Only use circle overlay if the currently selected step IS detect_circles
+    current_step_is_detect_circles = (
+        preview_step >= 0 and 
+        preview_step < len(doc.steps) and 
+        doc.steps[preview_step].step_def_id == 'detect_circles'
+    )
+    
+    if (result.data and current_step_is_detect_circles and 
+        side_outputs.get("circle_overlay_base64") and len(side_outputs["circle_overlay_base64"]) > 0):
+        # Use circle overlay image only if detect_circles is the current step
         img_idx = max(0, min(preview_image_index, len(side_outputs["circle_overlay_base64"]) - 1))
         response_data['image_base64'] = side_outputs["circle_overlay_base64"][img_idx]
+        response_data['is_grayscale'] = False  # Circle overlay is always BGR
         # Get dimensions from original image for metadata
         if result.data.get("images"):
             img = result.data["images"][img_idx]
@@ -2979,7 +2987,8 @@ def preview_pipeline():
         img = result.data["images"][img_idx]
         if img is not None and hasattr(img, 'shape'):
             # Convert single-channel to BGR for JPEG encoding
-            if img.ndim == 2:
+            is_grayscale = img.ndim == 2
+            if is_grayscale:
                 img_enc = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             else:
                 img_enc = img
@@ -2989,6 +2998,8 @@ def preview_pipeline():
                 response_data['image_base64'] = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
                 response_data['image_width'] = img.shape[1]
                 response_data['image_height'] = img.shape[0]
+                # Signal frontend that this is grayscale (2-channel → color mapping for display)
+                response_data['is_grayscale'] = is_grayscale
     
     if result.data:
         response_data['image_count'] = result.data.get("_original_count", len(result.data.get("images", [])))
@@ -3087,6 +3098,190 @@ def color_thresh_live_preview():
     except Exception as e:
         app.logger.exception("color_thresh_live_preview failed")
         return jsonify({'error': f'Preview generation failed: {str(e)[:200]}'}), 500
+
+
+@app.route('/api/pipeline/generate-montage', methods=['POST'])
+def generate_montage():
+    """
+    Generate a montage grid of all currently loaded images.
+    Returns Base64-encoded montage image.
+    """
+    try:
+        from montage_utils import create_montage
+        import base64
+        
+        payload = request.get_json(silent=True) or {}
+        image_paths = payload.get('image_paths', [])
+        
+        if not image_paths or len(image_paths) == 0:
+            return jsonify({'error': 'No images provided', 'code': 'E_NO_IMAGES', 'popup': True}), 400
+        
+        if len(image_paths) < 2:
+            return jsonify({'error': 'Montage requires at least 2 images', 'code': 'E_FEW_IMAGES', 'popup': True}), 400
+        
+        # Generate montage
+        montage_img = create_montage(image_paths, target_cell_width=200, target_cell_height=200, label_height=30, debug=False)
+        
+        if montage_img is None:
+            return jsonify({'error': 'Failed to create montage', 'code': 'E_MONTAGE_FAILED', 'popup': True}), 500
+        
+        # Encode as JPEG Base64
+        _, jpeg_data = cv2.imencode('.jpg', montage_img)
+        b64_image = base64.b64encode(jpeg_data).decode('utf-8')
+        
+        return jsonify({
+            'success': True,
+            'montage_base64': b64_image,
+            'image_count': len(image_paths),
+            'montage_width': montage_img.shape[1],
+            'montage_height': montage_img.shape[0]
+        }), 200
+    
+    except Exception as e:
+        app.logger.error(f"Montage generation error: {str(e)}")
+        return jsonify({'error': f'Montage error: {str(e)[:200]}', 'code': 'E_MONTAGE_ERROR', 'popup': True}), 500
+
+
+@app.route('/api/pipeline/get-step-images-montage', methods=['POST'])
+def get_step_images_montage():
+    """
+    Generate a montage of all images processed by a specific pipeline step.
+    Returns Base64-encoded montage showing all output images from that step.
+    """
+    try:
+        import base64
+        from montage_utils import calculate_grid_layout
+        
+        payload = request.get_json(silent=True) or {}
+        pipeline_dict = payload.get('pipeline', {})
+        step_index = payload.get('step_index', -1)
+        
+        app.logger.info(f"Montage request: step_index={step_index}, has_pipeline={bool(pipeline_dict)}")
+        
+        if not pipeline_dict or step_index < 0:
+            return jsonify({'error': 'Invalid pipeline or step index', 'code': 'E_INVALID_REQUEST', 'popup': True}), 400
+        
+        # Parse pipeline
+        try:
+            doc = PipelineDocument.from_dict(pipeline_dict)
+        except Exception as e:
+            app.logger.error(f"Failed to parse pipeline: {str(e)}")
+            return jsonify({'error': f'Invalid pipeline: {str(e)[:100]}', 'code': 'E_INVALID_PIPELINE', 'popup': True}), 400
+        
+        if step_index >= len(doc.steps):
+            return jsonify({'error': 'Step index out of range', 'code': 'E_STEP_OUT_OF_RANGE', 'popup': True}), 400
+        
+        # Execute pipeline up to the specified step (for ALL images, not just one)
+        try:
+            app.logger.info(f"Executing pipeline up to step {step_index}")
+            result = pipeline_engine.execute_pipeline(doc, up_to_step=step_index)
+            app.logger.info(f"Pipeline execution result: success={result.success}, has_data={result.data is not None}")
+        except Exception as e:
+            app.logger.error(f"Pipeline execution failed: {str(e)}")
+            return jsonify({'error': f'Pipeline execution failed: {str(e)[:100]}', 'code': 'E_PIPELINE_EXEC', 'popup': True}), 500
+        
+        if not result.success or not result.data or not result.data.get("images"):
+            return jsonify({'error': 'No images produced by this step', 'code': 'E_NO_OUTPUT_IMAGES', 'popup': True}), 400
+        
+        images = result.data.get("images", [])
+        if len(images) == 0:
+            return jsonify({'error': 'No images to display', 'code': 'E_NO_IMAGES', 'popup': True}), 400
+        
+        app.logger.info(f"Processing {len(images)} images for montage")
+        
+        # Filter out None images and convert to BGR if needed
+        valid_images = []
+        for idx, img in enumerate(images):
+            if img is not None and hasattr(img, 'shape') and len(img.shape) >= 2:
+                # Convert grayscale to BGR for montage
+                if img.ndim == 2:
+                    img_bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                else:
+                    img_bgr = img
+                valid_images.append(img_bgr)
+            else:
+                app.logger.warning(f"Skipping image {idx}: is_none={img is None}, has_shape={hasattr(img, 'shape')}")
+        
+        if len(valid_images) == 0:
+            return jsonify({'error': 'No valid images to display', 'code': 'E_NO_VALID_IMAGES', 'popup': True}), 400
+        
+        app.logger.info(f"Got {len(valid_images)} valid images")
+        
+        # Calculate grid layout
+        rows, cols = calculate_grid_layout(len(valid_images))
+        app.logger.info(f"Grid layout: {rows}x{cols}")
+        
+        # Get image dimensions
+        sample_img = valid_images[0]
+        img_h, img_w = sample_img.shape[:2]
+        
+        # Create montage with labels
+        cell_width = max(150, min(300, 2000 // cols))
+        cell_height = max(150, min(300, 2000 // rows))
+        label_height = 30
+        
+        grid_w = cols * (cell_width + 2) + 2
+        grid_h = rows * (cell_height + label_height + 2) + 2
+        
+        montage = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+        montage[:] = (30, 30, 30)  # Dark background
+        
+        for idx, img in enumerate(valid_images):
+            row = idx // cols
+            col = idx % cols
+            
+            x = col * (cell_width + 2) + 2
+            y = row * (cell_height + label_height + 2) + 2
+            
+            # Resize image to fit cell
+            h, w = img.shape[:2]
+            if w <= 0 or h <= 0:
+                app.logger.warning(f"Skipping image {idx}: invalid dimensions w={w}, h={h}")
+                continue
+            scale = min(cell_width / w, cell_height / h)
+            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+            resized = cv2.resize(img, (new_w, new_h))
+            
+            # Center in cell
+            offset_x = (cell_width - new_w) // 2
+            offset_y = (cell_height - new_h) // 2
+            montage[y+offset_y:y+offset_y+new_h, x+offset_x:x+offset_x+new_w] = resized
+            
+            # Draw border
+            cv2.rectangle(montage, (x, y), (x+cell_width, y+cell_height), (100, 100, 100), 1)
+            
+            # Add label
+            label = f"Img {idx+1}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.4
+            thickness = 1
+            (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, thickness)
+            text_x = x + (cell_width - text_w) // 2
+            text_y = y + cell_height + label_height - 8
+            cv2.putText(montage, label, (text_x, text_y), font, font_scale, (200, 200, 200), thickness)
+        
+        # Encode as JPEG Base64
+        _, jpeg_data = cv2.imencode('.jpg', montage)
+        b64_image = base64.b64encode(jpeg_data).decode('utf-8')
+        
+        app.logger.info(f"Montage generated successfully: {montage.shape[1]}x{montage.shape[0]}")
+        
+        return jsonify({
+            'success': True,
+            'montage_base64': b64_image,
+            'image_count': len(valid_images),
+            'montage_width': montage.shape[1],
+            'montage_height': montage.shape[0],
+            'grid_rows': rows,
+            'grid_cols': cols,
+            'cell_width': cell_width,
+            'cell_height': cell_height,
+            'label_height': label_height
+        }), 200
+    
+    except Exception as e:
+        app.logger.error(f"Step images montage error: {type(e).__name__}: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Montage error: {str(e)[:200]}', 'code': 'E_MONTAGE_ERROR', 'popup': True}), 500
 
 
 def _safe_filename_part(value: str) -> str:

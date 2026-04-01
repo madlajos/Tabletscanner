@@ -1313,6 +1313,16 @@ _detect_circles_def = StepDefinition(
         ParamSchema(name="radius_multiplier", label="Sugár szorzó", type="float",
                     default=1.0, min=0.1, max=5.0, step=0.1,
                     description="A detektált körök sugarának szorzója (1.0 = nincs módosítás, 0.8 = 80%, 1.2 = 120%)"),
+        ParamSchema(name="apply_mask", label="Alkalmaz maszkként", type="bool",
+                    default=False,
+                    description="Ha engedélyezve: a körön kívüli terület lesz fekete/fehér. Nem rajzol kör jelölést."),
+        ParamSchema(name="mask_background", label="Háttér szín", type="enum",
+                    default="black",
+                    options=["black", "white"],
+                    description="A maszk háttérszíne (csak apply_mask engedélyezése esetén aktív)"),
+        ParamSchema(name="invert_mask", label="Maszk invertálása", type="bool",
+                    default=False,
+                    description="Ha engedélyezve: körön belül fekete/fehér, körön kívül eredeti (csak apply_mask engedélyezése esetén aktív)"),
         ParamSchema(name="polarity", label="Polaritás", type="enum",
                     default="dark",
                     options=["dark", "bright", "both"],
@@ -1327,6 +1337,9 @@ def _exec_detect_circles(data: dict, params: dict) -> dict:
     min_radius = int(params.get("min_radius", 20))
     max_radius = int(params.get("max_radius", 25))
     radius_multiplier = float(params.get("radius_multiplier", 1.0))
+    apply_mask = params.get("apply_mask", False)
+    mask_background = params.get("mask_background", "black")
+    invert_mask = params.get("invert_mask", False)
     polarity = params.get("polarity", "dark")
     # These parameters use fixed defaults (not configurable from UI)
     min_dist = 20
@@ -1344,6 +1357,9 @@ def _exec_detect_circles(data: dict, params: dict) -> dict:
         accumulator_threshold=accumulator_threshold,
         polarity=polarity,
         radius_multiplier=radius_multiplier,
+        apply_mask=apply_mask,
+        mask_background=mask_background,
+        invert_mask=invert_mask,
     )
 
 

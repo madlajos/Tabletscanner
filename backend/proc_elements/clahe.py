@@ -1,4 +1,6 @@
 import cv2
+import numpy as np
+from proc_elements.mask_utils import get_active_masks
 
 
 def apply_clahe(data, clip_limit=2.0, tile_grid_size=(8, 8), debug=False):
@@ -29,9 +31,12 @@ def apply_clahe(data, clip_limit=2.0, tile_grid_size=(8, 8), debug=False):
         tileGridSize=(tx, ty)
     )
 
+    # Get active masks if they exist
+    masks = get_active_masks(data)
+    
     output_images = []
 
-    for img in data["images"]:
+    for img_idx, img in enumerate(data["images"]):
         if img is None:
             data["error"] = "E3125"
             return data
@@ -40,7 +45,22 @@ def apply_clahe(data, clip_limit=2.0, tile_grid_size=(8, 8), debug=False):
             data["error"] = "E3126"
             return data
 
+        # Get mask for this image (if any)
+        mask = masks[img_idx] if img_idx < len(masks) else None
+        
         result = clahe.apply(img)
+        
+        # If we have a mask, only apply changes within the masked region
+        if mask is not None and mask.size > 0:
+            # Ensure mask is the right shape
+            if mask.shape[:2] != result.shape[:2]:
+                # Skip if mask doesn't match image size
+                pass
+            else:
+                # Apply changes only to masked region (in-place modification)
+                img[mask > 0] = result[mask > 0]
+                result = img
+        
         output_images.append(result)
 
     data["images"] = output_images
@@ -49,6 +69,10 @@ def apply_clahe(data, clip_limit=2.0, tile_grid_size=(8, 8), debug=False):
         "clip_limit": float(clip_limit),
         "tile_grid_size": (tx, ty)
     }
+    # Propagate active masks
+    if "meta" in data and "active_masks" in data["meta"]:
+        pass  # Masks are already in meta
+    
     data["history"].append("apply_clahe")
 
     if debug:

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Subscription, combineLatest } from 'rxjs';
 import { DataType } from '../../models/pipeline.models';
 import { PipelineStateService } from '../../services/pipeline-state.service';
+import { RecipeService } from '../../services/recipe.service';
 
 @Component({
   selector: 'app-pipeline-preview',
@@ -83,6 +84,20 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
               <span>Sk\u00e1la mutat\u00e1sa</span>
             </label>
           }
+          <div class="toolbar-spacer"></div>
+          <!-- Montage button - shows if more than 1 image -->
+          @if (imageCount > 1) {
+            <button class="tool-btn icon-tool-btn"
+                    (click)="generateAndShowMontage()" 
+                    [disabled]="generatingMontage"
+                    title="Mont\u00e1zs n\u00e9zet (összes k\u00e9p egy r\u00e1csban)">
+              @if (!generatingMontage) {
+                <span>\uD83C\uDF9E\uFE0F</span>
+              } @else {
+                <span>\u23F3</span>
+              }
+            </button>
+          }
         </div>
       </div>
       @if (loading) {
@@ -150,12 +165,25 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
       }
       <div class="preview-scroll-area" #scrollArea
            [class.zoomed]="zoomLevel > 1">
-        @if (imageSrc && !showGraphViewer) {
+        @if (showingMontage && montagePreview && !showGraphViewer) {
+          <!-- Montage gallery - replaces normal preview -->
+          <div class="montage-gallery-container">
+            <div class="montage-gallery-wrapper">
+              <img [src]="montagePreview" 
+                   alt="Montázs nézet" 
+                   class="montage-gallery-image"
+                   (click)="onMontageImageClick($event)"
+                   (load)="onMontageImageLoaded()"
+                   style="cursor: pointer;" />
+            </div>
+          </div>
+        } @else if (imageSrc && !showGraphViewer) {
           <div class="image-roi-container" #imageRoiContainer>
             <img #previewImg
               [src]="imageSrc"
               alt="Pipeline előnézet"
               class="preview-image"
+              [class.grayscale]="isGrayscale"
               draggable="false"
               (load)="onImageLoad()"
             />
@@ -442,7 +470,7 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
         }
       </div>
 
-      @if (imageCount > 1 && !showGraphViewer) {
+      @if (imageCount > 1 && !showGraphViewer && !showingMontage) {
         <div class="pagination-bar">
           <button
             class="page-btn"
@@ -571,6 +599,10 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
       object-fit: contain;
       user-select: none;
       transform-origin: center center;
+    }
+
+    .preview-image.grayscale {
+      filter: grayscale(100%);
     }
 
     .image-roi-container {
@@ -859,6 +891,11 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
       gap: 8px;
     }
 
+    .toolbar-spacer {
+      flex: 1;
+      min-width: 8px;
+    }
+
     .tool-btn {
       background-color: #333;
       color: #ccc;
@@ -1094,6 +1131,34 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
       font-size: 12px;
       font-variant-numeric: tabular-nums;
     }
+
+    .montage-gallery-container {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      flex: 1;
+    }
+
+    .montage-gallery-wrapper {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: visible;
+      padding: 0;
+      background: #1a1a1a;
+      min-width: min-content;
+      min-height: min-content;
+    }
+
+    .montage-gallery-image {
+      max-width: none;
+      max-height: none;
+      object-fit: contain;
+      display: block;
+    }
   `],
 })
 export class PipelinePreviewComponent implements OnInit, OnDestroy {
@@ -1104,6 +1169,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   @ViewChild('imageRoiContainer') imageRoiContainer!: ElementRef<HTMLDivElement>;
 
   imageSrc: string | null = null;
+  isGrayscale = false;
   loading = false;
   imageCount = 0;
   currentIndex = 0;
@@ -1113,6 +1179,10 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private baseFitScale = 1;
   private isDragging = false;
   private dragStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
+
+  // Zoom for montage
+  montageZoomLevel = 1.0;
+  private montageMontageBaseFitScale = 1;
 
   // Graph viewer state
   showGraphViewer = false;
@@ -1219,6 +1289,19 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private pixelCanvasCache: HTMLCanvasElement | null = null;
   private pixelImageDataCache: ImageData | null = null;
 
+  // Montage feature state
+  generatingMontage = false;
+  showingMontage = false;
+  montageImagePaths: string[] = [];
+  montagePreview: string | null = null;
+  private currentPipeline: any = null;
+  private selectedStepIndex = -1;
+  private montageGridCols = 0;
+  private montageGridRows = 0;
+  private montageCellWidth = 0;
+  private montageCellHeight = 0;
+  private montageImageCount = 0;
+
   readonly Math = Math;
 
   get pxPerMm(): number {
@@ -1295,6 +1378,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   constructor(
     private pipelineState: PipelineStateService,
     private cdr: ChangeDetectorRef,
+    private recipeService: RecipeService,
   ) {}
 
   ngOnInit(): void {
@@ -1310,6 +1394,9 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pixelCanvasCache = null;
         this.pixelImageDataCache = null;
       }),
+      this.pipelineState.previewImageIsGrayscale$.subscribe((isGray) => {
+        this.isGrayscale = isGray;
+      }),
       this.pipelineState.previewLoading$.subscribe((l) => {
         if (this.particleClickPending) return;
         this.loading = l;
@@ -1323,6 +1410,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pipelineState.previewImageIndex$
       ]).subscribe(([so, stepIdx, pipeline, imgIdx]) => {
         this.imageNames = so?.['loaded_paths'] ?? [];
+        this.selectedStepIndex = stepIdx;
+        this.currentPipeline = pipeline;
         
         // For color_thresh steps, show the mask overlay on top of the original image
         if (stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'color_thresh') {
@@ -1453,7 +1542,9 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           } else {
             this.circlesForOverlay = [];
           }
-          this.circleOverlayActive = this.circlesForOverlay.length > 0;
+          // Only show overlay if apply_mask is not enabled
+          const applyMask = pipeline.steps[idx].param_values?.['apply_mask'] ?? false;
+          this.circleOverlayActive = this.circlesForOverlay.length > 0 && !applyMask;
         } else {
           this.circleOverlayActive = false;
           this.circlesForOverlay = [];
@@ -1473,17 +1564,40 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (this.showGraphViewer) return;
     if (!event.ctrlKey) return;
     event.preventDefault();
+    
     const factor = event.deltaY > 0 ? 0.9 : 1.1;
-    this.zoomLevel = Math.max(1.0, Math.min(5.0, this.zoomLevel * factor));
-    this.applyImageTransform();
+    
+    // Determine if we're in montage view or regular image view
+    if (this.showingMontage && this.montagePreview) {
+      // Zoom montage
+      this.montageZoomLevel = Math.max(1.0, Math.min(5.0, this.montageZoomLevel * factor));
+      this.applyMontageTransform();
+    } else {
+      // Zoom regular image
+      this.zoomLevel = Math.max(1.0, Math.min(5.0, this.zoomLevel * factor));
+      this.applyImageTransform();
+    }
   }
 
   onMouseDown(event: MouseEvent): void {
     if (this.showRoiContextMenu) this.showRoiContextMenu = false;
     if (this.showGraphViewer) return;
-    if (this.zoomLevel <= 1.0) return;
+    
+    // Check zoom level based on which view is active
+    const isZoomed = this.showingMontage ? this.montageZoomLevel > 1.0 : this.zoomLevel > 1.0;
+    if (!isZoomed) return;
+    
     event.preventDefault();
-    const container = this.scrollArea?.nativeElement;
+    
+    // Get the appropriate scrollable container
+    let container: HTMLElement | null = null;
+    if (this.showingMontage) {
+      const previewWrapper = this.previewContainer?.nativeElement;
+      container = previewWrapper?.querySelector('.montage-gallery-container');
+    } else {
+      container = this.scrollArea?.nativeElement;
+    }
+    
     if (!container) return;
     this.isDragging = true;
     this.dragStart = {
@@ -1495,8 +1609,18 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   }
 
   onMouseMove(event: MouseEvent): void {
-    if (this.showGraphViewer || !this.isDragging || this.zoomLevel <= 1.0) return;
-    const container = this.scrollArea?.nativeElement;
+    const isZoomed = this.showingMontage ? this.montageZoomLevel > 1.0 : this.zoomLevel > 1.0;
+    if (this.showGraphViewer || !this.isDragging || !isZoomed) return;
+    
+    // Get the appropriate scrollable container
+    let container: HTMLElement | null = null;
+    if (this.showingMontage) {
+      const previewWrapper = this.previewContainer?.nativeElement;
+      container = previewWrapper?.querySelector('.montage-gallery-container');
+    } else {
+      container = this.scrollArea?.nativeElement;
+    }
+    
     if (!container) return;
     container.scrollLeft = this.dragStart.scrollLeft - (event.clientX - this.dragStart.x);
     container.scrollTop = this.dragStart.scrollTop - (event.clientY - this.dragStart.y);
@@ -1508,8 +1632,13 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   resetZoom(): void {
     if (this.showGraphViewer) return;
-    this.zoomLevel = 1.0;
-    this.applyImageTransform();
+    if (this.showingMontage && this.montagePreview) {
+      this.montageZoomLevel = 1.0;
+      this.applyMontageTransform();
+    } else {
+      this.zoomLevel = 1.0;
+      this.applyImageTransform();
+    }
   }
 
   onAuxClick(event: MouseEvent): void {
@@ -1523,7 +1652,11 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   getCursor(): string {
     if (this.showGraphViewer) return 'default';
     if (this.pixelActive) return 'crosshair';
-    if (this.zoomLevel > 1.0 && !this.rulerActive && !this.scaleActive) return this.isDragging ? 'grabbing' : 'grab';
+    
+    const isZoomed = this.showingMontage ? this.montageZoomLevel > 1.0 : this.zoomLevel > 1.0;
+    if (isZoomed && !this.rulerActive && !this.scaleActive) {
+      return this.isDragging ? 'grabbing' : 'grab';
+    }
     return 'default';
   }
 
@@ -1554,7 +1687,39 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     }
   }
 
-  // --- Pagination ---
+  private applyMontageTransform(): void {
+    // Find the montage gallery container (which is scrollable)
+    const previewWrapper = this.previewContainer?.nativeElement;
+    if (!previewWrapper) return;
+
+    const montageContainer = previewWrapper.querySelector('.montage-gallery-container') as HTMLDivElement;
+    if (!montageContainer) return;
+
+    // Find the montage image element
+    const montageImg = montageContainer.querySelector('.montage-gallery-image') as HTMLImageElement;
+    if (!montageImg) return;
+
+    const nw = montageImg.naturalWidth;
+    const nh = montageImg.naturalHeight;
+    if (nw === 0 || nh === 0) return;
+
+    if (this.montageZoomLevel <= 1.0) {
+      // Calculate fit scale based on container dimensions
+      const cw = montageContainer.clientWidth;
+      const ch = montageContainer.clientHeight;
+      if (cw === 0 || ch === 0) return;
+      this.montageMontageBaseFitScale = Math.min(cw / nw, ch / nh, 1);
+      montageImg.style.width = `${Math.floor(nw * this.montageMontageBaseFitScale)}px`;
+      montageImg.style.height = `${Math.floor(nh * this.montageMontageBaseFitScale)}px`;
+      montageContainer.scrollLeft = 0;
+      montageContainer.scrollTop = 0;
+    } else {
+      const fitW = Math.floor(nw * this.montageMontageBaseFitScale * this.montageZoomLevel);
+      const fitH = Math.floor(nh * this.montageMontageBaseFitScale * this.montageZoomLevel);
+      montageImg.style.width = `${fitW}px`;
+      montageImg.style.height = `${fitH}px`;
+    }
+  }
 
   prevImage(): void {
     this.pipelineState.setPreviewImageIndex(this.currentIndex - 1);
@@ -2585,6 +2750,115 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     }
     this.scaleBarMm = best;
     this.scaleBarPx = best * pm;
+  }
+
+  // === Montage feature ===
+
+  async generateAndShowMontage(): Promise<void> {
+    if (this.generatingMontage || this.imageCount < 2 || !this.currentPipeline || this.selectedStepIndex < 0) {
+      console.warn('Montage generation skipped:', {
+        generatingMontage: this.generatingMontage,
+        imageCount: this.imageCount,
+        hasPipeline: !!this.currentPipeline,
+        selectedStepIndex: this.selectedStepIndex
+      });
+      return;
+    }
+
+    this.generatingMontage = true;
+    console.log('Starting montage generation for step:', this.selectedStepIndex);
+
+    try {
+      const response = await this.recipeService.getStepImagesMontage(this.currentPipeline, this.selectedStepIndex).toPromise();
+      console.log('Montage response:', response);
+      
+      if (response?.montage_base64) {
+        this.montagePreview = `data:image/jpeg;base64,${response.montage_base64}`;
+        this.montageImageCount = response.image_count || 0;
+        this.montageGridRows = response.grid_rows || 0;
+        this.montageGridCols = response.grid_cols || 0;
+        this.montageCellWidth = response.cell_width || 0;
+        this.montageCellHeight = response.cell_height || 0;
+        this.montageZoomLevel = 1.0;  // Reset zoom when displaying new montage
+        this.showingMontage = true;
+        console.log('Montage displayed successfully', {
+          imageCount: this.montageImageCount,
+          rows: this.montageGridRows,
+          cols: this.montageGridCols,
+          cellWidth: this.montageCellWidth,
+          cellHeight: this.montageCellHeight
+        });
+        this.cdr.markForCheck();
+      } else {
+        console.error('No montage_base64 in response:', response);
+      }
+    } catch (error) {
+      console.error('Failed to generate montage:', error);
+      this.showingMontage = false;
+    } finally {
+      this.generatingMontage = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  closeMontage(): void {
+    this.showingMontage = false;
+    this.montagePreview = null;
+    this.montageZoomLevel = 1.0;
+  }
+
+  onMontageImageLoaded(): void {
+    console.log('Montage image loaded');
+    // Initialize the zoom transform after the image is loaded
+    setTimeout(() => {
+      this.applyMontageTransform();
+    }, 0);
+  }
+
+  onMontageImageClick(event: MouseEvent): void {
+    if (!this.montagePreview || this.montageGridRows === 0 || this.montageGridCols === 0) {
+      return;
+    }
+
+    const montageImg = (event.target as HTMLImageElement);
+    const rect = montageImg.getBoundingClientRect();
+    
+    // Click position in browser viewport
+    const clickX = event.clientX - rect.left;
+    const clickY = event.clientY - rect.top;
+    
+    // Scale to original image coordinates
+    const scaleX = montageImg.naturalWidth / rect.width;
+    const scaleY = montageImg.naturalHeight / rect.height;
+    const imgX = clickX * scaleX;
+    const imgY = clickY * scaleY;
+
+    // Calculate grid position with 2px padding/spacing
+    const padding = 2;
+    const localX = imgX - padding;
+    const localY = imgY - padding;
+
+    if (localX < 0 || localY < 0) {
+      return;
+    }
+
+    // Each cell: width + 2px spacing
+    const cellStride = this.montageCellWidth + 2;
+    const rowStride = this.montageCellHeight + 30 + 2; // 30 = label height
+
+    const col = Math.floor(localX / cellStride);
+    const row = Math.floor(localY / rowStride);
+
+    if (col >= this.montageGridCols || row >= this.montageGridRows) {
+      return;
+    }
+
+    const imageIndex = row * this.montageGridCols + col;
+    if (imageIndex < this.montageImageCount) {
+      this.pipelineState.setPreviewImageIndex(imageIndex);
+      this.closeMontage();
+      this.cdr.markForCheck();
+    }
   }
 
   // === Unified tool event handlers ===

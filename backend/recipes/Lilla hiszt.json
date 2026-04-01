@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "name": "Lilla hiszt",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "bf2c61bf-fa56-4114-addd-9a1e1bfcd5bf",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/Lilla/Desktop/Work/0001.JPG",
+        "file_order": ""
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "41f019f2-1c31-4181-862b-5b25af00f24f",
+      "step_def_id": "resize_images",
+      "param_values": {
+        "scale": 0.2
+      },
+      "order": 1
+    },
+    {
+      "instance_id": "742e253f-fd6a-46b3-8d4e-2d066bc24f8e",
+      "step_def_id": "detect_circles",
+      "param_values": {
+        "dp": 1.2,
+        "min_radius": 230,
+        "max_radius": 250,
+        "radius_multiplier": 1,
+        "apply_mask": true,
+        "mask_background": "black",
+        "invert_mask": false,
+        "polarity": "dark"
+      },
+      "order": 2
+    },
+    {
+      "instance_id": "498cbf68-c9e4-4bc5-ad2c-d4de24cd280a",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "space": "BGR",
+        "channel": "G"
+      },
+      "order": 3
+    }
+  ],
+  "created_at": "2026-03-31T11:01:39.760008+00:00",
+  "modified_at": "2026-03-31T11:01:39.760008+00:00"
+}

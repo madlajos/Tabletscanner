@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from proc_elements.cache_utils import cached_cvtColor, cached_calcHist
 
 
 def _get_space_config():
@@ -70,12 +71,12 @@ def _validate_thresholds(space, thresholds, config):
     return True, None
 
 
-def _convert_image(img, space, config):
+def _convert_image(data, img, space, config):
     if space == "GRAY":
         if len(img.shape) == 2:
             return img
         if len(img.shape) == 3 and img.shape[2] == 3:
-            return cv2.cvtColor(img, config[space]["convert"])
+            return cached_cvtColor(data, img, config[space]["convert"], f"cvtColor_BGR2GRAY")
         return None
 
     if len(img.shape) != 3 or img.shape[2] != 3:
@@ -85,7 +86,12 @@ def _convert_image(img, space, config):
     if convert_code is None:
         return img
 
-    return cv2.cvtColor(img, convert_code)
+    op_name = {
+        cv2.COLOR_BGR2HSV: "cvtColor_BGR2HSV",
+        cv2.COLOR_BGR2LAB: "cvtColor_BGR2LAB",
+    }.get(convert_code, f"cvtColor_{convert_code}")
+    
+    return cached_cvtColor(data, img, convert_code, op_name)
 
 
 def _build_mask(converted, space, thresholds, config):
@@ -191,17 +197,13 @@ def color_threshold(data, space="HSV", thresholds=None, invert=False, white_back
 
     output_images = []
     channel_histograms = []
-    input_images = []  # Keep copies of input images for preview
 
-    for img in data["images"]:
+    for img_idx, img in enumerate(data["images"]):
         if img is None:
             data["error"] = "E2202"
             return data
 
-        # Store input image copy for preview
-        input_images.append(img.copy())
-
-        converted = _convert_image(img, space, config)
+        converted = _convert_image(data, img, space, config)
         if converted is None:
             data["error"] = "E2203"
             return data
@@ -213,14 +215,14 @@ def color_threshold(data, space="HSV", thresholds=None, invert=False, white_back
 
         output_images.append(mask)
         
-        # Calculate histograms for each channel
+        # Calculate histograms for each channel (cached)
         ch_histograms = {}
         for ch in config[space]["channels"]:
             if space == "GRAY":
-                hist = cv2.calcHist([converted], [0], None, [256], [0, 256])
+                hist = cached_calcHist(data, converted, [0], bins=256, ranges=(0, 256), op_name=f"calcHist_GRAY")
             else:
                 ch_idx = config[space]["channels"].index(ch)
-                hist = cv2.calcHist([converted], [ch_idx], None, [256], [0, 256])
+                hist = cached_calcHist(data, converted, [ch_idx], bins=256, ranges=(0, 256), op_name=f"calcHist_{ch}")
             ch_histograms[ch] = hist.flatten().tolist()
         
         channel_histograms.append(ch_histograms)
@@ -242,22 +244,6 @@ def color_threshold(data, space="HSV", thresholds=None, invert=False, white_back
         data["results"] = {}
     
     data["results"]["color_thresh_channel_histograms"] = channel_histograms
-    data["results"]["color_thresh_input_images"] = input_images
-    
-    # Create mask overlays: original image where mask matches, black/white elsewhere
-    mask_overlays = []
-    for i, mask in enumerate(output_images):
-        if i < len(input_images):
-            original = input_images[i].copy()
-            # Apply mask: keep original where mask==255, fill with black/white where mask==0
-            overlay = original.copy()
-            if white_background:
-                overlay[mask == 0] = 255  # White for non-matched regions
-            else:
-                overlay[mask == 0] = 0  # Black for non-matched regions
-            mask_overlays.append(overlay)
-    
-    data["results"]["color_thresh_mask_overlays"] = mask_overlays
 
     if "history" not in data:
         data["history"] = []

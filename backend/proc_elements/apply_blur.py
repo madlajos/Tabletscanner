@@ -1,4 +1,5 @@
 import cv2
+from proc_elements.cache_utils import cached_GaussianBlur, cached_medianBlur
 
 
 def apply_blur(
@@ -50,10 +51,10 @@ def apply_blur(
             return data
 
         if method == "gaussian":
-            result = cv2.GaussianBlur(img, (ksize, ksize), sigma)
+            result = cached_GaussianBlur(data, img, (ksize, ksize), sigma)
 
         elif method == "median":
-            result = cv2.medianBlur(img, ksize)
+            result = cached_medianBlur(data, img, ksize)
 
         elif method == "average":
             result = cv2.blur(img, (ksize, ksize))

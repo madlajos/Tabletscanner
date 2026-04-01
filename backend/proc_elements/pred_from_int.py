@@ -63,7 +63,16 @@ def _invert_by_scan(f, target_y: float, x_min: float, x_max: float) -> float | N
 
 def predict_node(model_data, input_data, fit_index=0, equation="", y_name="mean", x_min=None, x_max=None, debug=False):
 
-    result_data = copy.deepcopy(input_data)
+    # Selective shallow copy: only copy metadata/results, share image array references
+    result_data = {
+        "images": input_data["images"],
+        "paths": input_data.get("paths", []),
+        "count": input_data.get("count", 0),
+        "meta": dict(input_data.get("meta", {})),
+        "results": dict(input_data.get("results", {})),
+        "history": list(input_data.get("history", [])),
+        "error": None
+    }
 
     if model_data["error"] is not None:
         result_data["error"] = "E2801"

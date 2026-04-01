@@ -72,6 +72,7 @@ export interface PreviewResponse {
   image_width?: number;
   image_height?: number;
   image_count?: number;
+  is_grayscale?: boolean;
 }
 
 export interface RecipeSummary {

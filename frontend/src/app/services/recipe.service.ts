@@ -40,6 +40,19 @@ export interface SaveArrayResponse {
   source_key: string;
 }
 
+export interface MontageResponse {
+  success: boolean;
+  montage_base64: string;
+  image_count: number;
+  montage_width: number;
+  montage_height: number;
+  grid_rows: number;
+  grid_cols: number;
+  cell_width: number;
+  cell_height: number;
+  label_height: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class RecipeService {
   constructor(private http: HttpClient) {}
@@ -174,6 +187,22 @@ export class RecipeService {
     return this.http.post<{ message: string; new_name: string }>(
       `${BASE_URL}/recipes/${encodeURIComponent(name)}/duplicate`,
       {}
+    );
+  }
+
+  /** Generate a montage from multiple image paths. */
+  generateMontage(imagePaths: string[]): Observable<{ montage_base64: string }> {
+    return this.http.post<{ montage_base64: string }>(
+      `${BASE_URL}/pipeline/generate-montage`,
+      { image_paths: imagePaths }
+    );
+  }
+
+  /** Generate a montage of all images processed by a specific pipeline step. */
+  getStepImagesMontage(pipeline: PipelineDocument, stepIndex: number): Observable<MontageResponse> {
+    return this.http.post<MontageResponse>(
+      `${BASE_URL}/pipeline/get-step-images-montage`,
+      { pipeline, step_index: stepIndex }
     );
   }
 }

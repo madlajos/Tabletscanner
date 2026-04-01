@@ -1,6 +1,35 @@
 import numpy as np
 
 
+def _get_masks_from_pipeline(data):
+    """
+    Retrieve masks from the pipeline in priority order.
+    Returns a list of masks parallel to data["images"], or None if no masks found.
+    Priority: range_masks > masks > active_masks > (generate full mask)
+    """
+    if data["results"] is None:
+        return None
+    
+    # Try to get range_masks (from apply_range_mask)
+    if "range_masks" in data["results"]:
+        return data["results"]["range_masks"]
+    
+    # Try to get masks (from detect_circles with apply_mask=True)
+    if "masks" in data["results"]:
+        return data["results"]["masks"]
+    
+    # Try to get active_masks from meta
+    if "meta" in data and "active_masks" in data["meta"]:
+        return data["meta"]["active_masks"]
+    
+    # Generate full masks (include all pixels)
+    masks = []
+    for img in data["images"]:
+        full_mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
+        masks.append(full_mask)
+    return masks
+
+
 def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False):
 
     if data["error"] is not None:
@@ -10,9 +39,8 @@ def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False
         data["error"] = "E2501"
         return data
 
-    if "results" not in data or "range_masks" not in data["results"]:
-        data["error"] = "E2502"
-        return data
+    if "results" not in data:
+        data["results"] = {}
 
     if not isinstance(percentiles, (list, tuple)) or len(percentiles) == 0:
         data["error"] = "E2503"
@@ -23,9 +51,14 @@ def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False
             data["error"] = "E2504"
             return data
 
+    masks = _get_masks_from_pipeline(data)
+    if masks is None or len(masks) == 0:
+        data["error"] = "E2502"
+        return data
+
     stats = []
 
-    for img, mask in zip(data["images"], data["results"]["range_masks"]):
+    for img, mask in zip(data["images"], masks):
 
         if img is None or mask is None:
             data["error"] = "E2505"

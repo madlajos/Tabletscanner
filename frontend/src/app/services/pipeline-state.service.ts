@@ -61,6 +61,10 @@ export class PipelineStateService {
   private previewImageSubject = new BehaviorSubject<string | null>(null);
   previewImage$ = this.previewImageSubject.asObservable();
 
+  /** Whether preview image is grayscale. */
+  private previewImageIsGrayscaleSubject = new BehaviorSubject<boolean>(false);
+  previewImageIsGrayscale$ = this.previewImageIsGrayscaleSubject.asObservable();
+
   /** Side outputs from the pipeline execution (accumulated). */
   private sideOutputsSubject = new BehaviorSubject<Record<string, any>>({});
   sideOutputs$ = this.sideOutputsSubject.asObservable();
@@ -504,6 +508,7 @@ export class PipelineStateService {
           } else {
             this.previewImageSubject.next(null);
           }
+          this.previewImageIsGrayscaleSubject.next(res.is_grayscale ?? false);
           this.sideOutputsSubject.next(res.side_outputs || {});
           this.imageCountSubject.next(res.image_count ?? 0);
           if (res.image_width && res.image_height) {
@@ -512,6 +517,7 @@ export class PipelineStateService {
         } else {
           this.validationErrorsSubject.next(res.errors || []);
           this.previewImageSubject.next(null);
+          this.previewImageIsGrayscaleSubject.next(false);
           this.imageCountSubject.next(0);
           this.sideOutputsSubject.next({});
         }

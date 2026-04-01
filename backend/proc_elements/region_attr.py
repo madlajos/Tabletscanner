@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from proc_elements.cache_utils import cached_cvtColor
 
 
 def detect_particles(
@@ -106,6 +107,10 @@ def detect_particles(
 
         return True
 
+    # Initialize conversion cache in results
+    if "results" not in data:
+        data["results"] = {}
+
     for img_index, img in enumerate(data["images"]):
 
         if img is None:
@@ -114,9 +119,9 @@ def detect_particles(
 
         if len(img.shape) == 2:
             gray = img
-            vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            vis = cached_cvtColor(data, img, cv2.COLOR_GRAY2BGR, "cvtColor_GRAY2BGR")
         elif len(img.shape) == 3 and img.shape[2] == 3:
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray = cached_cvtColor(data, img, cv2.COLOR_BGR2GRAY, "cvtColor_BGR2GRAY")
             vis = img.copy()
         else:
             data["error"] = "E3003"
