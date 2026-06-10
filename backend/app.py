@@ -287,20 +287,22 @@ def get_serial_device_status(device_name):
         if getattr(globals, 'motion_busy', False):
             return jsonify({'connected': True, 'busy': True, 'port': ser.port}), 200
 
-        # Non-blocking quick probe (optional). Never reset buffers here.
+        # Non-blocking quick probe under the lock so we don't corrupt
+        # concurrent serial operations (e.g. homing, moves).
         try:
             buf = bytearray()
             deadline = time.monotonic() + 0.15
-            ser.write(b'M105\n')
-            while time.monotonic() < deadline:
-                iw = getattr(ser, 'in_waiting', 0) or 0
-                if not iw:
-                    break
-                chunk = ser.read(min(iw, 64))
-                if chunk:
-                    buf += chunk
-                    if b"ok" in buf.lower():
+            with porthandler.motion_lock:
+                ser.write(b'M105\n')
+                while time.monotonic() < deadline:
+                    iw = getattr(ser, 'in_waiting', 0) or 0
+                    if not iw:
                         break
+                    chunk = ser.read(min(iw, 64))
+                    if chunk:
+                        buf += chunk
+                        if b"ok" in buf.lower():
+                            break
             if buf and b"ok" not in buf.lower():
                 app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
         except (OSError, PermissionError) as e:
@@ -382,22 +384,25 @@ def api_home_toolhead():
         else:
             motioncontrols.home_axes(ser)
         
-        # Wait for homing to complete by draining any buffered responses
-        # The board sends "ok" when ready, but may also send "echo:busy: processing" while working
+        # Wait for homing to complete by draining any buffered responses.
+        # The board sends "echo:busy: processing" while working and "ok"
+        # when homing is finished.  MUST hold motion_lock so no other
+        # request interleaves serial data during the wait.
         try:
-            deadline = time.monotonic() + 20.0  # 20 second timeout for homing
+            deadline = time.monotonic() + 30.0  # 30 second timeout for full homing
             buf = bytearray()
-            while time.monotonic() < deadline:
-                iw = getattr(ser, 'in_waiting', 0) or 0
-                if iw:
-                    chunk = ser.read(min(iw, 256))
-                    if chunk:
-                        buf += chunk
-                        # Homing complete when we see "ok" (at end of response)
-                        if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
-                            break
-                else:
-                    time.sleep(0.05)
+            with porthandler.motion_lock:
+                while time.monotonic() < deadline:
+                    iw = getattr(ser, 'in_waiting', 0) or 0
+                    if iw:
+                        chunk = ser.read(min(iw, 256))
+                        if chunk:
+                            buf += chunk
+                            # Homing complete when we see "ok" (at end of response)
+                            if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
+                                break
+                    else:
+                        time.sleep(0.05)
         except (OSError, PermissionError) as e:
             app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
             try:
@@ -872,6 +877,9 @@ def move_toolhead_relative():
             motioncontrols.move_relative(motion_platform, **move_args)
         except (OSError, PermissionError) as e:
             return _handle_motion_usb_disconnect(motion_platform, "relative move")
+
+        # Update cached position after successful relative move
+        globals.last_toolhead_pos[axis] = clamped
 
         return jsonify({
             'status': 'success',

@@ -23,12 +23,19 @@ def home_axes(motion_platform, *axes):
         axes = [axis.upper() for axis in axes]
 
     axes_str = " ".join(axes)
-    command = f"G28{axes_str}"
+    command = f"G28 {axes_str}"
 
     try:
-        porthandler.write(motion_platform, command)
+        # Use write_and_wait so we get confirmation the command was received.
+        # The caller (api_home_toolhead) will still poll for the homing
+        # completion "ok" since homing takes 10-30 seconds.
+        ok, reply = porthandler.write_and_wait(motion_platform, command, timeout=2.0)
+        if not ok:
+            log.warning(f"Homing command '{command}' was not acknowledged (reply: {reply[:64]!r})")
+    except (OSError, PermissionError):
+        raise  # let caller handle USB disconnect
     except Exception as e:
-        print(f"An error occured while sending the Homing command to the Motion platform: {e}")
+        log.error(f"Error sending homing command to Motion platform: {e}")
 
 def disable_steppers(motion_platform, *axes):
     # If no axes are specified, disable all steppers
@@ -39,12 +46,16 @@ def disable_steppers(motion_platform, *axes):
         axes = [axis.upper() for axis in axes]
     
     axes_str = " ".join(axes)
-    command = f"M84{axes_str}"
+    command = f"M84 {axes_str}"
 
     try:
-        porthandler.write(motion_platform, command)
+        ok, reply = porthandler.write_and_wait(motion_platform, command, timeout=2.0)
+        if not ok:
+            log.warning(f"Disable steppers command '{command}' was not acknowledged")
+    except (OSError, PermissionError):
+        raise  # let caller handle USB disconnect
     except Exception as e:
-        print(f"An error occured while sending the Disable Steppers command to the Motion platform: {e}")
+        log.error(f"Error sending Disable Steppers command: {e}")
 
 def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
     """
