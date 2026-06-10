@@ -59,6 +59,13 @@ ORIGIN_Y_DEFAULT = 20.0
 SPACING_DEFAULT = 20.0
 
 
+def _normalize_path(p: str) -> str:
+    """Normalize filesystem paths to use forward slashes for cross-platform consistency."""
+    if not p:
+        return p
+    return p.replace('\\', '/')
+
+
 @app.route('/favicon.ico')
 def favicon():
     return '', 204
@@ -758,6 +765,9 @@ def api_load_camera_profile():
                 'popup': True
             }), 400
         
+        # Normalize path for cross-platform consistency
+        pfs_path = _normalize_path(pfs_path)
+
         # Always persist the profile path, even if the camera is not connected yet.
         settings_data = get_settings()
         if 'other_settings' not in settings_data:
@@ -1158,6 +1168,9 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     Returns:
         list of saved file paths (original, and optionally masked)
     """
+    # Normalize path for cross-platform consistency
+    target_folder = _normalize_path(target_folder)
+
     # Grab frame from camera
     frame_result = grab_camera_image()
     
@@ -1382,7 +1395,7 @@ def auto_measurement_step():
         x_pos = data.get('x')
         y_pos = data.get('y')
         z_pos = data.get('z', 20.0)
-        measurement_folder = data.get('measurement_folder')
+        measurement_folder = _normalize_path(data.get('measurement_folder', ''))
         measurement_name = data.get('measurement_name')
         
         autofocus_enabled = bool(data.get('autofocus', False))
@@ -2018,7 +2031,7 @@ def grab_camera_image():
 @app.route('/api/save_raw_image', methods=['POST'])
 def save_raw_image_endpoint():
     data = request.get_json() or {}
-    target_folder = data.get('target_folder')
+    target_folder = _normalize_path(data.get('target_folder', ''))
     measurement_name = data.get('measurement_name')
     light_type = data.get('light_type') or 'dome'
 
@@ -2332,14 +2345,15 @@ def update_other_settings():
 
         app.logger.info(f"Updating {category}.{setting_name} = {setting_value}")
 
+        # Normalize path-like settings to use forward slashes
+        updated_value = setting_value
+        if isinstance(setting_value, str) and any(kw in setting_name.lower() for kw in ('path', 'file', 'dir', 'location', 'folder')):
+            updated_value = _normalize_path(setting_value)
+
         # Retrieve the in-memory settings
         settings_data = get_settings()
         if category not in settings_data:
             settings_data[category] = {}
-
-        # For consistency, you could add validation or conversion here if needed.
-        # For now, we'll just pass the new value as is.
-        updated_value = setting_value
 
         # Update the setting in the in-memory dict
         settings_data[category][setting_name] = updated_value
@@ -2453,6 +2467,10 @@ def select_file():
         if not file_path:
             file_path = ""
 
+        # Normalize backslashes to forward slashes for JSON portability
+        if file_path:
+            file_path = file_path.replace('\\', '/')
+
         return jsonify({"file": file_path}), 200
 
     except Exception as e:
@@ -2461,9 +2479,12 @@ def select_file():
 
 @app.route('/api/select-folder', methods=['GET'])
 def select_folder():
-    folder = select_folder_external()  # opens a Tkinter folder dialog
+    folder = select_folder_external()  # opens a Tkinter folder dialog (already normalized)
     if folder is None:
         folder = ""
+    # Safety: re-normalize in case the subprocess returned backslashes
+    if folder:
+        folder = folder.replace('\\', '/')
     return jsonify({"folder": folder})
 
 

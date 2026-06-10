@@ -9,6 +9,10 @@ root.withdraw()
 folder = filedialog.askdirectory(title="Képmentés mappája")
 root.destroy()
 
+# Normalize path to use forward slashes for cross-platform JSON consistency
+if folder:
+    folder = folder.replace('\\', '/')
+
 # Return the result to stdout
 print(json.dumps({"folder": folder}))
 sys.exit(0)

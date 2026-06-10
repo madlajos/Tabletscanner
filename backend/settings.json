@@ -11,7 +11,7 @@
     },
     "other_settings": {
         "objective": "1.0x",
-        "save_location": "D:/",
+        "save_location": "D:/martin",
         "background_subtraction": true,
         "save_settings": false,
         "camera_settings_file": "D:/source/Tabletscanner/backend/a2A4508-20ucBAS_40697387.pfs",
@@ -19,6 +19,6 @@
         "settings_preset_name": "ok"
     },
     "auto_measurement_settings": {
-        "save_location": "D:/"
+        "save_location": "C:/Users/madlajos/Downloads"
     }
 }
