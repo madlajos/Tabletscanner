@@ -461,17 +461,15 @@ def stop_camera_stream():
         globals.grab_lock = Lock()
         lock = globals.grab_lock
 
-    # stream_running is a bool, not a dict
     running = bool(getattr(globals, "stream_running", False))
     if not running:
         return "Stream already stopped."
 
     try:
-        # Signal all streaming loops/threads to stop
-        globals.stream_running = False
-
-        # Stop grabbing under the lock
+        # Signal the stream loop to stop and stop grabbing atomically
+        # under the lock so the stream generator sees a consistent state.
         with lock:
+            globals.stream_running = False
             if camera and camera.IsGrabbing():
                 camera.StopGrabbing()
                 app.logger.info("Camera stream stopped.")

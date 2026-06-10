@@ -568,7 +568,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       });
   }
 
-  applySetting(setting: string, persist: boolean = false): void {
+  applySetting(setting: string, persist: boolean = true): void {
     const value = this.cameraSettings[setting];
     console.log(`Applying setting ${setting}: ${value} (persist=${persist})`);
 
