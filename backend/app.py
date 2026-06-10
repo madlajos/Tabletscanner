@@ -155,6 +155,7 @@ def _handle_camera_disconnect(context: str = "operation"):
             pass
         globals.camera = None
     globals.stream_running = False
+    globals._cached_camera_serial = None
 
     return jsonify({
         'error': ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED, 'Camera disconnected'),
@@ -511,27 +512,25 @@ def disconnect_camera():
         app.logger.info(f"Camera stream stopped before disconnecting.")
     except ValueError:
         app.logger.warning(f"Failed to stop camera stream: Invalid camera type.")
-        # Decide how you want to handle this. If invalid camera type is fatal, return here:
         return jsonify({"error": "Invalid camera type"}), 400
     except RuntimeError as re:
         app.logger.warning(f"Error stopping camera stream: {str(re)}")
-        # Maybe we continue to shut down the camera anyway
     except Exception as e:
         app.logger.error(f"Failed to disconnect camera: {e}")
         return jsonify({"error": str(e)}), 500
 
+    # stop_camera_stream() already stopped grabbing under the lock.
+    # Just close the camera handle and clear globals.
     camera = globals.camera
-    if camera and camera.IsGrabbing():
-        camera.StopGrabbing()
-        app.logger.info(f"Camera grabbing stopped.")
-
     if camera and camera.IsOpen():
         camera.Close()
         app.logger.info(f"Camera closed.")
 
     # Clean up references
     globals.camera = None
-    camera_properties = None  # Make sure camera_properties is in scope
+    globals.camera_properties = {}
+    globals._cached_camera_serial = None
+    globals.latest_image = None
     app.logger.info(f"Camera disconnected successfully.")
 
     return jsonify({"status": "disconnected"}), 200
@@ -555,6 +554,10 @@ def get_camera_status():
     """
     Return {"connected": bool, "streaming": bool} and
     detect if a previously-open camera was physically removed while idle.
+    
+    Uses a cached serial number to avoid expensive EnumerateDevices()
+    calls on every 1-second poll. Only re-enumerates on cache miss or
+    when the camera was previously disconnected.
     """
     camera = getattr(globals, 'camera', None)
     is_streaming = bool(getattr(globals, 'stream_running', False))
@@ -565,48 +568,61 @@ def get_camera_status():
         try:
             is_connected = camera.IsOpen()
         except Exception:
-            # If calling IsOpen raises, treat as disconnected
             is_connected = False
 
-    try:
-        # Enumerate actual devices present now
-        devices = pylon.TlFactory.GetInstance().EnumerateDevices()
-    except Exception:
-        devices = []
-
-    # If we think we're connected, confirm the same device is still present
+    # Only re-enumerate devices when we need to verify physical presence.
+    # Cache the serial number at connect time to avoid expensive USB
+    # enumeration on every poll.
     if is_connected:
+        cached_serial = getattr(globals, '_cached_camera_serial', None)
         try:
             open_serial = camera.GetDeviceInfo().GetSerialNumber()
+            # Cache for future polls
+            globals._cached_camera_serial = open_serial
         except Exception:
             open_serial = None
+            globals._cached_camera_serial = None
 
-        present_serials = []
-        try:
-            for dev in devices:
-                try:
-                    present_serials.append(dev.GetSerialNumber())
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        if not present_serials or (open_serial and open_serial not in present_serials):
-            # Device is gone -> clean up and flip to disconnected
+        # Fast path: serial matches cache → device is still there
+        if cached_serial and open_serial and cached_serial == open_serial:
+            pass  # All good, skip enumeration
+        else:
+            # Slow path: verify via device enumeration (first poll or serial changed)
             try:
-                if is_streaming:
+                devices = pylon.TlFactory.GetInstance().EnumerateDevices()
+            except Exception:
+                devices = []
+
+            present_serials = []
+            try:
+                for dev in devices:
                     try:
-                        camera.StopGrabbing()
+                        present_serials.append(dev.GetSerialNumber())
                     except Exception:
                         pass
-                camera.Close()
             except Exception:
                 pass
 
-            globals.camera = None
-            globals.stream_running = False
-            is_connected = False
-            is_streaming = False
+            if not present_serials or (open_serial and open_serial not in present_serials):
+                # Device is gone → clean up and flip to disconnected
+                try:
+                    if is_streaming:
+                        try:
+                            camera.StopGrabbing()
+                        except Exception:
+                            pass
+                    camera.Close()
+                except Exception:
+                    pass
+
+                globals.camera = None
+                globals.stream_running = False
+                globals._cached_camera_serial = None
+                is_connected = False
+                is_streaming = False
+    else:
+        # Camera not connected → clear cache so next connect re-enumerates
+        globals._cached_camera_serial = None
 
     return jsonify({
         "connected": bool(is_connected),
@@ -2609,6 +2625,12 @@ def connect_camera_internal():
         settings_data = get_settings()
         apply_camera_settings(globals.camera, camera_properties, settings_data)
         
+        # Cache the serial number for fast status polling (avoids EnumerateDevices)
+        try:
+            globals._cached_camera_serial = globals.camera.GetDeviceInfo().GetSerialNumber()
+        except Exception:
+            globals._cached_camera_serial = None
+
         # Load .pfs camera profile if configured
         pfs_path = settings_data.get('other_settings', {}).get('camera_settings_file', '')
         if pfs_path and os.path.isfile(pfs_path):
