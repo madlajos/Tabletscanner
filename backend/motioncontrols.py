@@ -26,12 +26,12 @@ def home_axes(motion_platform, *axes):
     command = f"G28 {axes_str}"
 
     try:
-        # Use write_and_wait so we get confirmation the command was received.
-        # The caller (api_home_toolhead) will still poll for the homing
-        # completion "ok" since homing takes 10-30 seconds.
-        ok, reply = porthandler.write_and_wait(motion_platform, command, timeout=2.0)
-        if not ok:
-            log.warning(f"Homing command '{command}' was not acknowledged (reply: {reply[:64]!r})")
+        # Fire-and-forget: G28 can take 5-30 seconds and the board only
+        # responds with "ok" when homing completes.  write_and_wait()
+        # would always time out here, and its internal drain-then-read
+        # cycle can consume data the caller's polling loop expects.
+        # The caller (api_home_toolhead) handles the completion wait.
+        porthandler.write(motion_platform, command)
     except (OSError, PermissionError):
         raise  # let caller handle USB disconnect
     except Exception as e:

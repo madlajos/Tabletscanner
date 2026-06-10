@@ -386,23 +386,23 @@ def api_home_toolhead():
         
         # Wait for homing to complete by draining any buffered responses.
         # The board sends "echo:busy: processing" while working and "ok"
-        # when homing is finished.  MUST hold motion_lock so no other
-        # request interleaves serial data during the wait.
+        # when homing is finished.  motion_busy=True prevents other
+        # endpoints from touching the serial port, and Flask's single-
+        # threaded server prevents concurrent request handling.
         try:
             deadline = time.monotonic() + 30.0  # 30 second timeout for full homing
             buf = bytearray()
-            with porthandler.motion_lock:
-                while time.monotonic() < deadline:
-                    iw = getattr(ser, 'in_waiting', 0) or 0
-                    if iw:
-                        chunk = ser.read(min(iw, 256))
-                        if chunk:
-                            buf += chunk
-                            # Homing complete when we see "ok" (at end of response)
-                            if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
-                                break
-                    else:
-                        time.sleep(0.05)
+            while time.monotonic() < deadline:
+                iw = getattr(ser, 'in_waiting', 0) or 0
+                if iw:
+                    chunk = ser.read(min(iw, 256))
+                    if chunk:
+                        buf += chunk
+                        # Homing complete when we see "ok" (at end of response)
+                        if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
+                            break
+                else:
+                    time.sleep(0.05)
         except (OSError, PermissionError) as e:
             app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
             try:
@@ -2524,17 +2524,27 @@ def get_base_path():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Results'))
     
 def select_folder_external() -> str:
+    """Open a native folder-selection dialog in a short-lived subprocess.
+    
+    Uses sys.executable so the same Python interpreter (and its installed
+    packages, e.g. tkinter) is used.  The dialog script lives next to this
+    file in the backend/ directory.
+    """
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'select_folder_dialog.py')
     try:
         result = subprocess.run(
-            ['python', 'select_folder_dialog.py'], 
-            capture_output=True, 
+            [sys.executable, script_path],
+            capture_output=True,
             text=True,
             timeout=15  # seconds
         )
         output = json.loads(result.stdout.strip())
-        return output['folder']
+        return output.get('folder', '')
+    except subprocess.TimeoutExpired:
+        app.logger.error("Folder selection subprocess timed out after 15s")
+        return ""
     except Exception as e:
-        print("Folder selection failed:", e)
+        app.logger.error(f"Folder selection failed: {e}")
         return ""
 
 def connect_camera_internal():
