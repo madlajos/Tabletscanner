@@ -138,8 +138,8 @@
         class="lamp-icon" />
     </button>
 
-    <button class="lamp-button" [class.active]="barLightOn" (click)="toggleBarLight()" [disabled]="!isConnected || measurementActive || isAutofocusing">
-      <img [src]="barLightOn ? 'assets/SVG/barlight_on.svg' : 'assets/SVG/barlight_off.svg'" alt="Bar light"
+    <button class="lamp-button" [class.active]="uvDomeLightOn" (click)="onUVDomeClick()" [disabled]="!isConnected || measurementActive || isAutofocusing">
+      <img [src]="uvDomeLightOn ? 'assets/SVG/uv_ringlight_on.svg' : 'assets/SVG/uv_ringlight_off.svg'" alt="UV Dome light"
         class="lamp-icon" />
     </button>
   </div>

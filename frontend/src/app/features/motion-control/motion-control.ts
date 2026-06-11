@@ -57,7 +57,8 @@ export class MotionControl implements OnInit, OnDestroy {
   isEditingZ: boolean = false;
 
   ringLightOn: boolean = false;
-  barLightOn: boolean = false;
+  uvDomeLightOn: boolean = false;
+  private uvDomeClickTimer: any = null;
   lightBusy = false;
 
 
@@ -109,7 +110,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.lightsOffSub = this.sharedService.lightsOff$.subscribe(() => {
       console.log('Lights off event received; updating UI state');
       this.ringLightOn = false;
-      this.barLightOn = false;
+      this.uvDomeLightOn = false;
     });
 
     // Subscribe to autofocus invalidation (e.g., when auto-measurement moves the platform)
@@ -314,14 +315,14 @@ export class MotionControl implements OnInit, OnDestroy {
 
   checkLampAutoOff(): void {
     this.http
-      .get<{ auto_turned_off: boolean; dome_on: boolean; bar_on: boolean }>(`${BASE_URL}/check-lamp-auto-off`)
+      .get<{ auto_turned_off: boolean; dome_on: boolean; bar_on: boolean; uv_dome_on: boolean }>(`${BASE_URL}/check-lamp-auto-off`)
       .subscribe({
         next: (response) => {
           if (response.auto_turned_off) {
             console.log('Lamps were auto-turned off by backend (5-minute timeout)');
             // Update UI state to reflect that lamps are now off
             this.ringLightOn = false;
-            this.barLightOn = false;
+            this.uvDomeLightOn = false;
             // Notify shared service
             this.sharedService.setActiveLight(null);
           }
@@ -362,33 +363,70 @@ export class MotionControl implements OnInit, OnDestroy {
       });
   }
 
-  // ---------- Helpers ----------
+  // ---------- UV Dome Light (single click = S50, double click = S255) ----------
 
-  async toggleBarLight(): Promise<void> {
+  onUVDomeClick(): void {
+    if (this.uvDomeClickTimer) {
+      // Double click detected
+      clearTimeout(this.uvDomeClickTimer);
+      this.uvDomeClickTimer = null;
+      this.toggleUVDomeLightHighPower();
+    } else {
+      this.uvDomeClickTimer = setTimeout(() => {
+        this.uvDomeClickTimer = null;
+        this.toggleUVDomeLightNormal();
+      }, 300);
+    }
+  }
+
+  async toggleUVDomeLightNormal(): Promise<void> {
     if (this.lightBusy) return;
     this.lightBusy = true;
     try {
-      if (!this.barLightOn) {
-        // Turning bar on: ensure dome is off first
+      if (!this.uvDomeLightOn) {
+        // Turning UV dome on (normal power): ensure dome is off first
         if (this.ringLightOn) {
           await this.sendGcode('M106 P0 S255');
           this.ringLightOn = false;
         }
-        await this.sendGcode('M106 P1 S255');
-        this.barLightOn = true;
+        await this.sendGcode('M106 P3 S50');
+        this.uvDomeLightOn = true;
         this.ringLightOn = false;
-        console.log('[MotionControl] Bar light turned ON - setting active light to bar');
+        console.log('[MotionControl] UV Dome light turned ON (normal power S50) - setting active light to bar');
         this.sharedService.setActiveLight('bar');
         this.applyCameraSettingsForLight('bar');
       } else {
-        // Turning bar off
-        await this.sendGcode('M106 P1 S0');
-        this.barLightOn = false;
-        console.log('[MotionControl] Bar light turned OFF - setting active light to null');
+        // Turning UV dome off
+        await this.sendGcode('M106 P3 S0');
+        this.uvDomeLightOn = false;
+        console.log('[MotionControl] UV Dome light turned OFF - setting active light to null');
         this.sharedService.setActiveLight(null);
       }
     } catch (err) {
-      console.error('Failed to toggle bar light', err);
+      console.error('Failed to toggle UV Dome light', err);
+    } finally {
+      this.lightBusy = false;
+    }
+  }
+
+  async toggleUVDomeLightHighPower(): Promise<void> {
+    if (this.lightBusy) return;
+    this.lightBusy = true;
+    try {
+      // Turn off dome light first if it's on
+      if (this.ringLightOn) {
+        await this.sendGcode('M106 P0 S255');
+        this.ringLightOn = false;
+      }
+      // Always send high-power command (even if already on at normal power)
+      await this.sendGcode('M106 P3 S255');
+      this.uvDomeLightOn = true;
+      this.ringLightOn = false;
+      console.log('[MotionControl] UV Dome light turned ON (high power S255) - setting active light to bar');
+      this.sharedService.setActiveLight('bar');
+      this.applyCameraSettingsForLight('bar');
+    } catch (err) {
+      console.error('Failed to toggle UV Dome light (high power)', err);
     } finally {
       this.lightBusy = false;
     }
@@ -400,14 +438,14 @@ export class MotionControl implements OnInit, OnDestroy {
     this.lightBusy = true;
     try {
       if (!this.ringLightOn) {
-        // Turning dome on: ensure bar is off first
-        if (this.barLightOn) {
-          await this.sendGcode('M106 P1 S0');
-          this.barLightOn = false;
+        // Turning dome on: ensure UV dome is off first
+        if (this.uvDomeLightOn) {
+          await this.sendGcode('M106 P3 S0');
+          this.uvDomeLightOn = false;
         }
         await this.sendGcode('M106 P0 S0');
         this.ringLightOn = true;
-        this.barLightOn = false;
+        this.uvDomeLightOn = false;
         console.log('[MotionControl] Dome light turned ON - setting active light to dome');
         this.sharedService.setActiveLight('dome');
         this.applyCameraSettingsForLight('dome');
@@ -718,11 +756,11 @@ export class MotionControl implements OnInit, OnDestroy {
     this.sharedService.setAutofocusActive(true);
 
     // If neither light is on, turn on the dome light before autofocus
-    if (!this.ringLightOn && !this.barLightOn) {
+    if (!this.ringLightOn && !this.uvDomeLightOn) {
       try {
         await this.sendGcode('M106 P0 S0');   // dome on
         this.ringLightOn = true;
-        this.barLightOn = false;
+        this.uvDomeLightOn = false;
         console.log('[MotionControl] Dome light auto-enabled for autofocus');
         this.sharedService.setActiveLight('dome');
         this.applyCameraSettingsForLight('dome');
