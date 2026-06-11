@@ -65,6 +65,13 @@ ORIGIN_Y_DEFAULT = 20.0
 SPACING_DEFAULT = 20.0
 
 
+def _normalize_path(p: str) -> str:
+    """Normalize filesystem paths to use forward slashes for cross-platform consistency."""
+    if not p:
+        return p
+    return p.replace('\\', '/')
+
+
 @app.route('/favicon.ico')
 def favicon():
     return '', 204
@@ -154,6 +161,7 @@ def _handle_camera_disconnect(context: str = "operation"):
             pass
         globals.camera = None
     globals.stream_running = False
+    globals._cached_camera_serial = None
 
     return jsonify({
         'error': ERROR_MESSAGES.get(ErrorCode.CAMERA_DISCONNECTED, 'Camera disconnected'),
@@ -285,20 +293,22 @@ def get_serial_device_status(device_name):
         if getattr(globals, 'motion_busy', False):
             return jsonify({'connected': True, 'busy': True, 'port': ser.port}), 200
 
-        # Non-blocking quick probe (optional). Never reset buffers here.
+        # Non-blocking quick probe under the lock so we don't corrupt
+        # concurrent serial operations (e.g. homing, moves).
         try:
             buf = bytearray()
             deadline = time.monotonic() + 0.15
-            ser.write(b'M105\n')
-            while time.monotonic() < deadline:
-                iw = getattr(ser, 'in_waiting', 0) or 0
-                if not iw:
-                    break
-                chunk = ser.read(min(iw, 64))
-                if chunk:
-                    buf += chunk
-                    if b"ok" in buf.lower():
+            with porthandler.motion_lock:
+                ser.write(b'M105\n')
+                while time.monotonic() < deadline:
+                    iw = getattr(ser, 'in_waiting', 0) or 0
+                    if not iw:
                         break
+                    chunk = ser.read(min(iw, 64))
+                    if chunk:
+                        buf += chunk
+                        if b"ok" in buf.lower():
+                            break
             if buf and b"ok" not in buf.lower():
                 app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
         except (OSError, PermissionError) as e:
@@ -380,10 +390,13 @@ def api_home_toolhead():
         else:
             motioncontrols.home_axes(ser)
         
-        # Wait for homing to complete by draining any buffered responses
-        # The board sends "ok" when ready, but may also send "echo:busy: processing" while working
+        # Wait for homing to complete by draining any buffered responses.
+        # The board sends "echo:busy: processing" while working and "ok"
+        # when homing is finished.  motion_busy=True prevents other
+        # endpoints from touching the serial port, and Flask's single-
+        # threaded server prevents concurrent request handling.
         try:
-            deadline = time.monotonic() + 20.0  # 20 second timeout for homing
+            deadline = time.monotonic() + 30.0  # 30 second timeout for full homing
             buf = bytearray()
             while time.monotonic() < deadline:
                 iw = getattr(ser, 'in_waiting', 0) or 0
@@ -460,17 +473,15 @@ def stop_camera_stream():
         globals.grab_lock = Lock()
         lock = globals.grab_lock
 
-    # stream_running is a bool, not a dict
     running = bool(getattr(globals, "stream_running", False))
     if not running:
         return "Stream already stopped."
 
     try:
-        # Signal all streaming loops/threads to stop
-        globals.stream_running = False
-
-        # Stop grabbing under the lock
+        # Signal the stream loop to stop and stop grabbing atomically
+        # under the lock so the stream generator sees a consistent state.
         with lock:
+            globals.stream_running = False
             if camera and camera.IsGrabbing():
                 camera.StopGrabbing()
                 app.logger.info("Camera stream stopped.")
@@ -512,27 +523,25 @@ def disconnect_camera():
         app.logger.info(f"Camera stream stopped before disconnecting.")
     except ValueError:
         app.logger.warning(f"Failed to stop camera stream: Invalid camera type.")
-        # Decide how you want to handle this. If invalid camera type is fatal, return here:
         return jsonify({"error": "Invalid camera type"}), 400
     except RuntimeError as re:
         app.logger.warning(f"Error stopping camera stream: {str(re)}")
-        # Maybe we continue to shut down the camera anyway
     except Exception as e:
         app.logger.error(f"Failed to disconnect camera: {e}")
         return jsonify({"error": str(e)}), 500
 
+    # stop_camera_stream() already stopped grabbing under the lock.
+    # Just close the camera handle and clear globals.
     camera = globals.camera
-    if camera and camera.IsGrabbing():
-        camera.StopGrabbing()
-        app.logger.info(f"Camera grabbing stopped.")
-
     if camera and camera.IsOpen():
         camera.Close()
         app.logger.info(f"Camera closed.")
 
     # Clean up references
     globals.camera = None
-    camera_properties = None  # Make sure camera_properties is in scope
+    globals.camera_properties = {}
+    globals._cached_camera_serial = None
+    globals.latest_image = None
     app.logger.info(f"Camera disconnected successfully.")
 
     return jsonify({"status": "disconnected"}), 200
@@ -556,6 +565,10 @@ def get_camera_status():
     """
     Return {"connected": bool, "streaming": bool} and
     detect if a previously-open camera was physically removed while idle.
+    
+    Uses a cached serial number to avoid expensive EnumerateDevices()
+    calls on every 1-second poll. Only re-enumerates on cache miss or
+    when the camera was previously disconnected.
     """
     camera = getattr(globals, 'camera', None)
     is_streaming = bool(getattr(globals, 'stream_running', False))
@@ -566,48 +579,61 @@ def get_camera_status():
         try:
             is_connected = camera.IsOpen()
         except Exception:
-            # If calling IsOpen raises, treat as disconnected
             is_connected = False
 
-    try:
-        # Enumerate actual devices present now
-        devices = pylon.TlFactory.GetInstance().EnumerateDevices()
-    except Exception:
-        devices = []
-
-    # If we think we're connected, confirm the same device is still present
+    # Only re-enumerate devices when we need to verify physical presence.
+    # Cache the serial number at connect time to avoid expensive USB
+    # enumeration on every poll.
     if is_connected:
+        cached_serial = getattr(globals, '_cached_camera_serial', None)
         try:
             open_serial = camera.GetDeviceInfo().GetSerialNumber()
+            # Cache for future polls
+            globals._cached_camera_serial = open_serial
         except Exception:
             open_serial = None
+            globals._cached_camera_serial = None
 
-        present_serials = []
-        try:
-            for dev in devices:
-                try:
-                    present_serials.append(dev.GetSerialNumber())
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        if not present_serials or (open_serial and open_serial not in present_serials):
-            # Device is gone -> clean up and flip to disconnected
+        # Fast path: serial matches cache → device is still there
+        if cached_serial and open_serial and cached_serial == open_serial:
+            pass  # All good, skip enumeration
+        else:
+            # Slow path: verify via device enumeration (first poll or serial changed)
             try:
-                if is_streaming:
+                devices = pylon.TlFactory.GetInstance().EnumerateDevices()
+            except Exception:
+                devices = []
+
+            present_serials = []
+            try:
+                for dev in devices:
                     try:
-                        camera.StopGrabbing()
+                        present_serials.append(dev.GetSerialNumber())
                     except Exception:
                         pass
-                camera.Close()
             except Exception:
                 pass
 
-            globals.camera = None
-            globals.stream_running = False
-            is_connected = False
-            is_streaming = False
+            if not present_serials or (open_serial and open_serial not in present_serials):
+                # Device is gone → clean up and flip to disconnected
+                try:
+                    if is_streaming:
+                        try:
+                            camera.StopGrabbing()
+                        except Exception:
+                            pass
+                    camera.Close()
+                except Exception:
+                    pass
+
+                globals.camera = None
+                globals.stream_running = False
+                globals._cached_camera_serial = None
+                is_connected = False
+                is_streaming = False
+    else:
+        # Camera not connected → clear cache so next connect re-enumerates
+        globals._cached_camera_serial = None
 
     return jsonify({
         "connected": bool(is_connected),
@@ -764,6 +790,9 @@ def api_load_camera_profile():
                 'popup': True
             }), 400
         
+        # Normalize path for cross-platform consistency
+        pfs_path = _normalize_path(pfs_path)
+
         # Always persist the profile path, even if the camera is not connected yet.
         settings_data = get_settings()
         if 'other_settings' not in settings_data:
@@ -854,6 +883,9 @@ def move_toolhead_relative():
             motioncontrols.move_relative(motion_platform, **move_args)
         except (OSError, PermissionError) as e:
             return _handle_motion_usb_disconnect(motion_platform, "relative move")
+
+        # Update cached position after successful relative move
+        globals.last_toolhead_pos[axis] = clamped
 
         return jsonify({
             'status': 'success',
@@ -1164,6 +1196,9 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     Returns:
         list of saved file paths (original, and optionally masked)
     """
+    # Normalize path for cross-platform consistency
+    target_folder = _normalize_path(target_folder)
+
     # Grab frame from camera
     frame_result = grab_camera_image()
     
@@ -1388,7 +1423,7 @@ def auto_measurement_step():
         x_pos = data.get('x')
         y_pos = data.get('y')
         z_pos = data.get('z', 20.0)
-        measurement_folder = data.get('measurement_folder')
+        measurement_folder = _normalize_path(data.get('measurement_folder', ''))
         measurement_name = data.get('measurement_name')
         
         autofocus_enabled = bool(data.get('autofocus', False))
@@ -2024,7 +2059,7 @@ def grab_camera_image():
 @app.route('/api/save_raw_image', methods=['POST'])
 def save_raw_image_endpoint():
     data = request.get_json() or {}
-    target_folder = data.get('target_folder')
+    target_folder = _normalize_path(data.get('target_folder', ''))
     measurement_name = data.get('measurement_name')
     light_type = data.get('light_type') or 'dome'
 
@@ -2338,14 +2373,15 @@ def update_other_settings():
 
         app.logger.info(f"Updating {category}.{setting_name} = {setting_value}")
 
+        # Normalize path-like settings to use forward slashes
+        updated_value = setting_value
+        if isinstance(setting_value, str) and any(kw in setting_name.lower() for kw in ('path', 'file', 'dir', 'location', 'folder')):
+            updated_value = _normalize_path(setting_value)
+
         # Retrieve the in-memory settings
         settings_data = get_settings()
         if category not in settings_data:
             settings_data[category] = {}
-
-        # For consistency, you could add validation or conversion here if needed.
-        # For now, we'll just pass the new value as is.
-        updated_value = setting_value
 
         # Update the setting in the in-memory dict
         settings_data[category][setting_name] = updated_value
@@ -2459,6 +2495,10 @@ def select_file():
         if not file_path:
             file_path = ""
 
+        # Normalize backslashes to forward slashes for JSON portability
+        if file_path:
+            file_path = file_path.replace('\\', '/')
+
         return jsonify({"file": file_path}), 200
 
     except Exception as e:
@@ -2467,9 +2507,12 @@ def select_file():
 
 @app.route('/api/select-folder', methods=['GET'])
 def select_folder():
-    folder = select_folder_external()  # opens a Tkinter folder dialog
+    folder = select_folder_external()  # opens a Tkinter folder dialog (already normalized)
     if folder is None:
         folder = ""
+    # Safety: re-normalize in case the subprocess returned backslashes
+    if folder:
+        folder = folder.replace('\\', '/')
     return jsonify({"folder": folder})
 
 
@@ -2487,17 +2530,27 @@ def get_base_path():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Results'))
     
 def select_folder_external() -> str:
+    """Open a native folder-selection dialog in a short-lived subprocess.
+    
+    Uses sys.executable so the same Python interpreter (and its installed
+    packages, e.g. tkinter) is used.  The dialog script lives next to this
+    file in the backend/ directory.
+    """
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'select_folder_dialog.py')
     try:
         result = subprocess.run(
-            ['python', 'select_folder_dialog.py'], 
-            capture_output=True, 
+            [sys.executable, script_path],
+            capture_output=True,
             text=True,
             timeout=15  # seconds
         )
         output = json.loads(result.stdout.strip())
-        return output['folder']
+        return output.get('folder', '')
+    except subprocess.TimeoutExpired:
+        app.logger.error("Folder selection subprocess timed out after 15s")
+        return ""
     except Exception as e:
-        print("Folder selection failed:", e)
+        app.logger.error(f"Folder selection failed: {e}")
         return ""
 
 def connect_camera_internal():
@@ -2596,6 +2649,12 @@ def connect_camera_internal():
         settings_data = get_settings()
         apply_camera_settings(globals.camera, camera_properties, settings_data)
         
+        # Cache the serial number for fast status polling (avoids EnumerateDevices)
+        try:
+            globals._cached_camera_serial = globals.camera.GetDeviceInfo().GetSerialNumber()
+        except Exception:
+            globals._cached_camera_serial = None
+
         # Load .pfs camera profile if configured
         pfs_path = settings_data.get('other_settings', {}).get('camera_settings_file', '')
         if pfs_path and os.path.isfile(pfs_path):

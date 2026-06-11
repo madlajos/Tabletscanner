@@ -186,14 +186,19 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
     """
     cam = getattr(globals, "camera", None)
     if not (cam and cam.IsOpen()):
-        app.logger.error("Camera is not open.")
+        app.logger.error("Camera is not open — cannot start stream.")
         return
 
     if not cam.IsGrabbing():
         cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
 
-    app.logger.info("Camera streaming generator started.")
-    globals.stream_running = True
+    # Only start streaming if a previous stop wasn't already signaled.
+    # This prevents a late-starting generator from overwriting a stop request.
+    if not getattr(globals, "stream_running", False):
+        globals.stream_running = True
+        app.logger.info("Camera streaming generator started.")
+    else:
+        app.logger.info("Camera streaming generator started (stream was already running).")
 
     # Ensure a single grab lock exists
     lock = getattr(globals, "grab_lock", None)
@@ -584,24 +589,6 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
     RETRY_DELAY = 0.15  # seconds between retries
 
     try:
-        was_streaming = globals.stream_running
-
-        # Stop streaming if changing critical dimensions
-        if param_name in ['Width', 'Height'] and was_streaming:
-            globals.stream_running = False
-            if camera.IsGrabbing():
-                camera.StopGrabbing()
-                app.logger.info(f"Camera stream stopped to apply {param_name} change.")
-            if globals.stream_thread and globals.stream_thread.is_alive():
-                globals.stream_thread.join(timeout=2)
-                app.logger.info("Camera stream thread joined.")
-            globals.stream_thread = None
-            time.sleep(0.5)
-
-        if not camera.IsOpen():
-            camera.Open()
-            app.logger.info(f"Camera reopened to apply {param_name}.")
-
         # Acquire grab_lock so we don't collide with the video stream's
         # frame grabs – the USB bus can't handle concurrent register
         # writes and frame retrieval, causing TimeoutExceptions.
@@ -611,35 +598,76 @@ def validate_and_set_camera_param(camera, param_name: str, param_value: float, p
             globals.grab_lock = Lock()
             lock = globals.grab_lock
 
-        last_error = None
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                with lock:
-                    _apply_camera_param(camera, param_name, valid_value)
+        # For Width/Height/Offset changes, the camera must not be grabbing
+        # while the register is written.  We must hold the lock across the
+        # entire stop→apply→restart sequence; otherwise the stream generator's
+        # grab_and_convert_frame() can auto-restart grabbing between our
+        # StopGrabbing and the register write, causing a Basler API error.
+        needs_restart = param_name in ('Width', 'Height', 'OffsetX', 'OffsetY')
+
+        if not camera.IsOpen():
+            camera.Open()
+            app.logger.info(f"Camera reopened to apply {param_name}.")
+
+        if needs_restart:
+            # Hold lock for the entire stop→apply→start cycle
+            with lock:
+                was_grabbing = camera.IsGrabbing()
+                if was_grabbing:
+                    camera.StopGrabbing()
+                    app.logger.info(f"Camera grabbing paused to apply {param_name} change.")
+
                 last_error = None
-                break  # success
-            except Exception as e:
-                last_error = e
-                is_timeout = "timeout" in str(e).lower() or "TimeoutException" in type(e).__name__
-                if is_timeout and attempt < MAX_RETRIES:
-                    app.logger.warning(
-                        f"Timeout setting {param_name} (attempt {attempt}/{MAX_RETRIES}), retrying..."
-                    )
-                    time.sleep(RETRY_DELAY)
-                else:
+                for attempt in range(1, MAX_RETRIES + 1):
+                    try:
+                        _apply_camera_param(camera, param_name, valid_value)
+                        last_error = None
+                        break
+                    except Exception as e:
+                        last_error = e
+                        is_timeout = "timeout" in str(e).lower() or "TimeoutException" in type(e).__name__
+                        if is_timeout and attempt < MAX_RETRIES:
+                            app.logger.warning(
+                                f"Timeout setting {param_name} (attempt {attempt}/{MAX_RETRIES}), retrying..."
+                            )
+                            time.sleep(RETRY_DELAY)
+                        else:
+                            break
+
+                if last_error is not None:
+                    raise last_error
+
+                app.logger.info(f"Camera {param_name} successfully set to {valid_value}")
+
+                if was_grabbing:
+                    camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+                    app.logger.info(f"Camera grabbing restarted after {param_name} change.")
+        else:
+            # Non-dimensional params (ExposureTime, Gamma, Gain, FrameRate):
+            # apply under the lock with retries; stream generator is briefly
+            # paused during each attempt but no grab stop/start needed.
+            last_error = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    with lock:
+                        _apply_camera_param(camera, param_name, valid_value)
+                    last_error = None
                     break
+                except Exception as e:
+                    last_error = e
+                    is_timeout = "timeout" in str(e).lower() or "TimeoutException" in type(e).__name__
+                    if is_timeout and attempt < MAX_RETRIES:
+                        app.logger.warning(
+                            f"Timeout setting {param_name} (attempt {attempt}/{MAX_RETRIES}), retrying..."
+                        )
+                        time.sleep(RETRY_DELAY)
+                    else:
+                        break
 
-        if last_error is not None:
-            raise last_error
+            if last_error is not None:
+                raise last_error
 
-        app.logger.info(f"Camera {param_name} successfully set to {valid_value}")
-
-        # Restart streaming if we had to stop it
-        if param_name in ['Width', 'Height'] and was_streaming:
-            globals.stream_running = True
-            globals.stream_thread = threading.Thread(target=stream_video, args=(1.0, 80))
-            globals.stream_thread.start()
-            app.logger.info(f"Camera stream restarted after {param_name} change.")
+            app.logger.info(f"Camera {param_name} successfully set to {valid_value}")
 
     except Exception as e:
         app.logger.error(f"Failed to set {param_name} for Camera: {e}")

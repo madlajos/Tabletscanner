@@ -12,6 +12,23 @@ import { SharedService } from '../../shared.service';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { BASE_URL } from '../../api-config';
 
+// Type declaration for Electron API (exposed via preload.js)
+declare global {
+  interface Window {
+    electronAPI?: {
+      selectFolder: () => Promise<string>;
+      selectFile: () => Promise<string>;
+      saveTssFile: (suggestedName: string, jsonContent: string) => Promise<{ canceled: boolean; fileName?: string }>;
+    };
+  }
+}
+
+/** Normalize a filesystem path to use forward slashes for JSON portability. */
+function normalizePath(p: string): string {
+  if (!p) return p;
+  return p.replace(/\\/g, '/');
+}
+
 // Interface for tablet position calculation
 interface TabletPosition {
   index: number;
@@ -156,7 +173,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       next: (res) => {
         if (res.auto_measurement_settings) {
           const settings = res.auto_measurement_settings;
-          this.saveLocation = settings.save_location || '';
+          this.saveLocation = normalizePath(settings.save_location || '');
           this.firstTabletX = settings.first_tablet_x ?? 2.9;
           this.firstTabletY = settings.first_tablet_y ?? 10.6;
           this.firstTabletZ = settings.first_tablet_z ?? 20.0;
@@ -395,15 +412,34 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   // ===== Folder selection =====
 
-  selectSaveFolder(): void {
+  async selectSaveFolder(): Promise<void> {
     if (this.measurementActive) return;
     
+    // Electron environment: use native dialog via preload API
+    if (window.electronAPI?.selectFolder) {
+      try {
+        const folder = await window.electronAPI.selectFolder();
+        if (folder) {
+          const normalized = normalizePath(folder);
+          this.saveLocation = normalized;
+          this.autoService.updateSettings('save_location', normalized).subscribe({
+            error: (err) => console.warn('Failed to save location setting:', err)
+          });
+        }
+      } catch (e) {
+        console.error('Folder selection error (Electron):', e);
+      }
+      return;
+    }
+
+    // Fallback for dev/browser: call backend to open a Tkinter dialog
     this.autoService.selectFolder().subscribe({
       next: (res) => {
         if (res.folder) {
-          this.saveLocation = res.folder;
+          const normalized = normalizePath(res.folder);
+          this.saveLocation = normalized;
           // Persist to settings
-          this.autoService.updateSettings('save_location', res.folder).subscribe({
+          this.autoService.updateSettings('save_location', normalized).subscribe({
             error: (err) => console.warn('Failed to save location setting:', err)
           });
         }
@@ -583,8 +619,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.currentTabletId = null;
     this.currentTabletIndex = 0;
 
-    // Create measurement folder path
-    this.measurementFolder = `${this.saveLocation}/${this.measurementName.trim()}`;
+    // Create measurement folder path (normalized for cross-platform consistency)
+    const safeLocation = normalizePath(this.saveLocation);
+    const safeName = this.measurementName.trim().replace(/[<>:"|?*\\]/g, '_');
+    this.measurementFolder = `${safeLocation}/${safeName}`;
 
     // Set measurement active (locks UI)
     this.measurementActive = true;

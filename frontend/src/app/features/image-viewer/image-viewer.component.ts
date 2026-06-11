@@ -223,14 +223,17 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
       this.isCaptureCooldown = false;
     }, this.CAPTURE_COOLDOWN_MS);
 
-    const targetDir = (this.sharedService as any).getSaveDirectory
+    const targetDir = ((this.sharedService as any).getSaveDirectory
       ? (this.sharedService as any).getSaveDirectory()
-      : null;
+      : null) || '';
 
     if (!targetDir) {
       console.warn('No save directory set. Cannot capture image.');
       return;
     }
+
+    // Normalize path for cross-platform consistency
+    const normalizedDir = targetDir.replace(/\\/g, '/');
 
     // Fetch current "other_settings" and camera settings from backend so we can embed metadata
     this.http.get<{ other_settings: any }>(`${BASE_URL}/get-other-settings?category=other_settings`)
@@ -257,7 +260,7 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
                   error?: string;
                 }>(
                   `${BASE_URL}/save_raw_image`,
-                  { target_folder: targetDir, metadata, light_type: activeLight }
+                  { target_folder: normalizedDir, metadata, light_type: activeLight }
                 ).subscribe({
                   next: (res) => {
                     if (res?.path) {
@@ -279,7 +282,7 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
                 // Fallback: save with only other_settings
                 this.http.post<{ path?: string; message?: string }>(
                   `${BASE_URL}/save_raw_image`,
-                  { target_folder: targetDir, metadata, light_type: activeLight }
+                  { target_folder: normalizedDir, metadata, light_type: activeLight }
                 ).subscribe({
                   next: (res) => {
                     if (res?.path) {
@@ -295,7 +298,7 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
         error: (err) => {
           console.warn('Could not fetch other_settings; saving without metadata.', err);
           // fallback: save without metadata
-          this.http.post(`${BASE_URL}/save_raw_image`, { target_folder: targetDir, light_type: this.currentLight || 'dome' }).subscribe({
+          this.http.post(`${BASE_URL}/save_raw_image`, { target_folder: normalizedDir, light_type: this.currentLight || 'dome' }).subscribe({
             next: () => console.log('Saved image without metadata'),
             error: (e) => console.error('Failed to save image.', e)
           });

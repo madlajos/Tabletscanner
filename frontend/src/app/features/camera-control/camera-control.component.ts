@@ -22,6 +22,12 @@ declare global {
   }
 }
 
+/** Normalize a filesystem path to use forward slashes for JSON portability. */
+function normalizePath(p: string): string {
+  if (!p) return p;
+  return p.replace(/\\/g, '/');
+}
+
 
 @Component({
   standalone: true,
@@ -150,10 +156,18 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       .subscribe({
         next: res => {
           if (res.other_settings) {
+            // Normalize path fields from settings.json (may contain backslashes)
+            const settings = { ...res.other_settings };
+            if (settings.save_location) {
+              settings.save_location = normalizePath(settings.save_location);
+            }
+            if (settings.camera_settings_file) {
+              settings.camera_settings_file = normalizePath(settings.camera_settings_file);
+            }
             // Merge stored settings into our object
             this.otherSettings = {
               ...this.otherSettings,
-              ...res.other_settings
+              ...settings
             };
             // Apply save location to shared service for consistency
             if (this.otherSettings.save_location) {
@@ -307,7 +321,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     if (window.electronAPI?.selectFile) {
       // Electron environment: use a dialog to pick a .pfs file
       try {
-        const filePath = await window.electronAPI.selectFile();  // hypothetical API
+        const rawPath = await window.electronAPI.selectFile();
+        const filePath = normalizePath(rawPath);
         if (filePath) {
           this.otherSettings.camera_settings_file = filePath;
           this.applyOtherSetting('camera_settings_file');
@@ -321,16 +336,17 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         console.error('File selection error:', e);
       }
     } else {
-      // Fallback: (could implement a backend route similar to select-folder)
+      // Fallback: use backend Tkinter dialog
       this.http.get<{ file: string }>(`${BASE_URL}/select-file`).subscribe({
         next: async resp => {
-          if (resp.file) {
-            this.otherSettings.camera_settings_file = resp.file;
+          const filePath = normalizePath(resp.file);
+          if (filePath) {
+            this.otherSettings.camera_settings_file = filePath;
             this.applyOtherSetting('camera_settings_file');
             this.invalidatePreset();
             // Load the profile onto the camera
             if (this.isConnected) {
-              await this.loadCameraProfile(resp.file);
+              await this.loadCameraProfile(filePath);
             }
           }
         },
@@ -340,10 +356,11 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   async openImageFolderBrowser(): Promise<void> {
-    // Similar to openFolderBrowser, use existing backend dialog to choose folder
+    // Similar to openFolderBrowser, use Electron dialog or backend Tkinter dialog to choose folder
     if (window.electronAPI?.selectFolder) {
       try {
-        const folder = await window.electronAPI.selectFolder();
+        const raw = await window.electronAPI.selectFolder();
+        const folder = normalizePath(raw);
         if (folder) {
           this.otherSettings.save_location = folder;
           this.applyOtherSetting('save_location');
@@ -354,8 +371,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     } else {
       this.http.get<{ folder: string }>(`${BASE_URL}/select-folder`).subscribe({
         next: resp => {
-          if (resp.folder) {
-            this.otherSettings.save_location = resp.folder;
+          const folder = normalizePath(resp.folder);
+          if (folder) {
+            this.otherSettings.save_location = folder;
             this.applyOtherSetting('save_location');
           }
         },
@@ -550,7 +568,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       });
   }
 
-  applySetting(setting: string, persist: boolean = false): void {
+  applySetting(setting: string, persist: boolean = true): void {
     const value = this.cameraSettings[setting];
     console.log(`Applying setting ${setting}: ${value} (persist=${persist})`);
 
@@ -707,7 +725,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // If running in Electron (the preload script exposes an API)
     if (window.electronAPI?.selectFolder) {
       try {
-        const folder = await window.electronAPI.selectFolder();
+        const raw = await window.electronAPI.selectFolder();
+        const folder = normalizePath(raw);
         if (!folder) {
           console.log('User cancelled folder selection');
           return;
@@ -720,8 +739,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       // Fallback for non-Electron: call backend to open a Tkinter dialog
       this.http.get<{ folder: string }>(`${BASE_URL}/select-folder`).subscribe({
         next: resp => {
-          if (resp && resp.folder) {
-            this.updateCsvDirectory(resp.folder);
+          const folder = normalizePath(resp?.folder);
+          if (folder) {
+            this.updateCsvDirectory(folder);
           } else {
             console.log('User cancelled folder selection (Tkinter dialog)');
           }
