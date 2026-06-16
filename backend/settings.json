@@ -1,11 +1,11 @@
 {
     "camera_params_dome": {
-        "ExposureTime": 500.0,
+        "ExposureTime": 30000.0,
         "Gain": 0.0,
         "Gamma": 1.0
     },
     "camera_params_bar": {
-        "ExposureTime": 40000.0,
+        "ExposureTime": 1000000,
         "Gain": 0.0,
         "Gamma": 1.0
     },

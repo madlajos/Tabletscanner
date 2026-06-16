@@ -315,7 +315,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
   checkLampAutoOff(): void {
     this.http
-      .get<{ auto_turned_off: boolean; dome_on: boolean; bar_on: boolean; uv_dome_on: boolean }>(`${BASE_URL}/check-lamp-auto-off`)
+      .get<{ auto_turned_off: boolean; dome_on: boolean; uv_dome_on: boolean }>(`${BASE_URL}/check-lamp-auto-off`)
       .subscribe({
         next: (response) => {
           if (response.auto_turned_off) {
@@ -384,9 +384,9 @@ export class MotionControl implements OnInit, OnDestroy {
     this.lightBusy = true;
     try {
       if (!this.uvDomeLightOn) {
-        // Turning UV dome on (normal power): ensure dome is off first
+        // Turning UV dome on (normal power): ensure visible light is off first
         if (this.ringLightOn) {
-          await this.sendGcode('M106 P0 S255');
+          await this.sendGcode('M106 P0 S0');
           this.ringLightOn = false;
         }
         await this.sendGcode('M106 P3 S50');
@@ -413,9 +413,9 @@ export class MotionControl implements OnInit, OnDestroy {
     if (this.lightBusy) return;
     this.lightBusy = true;
     try {
-      // Turn off dome light first if it's on
+      // Turn off visible light first if it's on
       if (this.ringLightOn) {
-        await this.sendGcode('M106 P0 S255');
+        await this.sendGcode('M106 P0 S0');
         this.ringLightOn = false;
       }
       // Always send high-power command (even if already on at normal power)
@@ -438,22 +438,22 @@ export class MotionControl implements OnInit, OnDestroy {
     this.lightBusy = true;
     try {
       if (!this.ringLightOn) {
-        // Turning dome on: ensure UV dome is off first
+        // Turning visible light on: ensure UV dome is off first
         if (this.uvDomeLightOn) {
           await this.sendGcode('M106 P3 S0');
           this.uvDomeLightOn = false;
         }
-        await this.sendGcode('M106 P0 S0');
+        await this.sendGcode('M106 P0 S255');
         this.ringLightOn = true;
         this.uvDomeLightOn = false;
-        console.log('[MotionControl] Dome light turned ON - setting active light to dome');
+        console.log('[MotionControl] Visible light turned ON - setting active light to dome');
         this.sharedService.setActiveLight('dome');
         this.applyCameraSettingsForLight('dome');
       } else {
-        // Turning dome off
-        await this.sendGcode('M106 P0 S255');
+        // Turning visible light off
+        await this.sendGcode('M106 P0 S0');
         this.ringLightOn = false;
-        console.log('[MotionControl] Dome light turned OFF - setting active light to null');
+        console.log('[MotionControl] Visible light turned OFF - setting active light to null');
         this.sharedService.setActiveLight(null);
       }
     } catch (err) {
@@ -758,7 +758,7 @@ export class MotionControl implements OnInit, OnDestroy {
     // If neither light is on, turn on the dome light before autofocus
     if (!this.ringLightOn && !this.uvDomeLightOn) {
       try {
-        await this.sendGcode('M106 P0 S0');   // dome on
+        await this.sendGcode('M106 P0 S255');   // visible light on
         this.ringLightOn = true;
         this.uvDomeLightOn = false;
         console.log('[MotionControl] Dome light auto-enabled for autofocus');

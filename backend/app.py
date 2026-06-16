@@ -189,10 +189,9 @@ def retry_operation(operation, max_retries=3, wait=1, exceptions=(Exception,)):
 def lamp_timeout_monitor():
     """
     Background thread that checks every second if lamps have exceeded their timeout.
-    - Dome light: 300 s (5 min)
-    - Bar light (legacy): 300 s (5 min)
-    - UV Dome light normal (S50): 30 s
-    - UV Dome light high-power (S255): 5 s
+    - Visible (dome) light: 300 s (5 min)
+    - UV light normal (S50): 30 s
+    - UV light high-power (S255): 5 s
     Automatically turns them off and sets a flag for the frontend to detect.
     """
     DOME_TIMEOUT_SECONDS = 300
@@ -209,50 +208,36 @@ def lamp_timeout_monitor():
             current_time = time.time()
             turned_off_any = False
             
-            # Check dome light
+            # Check visible (dome) light
             if globals.lamp_dome_on_time is not None:
                 elapsed = current_time - globals.lamp_dome_on_time
                 if elapsed >= DOME_TIMEOUT_SECONDS:
-                    app.logger.info(f"Dome light auto-off after {elapsed:.0f}s of inactivity")
+                    app.logger.info(f"Visible light auto-off after {elapsed:.0f}s of inactivity")
                     try:
                         ser = globals.motion_platform
                         if ser and ser.is_open:
-                            porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
+                            porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)  # visible off
                             globals.lamp_dome_on_time = None
                             turned_off_any = True
                     except Exception as e:
-                        app.logger.warning(f"Failed to auto-turn off dome light: {e}")
+                        app.logger.warning(f"Failed to auto-turn off visible light: {e}")
             
-            # Check bar light (legacy)
-            if globals.lamp_bar_on_time is not None:
-                elapsed = current_time - globals.lamp_bar_on_time
-                if elapsed >= DOME_TIMEOUT_SECONDS:
-                    app.logger.info(f"Bar light auto-off after {elapsed:.0f}s of inactivity")
-                    try:
-                        ser = globals.motion_platform
-                        if ser and ser.is_open:
-                            porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)  # bar off
-                            globals.lamp_bar_on_time = None
-                            turned_off_any = True
-                    except Exception as e:
-                        app.logger.warning(f"Failed to auto-turn off bar light: {e}")
-            
-            # Check UV dome light
+            # Check UV light
             if globals.lamp_uv_dome_on_time is not None:
                 elapsed = current_time - globals.lamp_uv_dome_on_time
                 timeout = UV_DOME_HIGH_TIMEOUT if globals.lamp_uv_dome_high_power else UV_DOME_NORMAL_TIMEOUT
                 if elapsed >= timeout:
                     mode = "high-power" if globals.lamp_uv_dome_high_power else "normal"
-                    app.logger.info(f"UV Dome light auto-off after {elapsed:.0f}s ({mode} mode)")
+                    app.logger.info(f"UV light auto-off after {elapsed:.0f}s ({mode} mode)")
                     try:
                         ser = globals.motion_platform
                         if ser and ser.is_open:
-                            porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)  # UV dome off
+                            porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)  # UV off
                             globals.lamp_uv_dome_on_time = None
                             globals.lamp_uv_dome_high_power = False
                             turned_off_any = True
                     except Exception as e:
-                        app.logger.warning(f"Failed to auto-turn off UV dome light: {e}")
+                        app.logger.warning(f"Failed to auto-turn off UV light: {e}")
             
             # Set flag if any lamp was turned off
             if turned_off_any:
@@ -952,10 +937,10 @@ def autofocus_coarse():
                 'popup': True
             }), 503
 
-        # --- Bar/UV-dome-light exposure safeguard ---
-        # When the bar/UV-dome light is active, run an under/over-exposure gate
+        # --- UV-light exposure safeguard ---
+        # When the UV light is active, run an under/over-exposure gate
         # before starting the (blocking) autofocus sweep.
-        if globals.lamp_bar_on_time is not None or globals.lamp_uv_dome_on_time is not None:
+        if globals.lamp_uv_dome_on_time is not None:
             cam = globals.camera
             if cam and cam.IsOpen():
                 from cameracontrol import grab_and_convert_frame
@@ -1010,37 +995,29 @@ def send_gcode():
         
         # Track lamp on/off state for auto-off feature
         cmd_upper = command.strip().upper()
-        if 'M106 P0 S0' in cmd_upper:
-            # Dome light ON (inverted logic: S0 = on)
+        if 'M106 P0 S255' in cmd_upper:
+            # Visible (dome) light ON
             globals.lamp_dome_on_time = time.time()
-            app.logger.debug("Dome light turned ON, timestamp tracked")
-        elif 'M106 P0 S255' in cmd_upper:
-            # Dome light OFF
+            app.logger.debug("Visible light turned ON, timestamp tracked")
+        elif 'M106 P0 S0' in cmd_upper:
+            # Visible (dome) light OFF
             globals.lamp_dome_on_time = None
-            app.logger.debug("Dome light turned OFF, timestamp cleared")
-        elif 'M106 P1 S255' in cmd_upper:
-            # Bar light ON (legacy)
-            globals.lamp_bar_on_time = time.time()
-            app.logger.debug("Bar light turned ON, timestamp tracked")
-        elif 'M106 P1 S0' in cmd_upper:
-            # Bar light OFF (legacy)
-            globals.lamp_bar_on_time = None
-            app.logger.debug("Bar light turned OFF, timestamp cleared")
+            app.logger.debug("Visible light turned OFF, timestamp cleared")
         elif 'M106 P3 S50' in cmd_upper:
-            # UV Dome light ON (normal power, 30 s auto-off)
+            # UV light ON (normal power, 30 s auto-off)
             globals.lamp_uv_dome_on_time = time.time()
             globals.lamp_uv_dome_high_power = False
-            app.logger.debug("UV Dome light turned ON (S50), 30 s auto-off tracked")
+            app.logger.debug("UV light turned ON (S50), 30 s auto-off tracked")
         elif 'M106 P3 S255' in cmd_upper:
-            # UV Dome light ON (high power, 5 s auto-off)
+            # UV light ON (high power, 5 s auto-off)
             globals.lamp_uv_dome_on_time = time.time()
             globals.lamp_uv_dome_high_power = True
-            app.logger.debug("UV Dome light turned ON (S255), 5 s auto-off tracked")
+            app.logger.debug("UV light turned ON (S255), 5 s auto-off tracked")
         elif 'M106 P3 S0' in cmd_upper:
-            # UV Dome light OFF
+            # UV light OFF
             globals.lamp_uv_dome_on_time = None
             globals.lamp_uv_dome_high_power = False
-            app.logger.debug("UV Dome light turned OFF, timestamp cleared")
+            app.logger.debug("UV light turned OFF, timestamp cleared")
         
         return jsonify({'message': 'Command sent'}), 200
     except Exception as e:
@@ -1163,48 +1140,41 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
 
 
 def _turn_on_dome_light():
-    """Turn on dome light (M106 P0 S0) and turn off bar/UV dome lights."""
+    """Turn on visible (dome) light (M106 P0 S255) and turn off UV light."""
     ser = globals.motion_platform
     if ser and ser.is_open:
-        porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)   # bar off (legacy)
-        porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)   # UV dome off
-        porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)   # dome on (S0 = on for this inverted setup)
-        # Track dome light on time for 5-minute auto-off
+        porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)     # UV off
+        porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)   # visible on
+        # Track visible light on time for 5-minute auto-off
         globals.lamp_dome_on_time = time.time()
-        globals.lamp_bar_on_time = None
         globals.lamp_uv_dome_on_time = None
         globals.lamp_uv_dome_high_power = False
 
 def _turn_on_uv_dome_light():
-    """Turn on UV dome light (M106 P3 S50) and turn off dome light (M106 P0 S255)."""
+    """Turn on UV light (M106 P3 S50) and turn off visible light (M106 P0 S0)."""
     ser = globals.motion_platform
     if ser and ser.is_open:
-        porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
-        porthandler.write_and_wait(ser, "M106 P3 S50", timeout=2.0)   # UV dome on (normal power)
-        # Track UV dome light on time for auto-off (30 s normal)
+        porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)    # visible off
+        porthandler.write_and_wait(ser, "M106 P3 S50", timeout=2.0)   # UV on (normal power)
+        # Track UV light on time for auto-off (30 s normal)
         globals.lamp_uv_dome_on_time = time.time()
         globals.lamp_uv_dome_high_power = False
         globals.lamp_dome_on_time = None
 
 def _turn_off_all_lights():
-    """Turn off all lights (dome, bar, UV dome). Silently ignores errors if serial port is disconnected."""
+    """Turn off all lights (visible and UV). Silently ignores errors if serial port is disconnected."""
     ser = globals.motion_platform
     if ser and ser.is_open:
         try:
-            porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)  # dome off
+            porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)    # visible off
         except Exception:
             pass
         try:
-            porthandler.write_and_wait(ser, "M106 P1 S0", timeout=2.0)    # bar off (legacy)
-        except Exception:
-            pass
-        try:
-            porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)    # UV dome off
+            porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)    # UV off
         except Exception:
             pass
     # Clear lamp on times
     globals.lamp_dome_on_time = None
-    globals.lamp_bar_on_time = None
     globals.lamp_uv_dome_on_time = None
     globals.lamp_uv_dome_high_power = False
 
@@ -2496,7 +2466,7 @@ def abort_autofocus():
 
 @app.route('/api/turn-off-all-lights', methods=['POST'])
 def turn_off_all_lights_endpoint():
-    """Turn off all lights (dome and bar) immediately. Used when measurement is stopped."""
+    """Turn off all lights (visible and UV) immediately. Used when measurement is stopped."""
     try:
         _turn_off_all_lights()
         app.logger.info("All lights turned off via endpoint")
@@ -2518,7 +2488,6 @@ def check_lamp_auto_off():
         return jsonify({
             "auto_turned_off": auto_off,
             "dome_on": globals.lamp_dome_on_time is not None,
-            "bar_on": globals.lamp_bar_on_time is not None,
             "uv_dome_on": globals.lamp_uv_dome_on_time is not None
         }), 200
     except Exception as e:

@@ -124,8 +124,8 @@ def connect_to_motion_platform():
 
     # Turn off lights on connect
     try:
-        write(ser, "M106 P0 S255")  # Dome light off
-        write(ser, "M106 P1 S0")    # Bar light off
+        write(ser, "M106 P0 S0")    # Visible light off
+        write(ser, "M106 P3 S0")    # UV light off
     except Exception as e:
         logging.warning(f"Failed to turn off lights on connect: {e}")
 

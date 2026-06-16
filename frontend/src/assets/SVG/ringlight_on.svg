@@ -1,1 +1,78 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24.61 24.61"><defs><style>.cls-1{fill:none;}.cls-2{fill:#ededed;}.cls-2,.cls-3{stroke:#1d1d1b;stroke-miterlimit:10;}.cls-3{fill:#fff;}.cls-4{fill:url(#Névtelen_színátmenet_9);}.cls-5{fill:url(#Névtelen_színátmenet_3);}</style><radialGradient id="Névtelen_színátmenet_9" cx="12.3" cy="12.3" r="4.01" gradientUnits="userSpaceOnUse"><stop offset="0.72" stop-color="#fff"/><stop offset="0.77" stop-color="#fcfcfc" stop-opacity="0.99"/><stop offset="0.8" stop-color="#f1f1f1" stop-opacity="0.95"/><stop offset="0.84" stop-color="#e0e0e0" stop-opacity="0.88"/><stop offset="0.87" stop-color="#c8c8c8" stop-opacity="0.78"/><stop offset="0.9" stop-color="#a8a8a8" stop-opacity="0.66"/><stop offset="0.93" stop-color="#818181" stop-opacity="0.51"/><stop offset="0.96" stop-color="#535353" stop-opacity="0.33"/><stop offset="0.98" stop-color="#202020" stop-opacity="0.12"/><stop offset="1" stop-opacity="0"/></radialGradient><radialGradient id="Névtelen_színátmenet_3" cx="12.3" cy="12.3" r="12.17" gradientUnits="userSpaceOnUse"><stop offset="0.53" stop-color="#fff"/><stop offset="0.6" stop-color="#fcfcfc" stop-opacity="0.99"/><stop offset="0.67" stop-color="#f1f1f1" stop-opacity="0.95"/><stop offset="0.72" stop-color="#e0e0e0" stop-opacity="0.88"/><stop offset="0.78" stop-color="#c8c8c8" stop-opacity="0.78"/><stop offset="0.83" stop-color="#a8a8a8" stop-opacity="0.66"/><stop offset="0.88" stop-color="#818181" stop-opacity="0.51"/><stop offset="0.93" stop-color="#535353" stop-opacity="0.33"/><stop offset="0.97" stop-color="#202020" stop-opacity="0.12"/><stop offset="1" stop-opacity="0"/></radialGradient></defs><g id="Réteg_2" data-name="Réteg 2"><g id="Réteg_1" data-name="Réteg 1"><path class="cls-1" d="M12.3,0A12.31,12.31,0,1,0,24.61,12.3,12.3,12.3,0,0,0,12.3,0Zm0,21.16a8.86,8.86,0,1,1,8.86-8.86A8.86,8.86,0,0,1,12.3,21.16Z"/><path class="cls-2" d="M12.3,3.6A8.7,8.7,0,1,0,21,12.3,8.71,8.71,0,0,0,12.3,3.6Zm0,11.64a2.94,2.94,0,1,1,2.94-2.94A2.94,2.94,0,0,1,12.3,15.24Z"/><path class="cls-3" d="M12.3,3.6A8.7,8.7,0,1,0,21,12.3,8.71,8.71,0,0,0,12.3,3.6Zm0,11.64a2.94,2.94,0,1,1,2.94-2.94A2.94,2.94,0,0,1,12.3,15.24Z"/><path class="cls-4" d="M12.3,8.3a4,4,0,1,0,4,4A4,4,0,0,0,12.3,8.3Zm0,6.89a2.89,2.89,0,1,1,2.89-2.89A2.88,2.88,0,0,1,12.3,15.19Z"/><path class="cls-5" d="M12.3,1.25A11.05,11.05,0,1,0,23.35,12.3,11.05,11.05,0,0,0,12.3,1.25Zm0,19a8,8,0,1,1,8-8A8,8,0,0,1,12.3,20.26Z"/></g></g></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Réteg_1" xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24.6 24.6">
+  <!-- Generator: Adobe Illustrator 30.1.0, SVG Export Plug-In . SVG Version: 2.1.1 Build 136)  -->
+  <defs>
+    <style>
+      .st0 {
+        display: none;
+        font-family: MicrosoftYaHeiUI-Bold, 'Microsoft YaHei UI';
+        font-size: 8px;
+        font-weight: 700;
+        stroke: #000;
+        stroke-width: .5px;
+      }
+
+      .st0, .st1 {
+        fill: #fff;
+      }
+
+      .st0, .st1, .st2 {
+        stroke-miterlimit: 10;
+      }
+
+      .st3 {
+        fill: none;
+      }
+
+      .st4 {
+        fill: url(#Névtelen_színátmenet);
+      }
+
+      .st1, .st2 {
+        stroke: #1d1d1b;
+      }
+
+      .st2 {
+        fill: #ededed;
+      }
+
+      .st5 {
+        fill: url(#Névtelen_színátmenet_2);
+      }
+    </style>
+    <radialGradient id="Névtelen_színátmenet" data-name="Névtelen színátmenet" cx="12.3" cy="11.6" fx="12.3" fy="11.6" r="4" gradientTransform="translate(0 23.9) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".7" stop-color="#fff"/>
+      <stop offset=".8" stop-color="#fcfcfc" stop-opacity="1"/>
+      <stop offset=".8" stop-color="#f1f1f1" stop-opacity=".9"/>
+      <stop offset=".8" stop-color="#e0e0e0" stop-opacity=".9"/>
+      <stop offset=".9" stop-color="#c8c8c8" stop-opacity=".8"/>
+      <stop offset=".9" stop-color="#a8a8a8" stop-opacity=".7"/>
+      <stop offset=".9" stop-color="#818181" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#535353" stop-opacity=".3"/>
+      <stop offset="1" stop-color="#202020" stop-opacity=".1"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="Névtelen_színátmenet_2" data-name="Névtelen színátmenet 2" cx="12.3" cy="11.6" fx="12.3" fy="11.6" r="12.2" gradientTransform="translate(0 23.9) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".5" stop-color="#fff"/>
+      <stop offset=".6" stop-color="#fcfcfc" stop-opacity="1"/>
+      <stop offset=".7" stop-color="#f1f1f1" stop-opacity=".9"/>
+      <stop offset=".7" stop-color="#e0e0e0" stop-opacity=".9"/>
+      <stop offset=".8" stop-color="#c8c8c8" stop-opacity=".8"/>
+      <stop offset=".8" stop-color="#a8a8a8" stop-opacity=".7"/>
+      <stop offset=".9" stop-color="#818181" stop-opacity=".5"/>
+      <stop offset=".9" stop-color="#535353" stop-opacity=".3"/>
+      <stop offset="1" stop-color="#202020" stop-opacity=".1"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="Réteg_2">
+    <g id="Réteg_11" data-name="Réteg_1">
+      <path class="st3" d="M12.3,0C5.5,0,0,5.5,0,12.3s5.5,12.3,12.3,12.3,12.3-5.5,12.3-12.3c0,0,0,0,0,0C24.6,5.5,19.1,0,12.3,0s0,0,0,0ZM12.3,21.2c-4.9,0-8.9-4-8.9-8.9S7.4,3.4,12.3,3.4s8.9,4,8.9,8.9h0c0,4.9-4,8.9-8.9,8.9Z"/>
+      <path class="st2" d="M12.3,3.6C7.5,3.6,3.6,7.5,3.6,12.3s3.9,8.7,8.7,8.7,8.7-3.9,8.7-8.7c0-4.8-3.9-8.7-8.7-8.7ZM12.3,15.2c-1.6,0-2.9-1.3-2.9-2.9s1.3-2.9,2.9-2.9,2.9,1.3,2.9,2.9h0c0,1.6-1.3,2.9-2.9,2.9Z"/>
+      <path class="st1" d="M12.3,3.6C7.5,3.6,3.6,7.5,3.6,12.3s3.9,8.7,8.7,8.7,8.7-3.9,8.7-8.7c0-4.8-3.9-8.7-8.7-8.7ZM12.3,15.2c-1.6,0-2.9-1.3-2.9-2.9s1.3-2.9,2.9-2.9,2.9,1.3,2.9,2.9h0c0,1.6-1.3,2.9-2.9,2.9Z"/>
+      <path class="st4" d="M12.3,8.3c-2.2,0-4,1.8-4,4s1.8,4,4,4,4-1.8,4-4h0c0-2.2-1.8-4-4-4ZM12.3,15.2c-1.6,0-2.9-1.3-2.9-2.9,0-1.6,1.3-2.9,2.9-2.9,1.6,0,2.9,1.3,2.9,2.9,0,1.6-1.3,2.9-2.9,2.9,0,0,0,0,0,0Z"/>
+      <path class="st5" d="M12.3,1.3C6.2,1.3,1.3,6.2,1.3,12.3s4.9,11.1,11.1,11.1,11.1-4.9,11.1-11.1S18.4,1.2,12.3,1.2h0ZM12.3,20.3c-4.4,0-8-3.6-8-8s3.6-8,8-8,8,3.6,8,8h0c0,4.4-3.6,8-8,8,0,0,0,0,0,0h0Z"/>
+    </g>
+  </g>
+  <text class="st0" transform="translate(11.6 7.9)"><tspan x="0" y="0">VIS</tspan></text>
+</svg>
