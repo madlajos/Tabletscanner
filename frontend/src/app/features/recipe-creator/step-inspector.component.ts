@@ -150,12 +150,69 @@ interface NodeHelpContent {
                 </svg>
               </button>
             </div>
+            <div class="param-row roi-crop-row">
+              <label class="param-label" [attr.for]="'param-output_mode'">Kivágás</label>
+              <div class="param-control">
+                <label class="toggle-wrap">
+                  <input
+                    type="checkbox"
+                    id="param-output_mode"
+                    [checked]="getParamValue('output_mode') === 'crop'"
+                    (change)="onParamChange('output_mode', $any($event.target).checked ? 'crop' : 'mask')"
+                  />
+                  <span class="toggle-label">{{ getParamValue('output_mode') === 'crop' ? 'Be' : 'Ki' }}</span>
+                </label>
+              </div>
+            </div>
+            <div class="param-row roi-crop-row">
+              <label class="param-label" [attr.for]="'param-shape_only'">Csak körvonal</label>
+              <div class="param-control">
+                <label class="toggle-wrap">
+                  <input
+                    type="checkbox"
+                    id="param-shape_only"
+                    [checked]="!!getParamValue('shape_only')"
+                    (change)="onParamChange('shape_only', $any($event.target).checked)"
+                  />
+                  <span class="toggle-label">{{ getParamValue('shape_only') ? 'Be' : 'Ki' }}</span>
+                </label>
+              </div>
+            </div>
+            @if (getParamValue('shape_only')) {
+              <div class="param-row roi-crop-row">
+                <label class="param-label" [attr.for]="'param-shape_outline_color'">Körvonal színe</label>
+                <div class="param-control">
+                  <select
+                    id="param-shape_outline_color"
+                    [ngModel]="getParamValue('shape_outline_color')"
+                    (ngModelChange)="onParamChange('shape_outline_color', $event)"
+                  >
+                    <option value="fekete">Fekete</option>
+                    <option value="fehér">Fehér</option>
+                  </select>
+                </div>
+              </div>
+              <div class="param-row roi-crop-row">
+                <label class="param-label" [attr.for]="'param-shape_outline_thickness'">Körvonal vastagsága</label>
+                <div class="param-control">
+                  <input
+                    type="number"
+                    id="param-shape_outline_thickness"
+                    [min]="1"
+                    [max]="100"
+                    [step]="1"
+                    [ngModel]="getParamValue('shape_outline_thickness')"
+                    (ngModelChange)="onNumericTextChange(getParamByName('shape_outline_thickness')!, $event)"
+                  />
+                </div>
+              </div>
+            }
             @if (isRoiEmpty()) {
               <div class="roi-empty-warning">⚠ Nincs kijelölt ROI terület</div>
             }
           }
           @for (param of getVisibleParams(); track param.name) {
-            @if (param.name !== 'file_order' && param.name !== 'group_colors' && !shouldHideParam(param)) {
+                @if (param.name !== 'file_order' && param.name !== 'group_colors' && param.name !== 'output_mode' && param.name !== 'shape_only' && param.name !== 'shape_outline_color' && param.name !== 'shape_outline_thickness' && !shouldHideParam(param)) {
             <div class="param-row">
               <label class="param-label" [attr.for]="'param-' + param.name">
                 {{ getDisplayParamLabel(param) }}
@@ -237,6 +294,8 @@ interface NodeHelpContent {
                       <input
                         type="number"
                         class="slider-number"
+                        [min]="getSliderMin(param)"
+                        [max]="getSliderMax(param)"
                         [ngModel]="getParamValue(param.name)"
                         (ngModelChange)="onNumericTextChange(param, $event)"
                       />
@@ -260,6 +319,8 @@ interface NodeHelpContent {
                     <input
                       type="number"
                       class="slider-number"
+                      [min]="getSliderMin(param)"
+                      [max]="getSliderMax(param)"
                       [step]="param.step ?? 0.01"
                       [ngModel]="getParamValue(param.name)"
                       (ngModelChange)="onNumericTextChange(param, $event)"
@@ -363,7 +424,7 @@ interface NodeHelpContent {
                         type="text"
                         [id]="'param-' + param.name"
                         [ngModel]="getParamValue(param.name)"
-                        (ngModelChange)="onParamChange(param.name, $event)"
+                        (change)="onParamChange(param.name, $any($event.target).value)"
                         placeholder="Pl. y = 1.2x + 3.4"
                       />
                       <button class="browse-btn" (click)="openCalibrationBrowser()" title="Kalibráció kiválasztása">
@@ -376,7 +437,7 @@ interface NodeHelpContent {
                         type="text"
                         [id]="'param-' + param.name"
                         [ngModel]="getParamValue(param.name)"
-                        (ngModelChange)="onParamChange(param.name, $event)"
+                        (change)="onParamChange(param.name, $any($event.target).value)"
                       />
                       @if (isReferenceValuesParam(param.name)) {
                         <button class="browse-btn" (click)="importReferenceValuesFromFile()" title="CSV/TXT import"><mat-icon>upload_file</mat-icon></button>
@@ -390,7 +451,7 @@ interface NodeHelpContent {
                       type="text"
                       [id]="'param-' + param.name"
                       [ngModel]="getParamValue(param.name)"
-                      (ngModelChange)="onParamChange(param.name, $event)"
+                      (change)="onParamChange(param.name, $any($event.target).value)"
                       placeholder="Fájl elérési útja..."
                     />
                     <button class="browse-btn" (click)="browseFile(param.name)" title="Fájl tallózása"><mat-icon>image</mat-icon></button>
@@ -896,6 +957,192 @@ interface NodeHelpContent {
                     </div>
                   }
                 }
+              }
+
+              @if ((step?.step_def_id === 'gray_map' || step?.step_def_id === 'rgb_cls_reference_mapping') && getGrayMapDisplayOptions().length > 0) {
+                <div class="gray-map-panel">
+                  <div class="gray-map-toolbar">
+                    <div class="gray-map-toolbar-row">
+                      <span class="gray-map-toolbar-label">Megjelenítés</span>
+                      <select
+                        class="gray-map-select"
+                        [ngModel]="selectedGrayMapKey"
+                        (ngModelChange)="onGrayMapSelectionChange($event)"
+                      >
+                        @for (option of getGrayMapDisplayOptions(); track option.key) {
+                          <option [value]="option.key">{{ option.label }}</option>
+                        }
+                      </select>
+                    </div>
+                    @if (isJetSoftKey(selectedGrayMapKey)) {
+                      <div class="jet-colorbar-wrap">
+                        <div class="jet-colorbar-bar"></div>
+                        <div class="jet-colorbar-ticks">
+                          <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+                        </div>
+                      </div>
+                    }
+                    @if (getGrayMapSummary()) {
+                      <div class="gray-map-summary">{{ getGrayMapSummary() }}</div>
+                    }
+                  </div>
+
+                  <div class="gray-map-grid">
+                    @for (item of getGrayMapImageItems(); track item.key) {
+                      <div
+                        class="gray-map-card"
+                        [class.selected]="selectedGrayMapKey === item.familyKey && selectedGrayMapComponentIndex === (item.componentIndex ?? 0)"
+                        (click)="showGrayMapInPreview(item.familyKey, item.componentIndex ?? 0)"
+                      >
+                        <div class="gray-map-title">
+                          {{ item.label }}
+                          @if (item.componentCount) {
+                            <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
+                          }
+                        </div>
+                        <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
+                      </div>
+                    }
+                  </div>
+                </div>
+              }
+
+              @if (step?.step_def_id === 'dual_map' && hasDualMapData()) {
+                <div class="dual-map-panel">
+                  <!-- Gray side -->
+                  <div class="dual-map-section">
+                    <div class="dual-map-section-title">Szürke oldal</div>
+                    <div class="gray-map-toolbar">
+                      <div class="gray-map-toolbar-row">
+                        <span class="gray-map-toolbar-label">Megjelenítés</span>
+                        <select
+                          class="gray-map-select"
+                          [ngModel]="selectedDualMapGrayKey"
+                          (ngModelChange)="onDualMapGrayKeyChange($event)"
+                        >
+                          @for (option of getDualMapGrayOptions(); track option.key) {
+                            <option [value]="option.key">{{ option.label }}</option>
+                          }
+                        </select>
+                      </div>
+                      @if (isJetSoftKey(selectedDualMapGrayKey)) {
+                        <div class="jet-colorbar-wrap">
+                          <div class="jet-colorbar-bar"></div>
+                          <div class="jet-colorbar-ticks">
+                            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+                          </div>
+                        </div>
+                      }
+                    </div>
+                    <div class="gray-map-grid">
+                      @for (item of getDualMapGrayItems(); track item.key) {
+                        <div
+                          class="gray-map-card"
+                          [class.selected]="selectedDualMapGrayKey === item.familyKey && selectedDualMapGrayCompIdx === (item.componentIndex ?? 0)"
+                          (click)="showDualMapInPreview('gray', item.familyKey, item.componentIndex ?? 0)"
+                        >
+                          <div class="gray-map-title">
+                            {{ item.label }}
+                            @if (item.componentCount) {
+                              <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
+                            }
+                          </div>
+                          <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
+                        </div>
+                      }
+                    </div>
+                  </div>
+
+                  <!-- RGB side -->
+                  <div class="dual-map-section">
+                    <div class="dual-map-section-title">RGB oldal</div>
+                    <div class="gray-map-toolbar">
+                      <div class="gray-map-toolbar-row">
+                        <span class="gray-map-toolbar-label">Megjelenítés</span>
+                        <select
+                          class="gray-map-select"
+                          [ngModel]="selectedDualMapRgbKey"
+                          (ngModelChange)="onDualMapRgbKeyChange($event)"
+                        >
+                          @for (option of getDualMapRgbOptions(); track option.key) {
+                            <option [value]="option.key">{{ option.label }}</option>
+                          }
+                        </select>
+                      </div>
+                      @if (isJetSoftKey(selectedDualMapRgbKey)) {
+                        <div class="jet-colorbar-wrap">
+                          <div class="jet-colorbar-bar"></div>
+                          <div class="jet-colorbar-ticks">
+                            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+                          </div>
+                        </div>
+                      }
+                    </div>
+                    <div class="gray-map-grid">
+                      @for (item of getDualMapRgbItems(); track item.key) {
+                        <div
+                          class="gray-map-card"
+                          [class.selected]="selectedDualMapRgbKey === item.familyKey && selectedDualMapRgbCompIdx === (item.componentIndex ?? 0)"
+                          (click)="showDualMapInPreview('rgb', item.familyKey, item.componentIndex ?? 0)"
+                        >
+                          <div class="gray-map-title">
+                            {{ item.label }}
+                            @if (item.componentCount) {
+                              <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
+                            }
+                          </div>
+                          <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
+                        </div>
+                      }
+                    </div>
+                  </div>
+
+                  <!-- Sub-classification section (visible only when sub params produce output) -->
+                  @if (hasDualMapSubData()) {
+                    <div class="dual-map-section dual-map-section--sub">
+                      <div class="dual-map-section-title">Aláosztályozás</div>
+                      <div class="gray-map-toolbar">
+                        <div class="gray-map-toolbar-row">
+                          <span class="gray-map-toolbar-label">Megjelenítés</span>
+                          <select
+                            class="gray-map-select"
+                            [ngModel]="selectedDualMapSubKey"
+                            (ngModelChange)="onDualMapSubKeyChange($event)"
+                          >
+                            @for (option of getDualMapSubOptions(); track option.key) {
+                              <option [value]="option.key">{{ option.label }}</option>
+                            }
+                          </select>
+                        </div>
+                        @if (isJetSoftKey(selectedDualMapSubKey)) {
+                          <div class="jet-colorbar-wrap">
+                            <div class="jet-colorbar-bar"></div>
+                            <div class="jet-colorbar-ticks">
+                              <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+                            </div>
+                          </div>
+                        }
+                      </div>
+                      <div class="gray-map-grid">
+                        @for (item of getDualMapSubItems(); track item.key) {
+                          <div
+                            class="gray-map-card"
+                            [class.selected]="selectedDualMapSubKey === item.familyKey && selectedDualMapSubCompIdx === (item.componentIndex ?? 0)"
+                            (click)="showDualMapInPreview('sub', item.familyKey, item.componentIndex ?? 0)"
+                          >
+                            <div class="gray-map-title">
+                              {{ item.label }}
+                              @if (item.componentCount) {
+                                <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
+                              }
+                            </div>
+                            <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
+                          </div>
+                        }
+                      </div>
+                    </div>
+                  }
+                </div>
               }
           </div>
         }
@@ -1622,6 +1869,164 @@ interface NodeHelpContent {
     .stat-label { color: #888; }
     .stat-value { color: #e0e0e0; font-variant-numeric: tabular-nums; }
 
+    .gray-map-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .gray-map-toolbar {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .gray-map-toolbar-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .gray-map-toolbar-label {
+      font-size: 11px;
+      color: #9ba6b2;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .gray-map-select {
+      min-width: 220px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      border: 1px solid #3a414b;
+      background: #14161a;
+      color: #e0e0e0;
+      font-size: 12px;
+    }
+
+    .gray-map-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+
+    .gray-map-card {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px;
+      background: #1d1f22;
+      border: 1px solid #333842;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .gray-map-card:hover {
+      border-color: #556170;
+      transform: translateY(-1px);
+    }
+
+    .gray-map-card.selected {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25) inset;
+    }
+
+    .gray-map-title {
+      font-size: 11px;
+      color: #9ba6b2;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .gray-map-count {
+      margin-left: 6px;
+      color: #6f8aa6;
+      font-weight: 500;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .gray-map-image {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 4px;
+      background: #0f1114;
+      image-rendering: pixelated;
+    }
+
+    .gray-map-summary {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #aab3be;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .jet-colorbar-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 4px;
+    }
+
+    .jet-colorbar-bar {
+      width: 100%;
+      height: 13px;
+      border-radius: 4px;
+      border: 1px solid #2a2e36;
+      background: linear-gradient(
+        to right,
+        #000080 0%,
+        #0000ff 12%,
+        #00ffff 37%,
+        #00ff00 50%,
+        #ffff00 62%,
+        #ff8000 75%,
+        #ff0000 88%,
+        #800000 100%
+      );
+    }
+
+    .jet-colorbar-ticks {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: #7a8590;
+      font-variant-numeric: tabular-nums;
+      padding: 0 1px;
+    }
+
+    .dual-map-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .dual-map-section {
+      border: 1px solid #2c3440;
+      border-radius: 8px;
+      padding: 10px 10px 8px 10px;
+      background: #15181c;
+    }
+
+    .dual-map-section--sub {
+      border-color: #3a4a2a;
+      background: #141a12;
+    }
+
+    .dual-map-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: #8fa8c8;
+      margin-bottom: 8px;
+    }
+
     .file-path-control { display: flex; gap: 4px; align-items: center; }
     .chart-with-maximize { position: relative; }
 
@@ -2000,6 +2405,18 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   private selectedIndex = -1;
   private subs: Subscription[] = [];
   private nodeDescriptions: Record<string, NodeHelpContent> = {};
+  selectedGrayMapKey = 'soft_membership_jet';
+  selectedGrayMapComponentIndex = 0;
+  private grayMapSelectionInitialized = false;
+
+  // dual_map state
+  selectedDualMapGrayKey = 'soft_membership_jet';
+  selectedDualMapGrayCompIdx = 0;
+  selectedDualMapRgbKey = 'rgb_soft_membership_jet';
+  selectedDualMapRgbCompIdx = 0;
+  selectedDualMapSubKey = 'sub_soft_membership_jet';
+  selectedDualMapSubCompIdx = 0;
+  private dualMapInitialized = false;
 
   constructor(
     private pipelineState: PipelineStateService,
@@ -2107,6 +2524,17 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
         } else {
           this.referenceGroups = [];
         }
+
+        if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') {
+          this.grayMapSelectionInitialized = false;
+        }
+
+        if (this.step?.step_def_id !== 'dual_map') {
+          this.dualMapInitialized = false;
+        }
+
+        this.syncGrayMapPreview();
+        this.syncDualMapPreview();
       }),
       this.pipelineState.omittedPoints$.subscribe(({ indices, imageNames }) => {
         this.currentOmittedIndices = new Set(indices);
@@ -2179,7 +2607,8 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   onNumericTextChange(param: ParamSchema, value: any): void {
     if (this.isPreviewMode) return;
     if (value === null || value === undefined || value === '') return;
-    const num = param.type === 'int' ? parseInt(String(value), 10) : parseFloat(String(value));
+    const normalized = String(value).trim().replace(',', '.');
+    const num = param.type === 'int' ? parseInt(normalized, 10) : parseFloat(normalized);
     if (Number.isNaN(num)) return;
     this.onParamChange(param.name, num);
   }
@@ -2292,7 +2721,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
   isRoiEmpty(): boolean {
     if (!this.isRoiStep()) return false;
-    const t = this.getParamValue('roi_type') ?? 'rect';
+    const t = this.normalizeRoiType(this.getParamValue('roi_type'));
     if (t === 'rect') {
       return !(this.getParamValue('roi_width') > 0 && this.getParamValue('roi_height') > 0);
     }
@@ -2333,6 +2762,12 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     'filter_concave',
   ]);
 
+  private normalizeRoiType(value: any): 'rect' | 'ellipse' | 'polygon' {
+    if (value === 'circle') return 'ellipse';
+    if (value === 'ellipse' || value === 'polygon' || value === 'rect') return value;
+    return 'rect';
+  }
+
   private isReferenceSliderParam(paramName: string): boolean {
     return this.REFERENCE_GENERATOR_PARAMS.has(paramName);
   }
@@ -2345,9 +2780,16 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       return params.filter(p => !this.REFERENCE_GENERATOR_PARAMS.has(p.name));
     }
     if (this.step?.step_def_id === 'mask_rect_roi') {
-      const roiType = this.getParamValue('roi_type') ?? 'rect';
+      const roiType = this.normalizeRoiType(this.getParamValue('roi_type'));
+      const applyMask = this.getParamValue('apply_mask') ?? true;
+      const shapeOnly = this.getParamValue('shape_only') ?? false;
       return params.filter(p => {
         if (p.name === 'roi_type') return false; // shown as shape buttons
+        if (p.name === 'roi_overrides') return false; // managed automatically
+        if (p.name === 'shape_outline_color' || p.name === 'shape_outline_thickness') return false;
+        if (shapeOnly && (p.name === 'apply_mask' || p.name === 'background_color' || p.name === 'invert_mask')) return false;
+        if (!applyMask && (p.name === 'background_color' || p.name === 'invert_mask')) return false;
+        // roi_angle is now supported for all ROI types including polygon
         if (roiType === 'rect') return !this.ROI_ELLIPSE_PARAMS.has(p.name) && !this.ROI_POLYGON_PARAMS.has(p.name);
         if (roiType === 'ellipse') return !this.ROI_RECT_PARAMS.has(p.name) && !this.ROI_POLYGON_PARAMS.has(p.name);
         if (roiType === 'polygon') return !this.ROI_RECT_PARAMS.has(p.name) && !this.ROI_ELLIPSE_PARAMS.has(p.name);
@@ -2580,6 +3022,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (id === 'save_images') return true;
     if (id === 'save_array') return true;
     if (id === 'predict_node') return (this.getPredictions()?.length ?? 0) > 0;
+    if (id === 'gray_map' || id === 'rgb_cls_reference_mapping') return this.getGrayMapDisplayOptions().length > 0;
     return false;
   }
 
@@ -2626,7 +3069,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     const s = stats[idx];
     if (!s || typeof s !== 'object') return [];
     const values = s as Record<string, any>;
-    const entries: { key: string; label: string; value: string }[] = [];
+
     const baseOrder = ['min', 'max', 'mean', 'median', 'std', 'pixel_count'];
     const baseLabels: Record<string, string> = {
       min: 'Min',
@@ -2638,50 +3081,55 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       dynamic_range: 'Dinamikus tart.',
     };
 
-    for (const key of baseOrder) {
-      const v = values[key];
-      if (v == null) continue;
-      entries.push({
-        key,
-        label: baseLabels[key] ?? key,
-        value: key === 'pixel_count' ? String(v) : Number(v).toFixed(2),
+    const buildEntriesFromStat = (
+      stat: Record<string, any>,
+      prefix: string,
+      labelPrefix: string,
+    ): { key: string; label: string; value: string }[] => {
+      const result: { key: string; label: string; value: string }[] = [];
+      for (const key of baseOrder) {
+        const v = stat[key];
+        if (v == null) continue;
+        result.push({
+          key: prefix + key,
+          label: labelPrefix + (baseLabels[key] ?? key),
+          value: key === 'pixel_count' ? String(v) : Number(v).toFixed(2),
+        });
+      }
+      const percentileKeys = Object.keys(stat)
+        .filter((k) => /^p\d+(?:\.\d+)?$/i.test(k) && stat[k] != null)
+        .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+      for (const key of percentileKeys) {
+        result.push({ key: prefix + key, label: labelPrefix + key.toUpperCase(), value: Number(stat[key]).toFixed(2) });
+      }
+      if (stat['dynamic_range'] != null) {
+        result.push({ key: prefix + 'dynamic_range', label: labelPrefix + baseLabels['dynamic_range'], value: Number(stat['dynamic_range']).toFixed(2) });
+      }
+      const known = new Set([...baseOrder, ...percentileKeys, 'dynamic_range']);
+      for (const key of Object.keys(stat).filter((k) => !known.has(k) && typeof stat[k] === 'number').sort()) {
+        result.push({ key: prefix + key, label: labelPrefix + key.replace(/_/g, ' '), value: Number(stat[key]).toFixed(2) });
+      }
+      return result;
+    };
+
+    // RGB: stat has a "channels" array
+    if (Array.isArray(values['channels'])) {
+      const channelCount: number = values['channel_count'] ?? values['channels'].length;
+      const channelNames: string[] =
+        channelCount === 3 ? ['B', 'G', 'R'] :
+        channelCount === 4 ? ['B', 'G', 'R', 'A'] :
+        (values['channels'] as any[]).map((_, i) => `Ch${i}`);
+      const entries: { key: string; label: string; value: string }[] = [];
+      (values['channels'] as any[]).forEach((chStat, i) => {
+        if (!chStat || typeof chStat !== 'object') return;
+        const name = channelNames[i] ?? `Ch${i}`;
+        entries.push(...buildEntriesFromStat(chStat as Record<string, any>, `ch${i}_`, `${name} – `));
       });
+      return entries;
     }
 
-    const percentileKeys = Object.keys(values)
-      .filter((k) => /^p\d+(?:\.\d+)?$/i.test(k) && values[k] != null)
-      .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
-
-    for (const key of percentileKeys) {
-      entries.push({
-        key,
-        label: key.toUpperCase(),
-        value: Number(values[key]).toFixed(2),
-      });
-    }
-
-    if (values['dynamic_range'] != null) {
-      entries.push({
-        key: 'dynamic_range',
-        label: baseLabels['dynamic_range'],
-        value: Number(values['dynamic_range']).toFixed(2),
-      });
-    }
-
-    const known = new Set([...baseOrder, ...percentileKeys, 'dynamic_range']);
-    const otherNumeric = Object.keys(values)
-      .filter((k) => !known.has(k) && typeof values[k] === 'number')
-      .sort();
-
-    for (const key of otherNumeric) {
-      entries.push({
-        key,
-        label: key.replace(/_/g, ' '),
-        value: Number(values[key]).toFixed(2),
-      });
-    }
-
-    return entries;
+    // Grayscale: flat stat object
+    return buildEntriesFromStat(values, '', '');
   }
 
   getLatestCurveFit(): CurveFitData | null {
@@ -2732,6 +3180,503 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return preds;
   }
 
+  isJetSoftKey(key: string): boolean {
+    return key.includes('soft_membership_jet');
+  }
+
+  getGrayMapDisplayOptions(): Array<{ key: string; label: string }> {
+    if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') return [];
+
+    const previewIndex = Math.max(0, this.previewImageIndex || 0);
+    const options: Array<{ key: string; label: string }> = [];
+
+    if (this.getGrayMapSoftMembershipItems(previewIndex).length > 0) {
+      options.push({ key: 'soft_membership_jet', label: 'Soft membership' });
+    }
+
+    if (this.getGrayMapComponentItems('component_map_jet_base64', 'component_map_jet', 'Komponens térkép JET', previewIndex).length > 0) {
+      options.push({ key: 'component_map_jet', label: 'Komponens térkép JET' });
+    }
+
+    if (this.getGrayMapComponentItems('hard_jet_base64', 'hard_jet', 'Hard térkép JET', previewIndex).length > 0) {
+      options.push({ key: 'hard_jet', label: 'Hard térkép JET' });
+    }
+
+    if (this.getGrayMapBase64Item('component_map_base64', previewIndex)) {
+      options.push({ key: 'component_map_legacy', label: 'Komponens térkép' });
+    }
+
+    if (this.getGrayMapBase64Item('hard_composite_rgb_base64', previewIndex)) {
+      options.push({ key: 'hard_composite_rgb_legacy', label: 'Hard kompozit' });
+    }
+
+    if (this.getGrayMapBase64Item('soft_membership_base64', previewIndex)) {
+      options.push({ key: 'soft_membership_legacy', label: 'Soft membership' });
+    }
+
+    return options;
+  }
+
+  getGrayMapImageItems(): Array<{ key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string }> {
+    if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') return [];
+
+    const familyKey = this.getGrayMapResolvedFamilyKey();
+    const previewIndex = Math.max(0, this.previewImageIndex || 0);
+
+    if (familyKey === 'soft_membership_jet') {
+      return this.getGrayMapSoftMembershipItems(previewIndex);
+    }
+
+    if (familyKey === 'soft_membership_legacy') {
+      const src = this.getGrayMapBase64Item('soft_membership_base64', previewIndex);
+      return src ? [{ key: `soft_membership_legacy:${previewIndex}`, familyKey: 'soft_membership_legacy', label: 'Soft membership', src }] : [];
+    }
+
+    if (familyKey === 'component_map_legacy') {
+      const src = this.getGrayMapBase64Item('component_map_base64', previewIndex);
+      return src ? [{ key: `component_map_legacy:${previewIndex}`, familyKey: 'component_map_legacy', label: 'Komponens térkép', src }] : [];
+    }
+
+    if (familyKey === 'hard_composite_rgb_legacy') {
+      const src = this.getGrayMapBase64Item('hard_composite_rgb_base64', previewIndex);
+      return src ? [{ key: `hard_composite_rgb_legacy:${previewIndex}`, familyKey: 'hard_composite_rgb_legacy', label: 'Hard kompozit', src }] : [];
+    }
+
+    if (familyKey === 'component_map_jet') {
+      return this.getGrayMapComponentItems('component_map_jet_base64', 'component_map_jet', 'Komponens térkép JET', previewIndex);
+    }
+
+    if (familyKey === 'hard_jet') {
+      return this.getGrayMapComponentItems('hard_jet_base64', 'hard_jet', 'Hard térkép JET', previewIndex);
+    }
+
+    return [];
+  }
+
+  onGrayMapSelectionChange(key: string): void {
+    this.grayMapSelectionInitialized = true;
+    this.showGrayMapInPreview(key, 0);
+  }
+
+  showGrayMapInPreview(key: string, componentIndex: number = 0): void {
+    if (this.isPreviewMode) return;
+
+    const item = this.getGrayMapPreviewItem(key, componentIndex);
+    if (!item) return;
+
+    this.selectedGrayMapKey = item.familyKey;
+    this.selectedGrayMapComponentIndex = item.componentIndex ?? 0;
+    this.pipelineState.setPreviewImageOverride(item.src, false);
+  }
+
+  private getGrayMapResolvedFamilyKey(): string {
+    const options = this.getGrayMapDisplayOptions();
+    if (!options.length) return '';
+
+    const selected = options.find((option) => option.key === this.selectedGrayMapKey);
+    if (selected) return selected.key;
+
+    return options[0].key;
+  }
+
+  private getGrayMapComponentItems<T extends 'component_map_jet' | 'hard_jet' | 'soft_membership_jet'>(
+    sourceKey: 'component_map_jet_base64' | 'hard_jet_base64' | 'soft_membership_jet_base64' | 'soft_membership_base64',
+    familyKey: T,
+    label: string,
+    imageIndex: number,
+  ): Array<{ key: string; familyKey: T; componentIndex: number; componentCount: number; label: string; src: string }> {
+    const source = this.sideOutputs[sourceKey];
+    if (!Array.isArray(source) || source.length === 0) return [];
+
+    const idx = Math.max(0, Math.min(imageIndex, source.length - 1));
+    const imageComponents = source[idx];
+    const componentStrings = Array.isArray(imageComponents)
+      ? imageComponents
+      : (typeof imageComponents === 'string' && imageComponents.trim() ? [imageComponents] : []);
+
+    if (componentStrings.length === 0) return [];
+
+    return componentStrings
+      .map((item, componentIndex) => {
+        if (typeof item !== 'string' || !item.trim()) return null;
+        return {
+          key: `${familyKey}:${idx}:${componentIndex}`,
+          familyKey,
+          componentIndex,
+          componentCount: componentStrings.length,
+          label: `${label} - komponens ${componentIndex + 1}`,
+          src: `data:image/jpeg;base64,${item}`,
+        };
+      })
+      .filter((item): item is {
+        key: string;
+        familyKey: T;
+        componentIndex: number;
+        componentCount: number;
+        label: string;
+        src: string;
+      } => item !== null);
+  }
+
+  private getGrayMapSoftMembershipItems(imageIndex: number): Array<{ key: string; familyKey: 'soft_membership_jet'; componentIndex: number; componentCount: number; label: string; src: string }> {
+    const sourceKey = this.sideOutputs['soft_membership_jet_base64'] ? 'soft_membership_jet_base64' : 'soft_membership_base64';
+    return this.getGrayMapComponentItems(sourceKey, 'soft_membership_jet', 'Komponens', imageIndex);
+  }
+
+  private getGrayMapPreviewItem(
+    key: string,
+    componentIndex: number,
+  ): { key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string } | null {
+    const familyKey: 'soft_membership_jet' | 'soft_membership_legacy' | 'component_map_legacy' | 'hard_composite_rgb_legacy' | 'component_map_jet' | 'hard_jet' =
+      key === 'soft_membership_jet' || key === 'component_map_jet' || key === 'hard_jet' ||
+      key === 'soft_membership_legacy' || key === 'component_map_legacy' || key === 'hard_composite_rgb_legacy'
+        ? key
+        : (this.getGrayMapResolvedFamilyKey() as 'soft_membership_jet' | 'soft_membership_legacy' | 'component_map_legacy' | 'hard_composite_rgb_legacy' | 'component_map_jet' | 'hard_jet');
+
+    if (familyKey === 'soft_membership_jet') {
+      const items = this.getGrayMapSoftMembershipItems(Math.max(0, this.previewImageIndex || 0));
+      if (!items.length) return null;
+      const idx = Math.max(0, Math.min(componentIndex, items.length - 1));
+      return items[idx] ?? null;
+    }
+
+    if (familyKey === 'soft_membership_legacy') {
+      const src = this.getGrayMapBase64Item('soft_membership_base64', Math.max(0, this.previewImageIndex || 0));
+      return src ? {
+        key: `soft_membership_legacy:${this.previewImageIndex || 0}`,
+        familyKey,
+        label: 'Soft membership',
+        src,
+      } : null;
+    }
+
+    if (familyKey === 'component_map_legacy') {
+      const src = this.getGrayMapBase64Item('component_map_base64', Math.max(0, this.previewImageIndex || 0));
+      return src ? {
+        key: `component_map_legacy:${this.previewImageIndex || 0}`,
+        familyKey,
+        label: 'Komponens térkép',
+        src,
+      } : null;
+    }
+
+    if (familyKey === 'hard_composite_rgb_legacy') {
+      const src = this.getGrayMapBase64Item('hard_composite_rgb_base64', Math.max(0, this.previewImageIndex || 0));
+      return src ? {
+        key: `hard_composite_rgb_legacy:${this.previewImageIndex || 0}`,
+        familyKey,
+        label: 'Hard kompozit',
+        src,
+      } : null;
+    }
+
+    const items = this.getGrayMapComponentItems(
+      familyKey === 'component_map_jet' ? 'component_map_jet_base64' : 'hard_jet_base64',
+      familyKey as 'component_map_jet' | 'hard_jet',
+      familyKey === 'component_map_jet' ? 'Komponens térkép JET' : 'Hard térkép JET',
+      Math.max(0, this.previewImageIndex || 0),
+    );
+
+    if (!items.length) return null;
+    const idx = Math.max(0, Math.min(componentIndex, items.length - 1));
+    return items[idx] ?? null;
+  }
+
+  private syncGrayMapPreview(): void {
+    if (this.isPreviewMode) return;
+    if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') return;
+
+    const options = this.getGrayMapDisplayOptions();
+    if (!options.length) return;
+
+    if (!this.grayMapSelectionInitialized) {
+      const preferred = options.find((option) => option.key === 'soft_membership_jet') ?? options[0];
+      this.selectedGrayMapKey = preferred.key;
+      this.selectedGrayMapComponentIndex = 0;
+      this.grayMapSelectionInitialized = true;
+    }
+
+    const item = this.getGrayMapPreviewItem(this.selectedGrayMapKey, this.selectedGrayMapComponentIndex);
+    if (!item) return;
+
+    this.selectedGrayMapKey = item.familyKey;
+    this.selectedGrayMapComponentIndex = item.componentIndex ?? 0;
+    this.pipelineState.setPreviewImageOverride(item.src, false);
+  }
+
+  getGrayMapSummary(): string {
+    if (this.step?.step_def_id !== 'gray_map') return '';
+
+    const circleInfo = this.sideOutputs['circle_info'];
+    const previewIndex = Math.max(0, this.previewImageIndex || 0);
+    if (!Array.isArray(circleInfo) || !circleInfo[previewIndex]) return '';
+
+    const info = circleInfo[previewIndex];
+    const cx = Number(info?.cx_px);
+    const cy = Number(info?.cy_px);
+    const radius = Number(info?.r_px);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius)) return '';
+
+    return `Körközép: (${cx.toFixed(1)}, ${cy.toFixed(1)}), sugár: ${radius.toFixed(1)} px`;
+  }
+
+  private getGrayMapBase64Item(
+    key: 'hard_composite_rgb_base64' | 'component_map_base64' | 'soft_membership_base64' | 'hard_jet_base64' | 'component_map_jet_base64',
+    imageIndex: number,
+  ): string | null {
+    const source = this.sideOutputs[key];
+    if (!Array.isArray(source) || source.length === 0) return null;
+
+    const idx = Math.max(0, Math.min(imageIndex, source.length - 1));
+    const item = source[idx];
+    if (typeof item === 'string' && item.trim()) {
+      return `data:image/jpeg;base64,${item}`;
+    }
+
+    if (Array.isArray(item)) {
+      const first = item.find((value) => typeof value === 'string' && value.trim());
+      return typeof first === 'string' && first.trim() ? `data:image/jpeg;base64,${first}` : null;
+    }
+
+    return null;
+  }
+
+  // ── dual_map helpers ──────────────────────────────────────────────────────
+
+  getDualMapGrayOptions(): Array<{ key: string; label: string }> {
+    const so = this.sideOutputs;
+    const imgIdx = Math.max(0, this.previewImageIndex || 0);
+    const opts: Array<{ key: string; label: string }> = [];
+    if (this._dualMapKeyHasData(so, 'soft_membership_jet_base64', imgIdx))  opts.push({ key: 'soft_membership_jet',  label: 'Soft membership JET' });
+    if (this._dualMapKeyHasData(so, 'component_map_jet_base64', imgIdx))    opts.push({ key: 'component_map_jet',    label: 'Komponens térkép JET' });
+    if (this._dualMapKeyHasData(so, 'hard_jet_base64', imgIdx))             opts.push({ key: 'hard_jet',             label: 'Hard térkép JET' });
+    if (this._dualMapKeyHasData(so, 'hard_composite_rgb_base64', imgIdx))   opts.push({ key: 'hard_composite_rgb',   label: 'Hard kompozit' });
+    return opts;
+  }
+
+  getDualMapRgbOptions(): Array<{ key: string; label: string }> {
+    const so = this.sideOutputs;
+    const imgIdx = Math.max(0, this.previewImageIndex || 0);
+    const opts: Array<{ key: string; label: string }> = [];
+    if (this._dualMapKeyHasData(so, 'rgb_soft_membership_jet_base64', imgIdx))  opts.push({ key: 'rgb_soft_membership_jet',  label: 'RGB Soft membership JET' });
+    if (this._dualMapKeyHasData(so, 'rgb_component_map_jet_base64', imgIdx))    opts.push({ key: 'rgb_component_map_jet',    label: 'RGB Komponens térkép JET' });
+    if (this._dualMapKeyHasData(so, 'rgb_hard_jet_base64', imgIdx))             opts.push({ key: 'rgb_hard_jet',             label: 'RGB Hard térkép JET' });
+    if (this._dualMapKeyHasData(so, 'rgb_hard_composite_rgb_base64', imgIdx))   opts.push({ key: 'rgb_hard_composite_rgb',   label: 'RGB Hard kompozit' });
+    return opts;
+  }
+
+  private _dualMapKeyHasData(so: Record<string, any>, b64Key: string, imgIdx: number): boolean {
+    const source = so[b64Key];
+    if (!Array.isArray(source) || source.length === 0) return false;
+    // Clamp: dual_map produces 1 entry per pair, not 1 per loaded image
+    const idx = Math.max(0, Math.min(imgIdx, source.length - 1));
+    const item = source[idx];
+    if (item === null || item === undefined) return false;
+    if (Array.isArray(item)) return item.some((x: unknown) => typeof x === 'string' && x.length > 0);
+    return typeof item === 'string' && item.length > 0;
+  }
+
+  hasDualMapData(): boolean {
+    // Check history first (most reliable indicator that dual_map actually ran)
+    const history: string[] = this.sideOutputs['history'] ?? [];
+    if (history.includes('dual_map_node')) return true;
+    // Fallback: check for any output key from either side
+    return !!(
+      this.sideOutputs['soft_membership_jet_base64'] ||
+      this.sideOutputs['rgb_soft_membership_jet_base64'] ||
+      this.sideOutputs['hard_composite_rgb_base64'] ||
+      this.sideOutputs['gray_source_images_base64']
+    );
+  }
+
+  getDualMapGrayItems(): Array<{ key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string }> {
+    if (this.step?.step_def_id !== 'dual_map') return [];
+    const imgIdx = Math.max(0, this.previewImageIndex || 0);
+    return this._getDualMapItems(this.selectedDualMapGrayKey, imgIdx, 'gray');
+  }
+
+  getDualMapRgbItems(): Array<{ key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string }> {
+    if (this.step?.step_def_id !== 'dual_map') return [];
+    const imgIdx = Math.max(0, this.previewImageIndex || 0);
+    return this._getDualMapItems(this.selectedDualMapRgbKey, imgIdx, 'rgb');
+  }
+
+  private _getDualMapItems(
+    familyKey: string,
+    imgIdx: number,
+    side: 'gray' | 'rgb',
+  ): Array<{ key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string }> {
+    // Map familyKey → base64 output key
+    const b64Key = `${familyKey}_base64`;
+    const source = this.sideOutputs[b64Key];
+    if (!Array.isArray(source) || source.length === 0) return [];
+
+    const idx = Math.max(0, Math.min(imgIdx, source.length - 1));
+    const item = source[idx];
+
+    // Per-component array (jet maps)
+    if (Array.isArray(item)) {
+      return item
+        .map((comp: unknown, ci: number) => {
+          if (typeof comp !== 'string' || !comp.trim()) return null;
+          return {
+            key: `${familyKey}:${idx}:${ci}`,
+            familyKey,
+            componentIndex: ci,
+            componentCount: item.length,
+            label: `${side === 'gray' ? 'Komponens' : 'RGB Komponens'} ${ci + 1}`,
+            src: `data:image/jpeg;base64,${comp}`,
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+    }
+
+    // Single image
+    if (typeof item === 'string' && item.trim()) {
+      return [{ key: `${familyKey}:${idx}`, familyKey, label: familyKey, src: `data:image/jpeg;base64,${item}` }];
+    }
+    return [];
+  }
+
+  onDualMapGrayKeyChange(key: string): void {
+    this.selectedDualMapGrayKey = key;
+    this.selectedDualMapGrayCompIdx = 0;
+    this._pushDualMapPreview();
+  }
+
+  onDualMapRgbKeyChange(key: string): void {
+    this.selectedDualMapRgbKey = key;
+    this.selectedDualMapRgbCompIdx = 0;
+    this._pushDualMapPreview();
+  }
+
+  onDualMapSubKeyChange(key: string): void {
+    this.selectedDualMapSubKey = key;
+    this.selectedDualMapSubCompIdx = 0;
+    this._pushDualMapPreview();
+  }
+
+  showDualMapInPreview(side: 'gray' | 'rgb' | 'sub', familyKey: string, compIdx: number): void {
+    if (this.isPreviewMode) return;
+    if (side === 'gray') {
+      this.selectedDualMapGrayKey = familyKey;
+      this.selectedDualMapGrayCompIdx = compIdx;
+    } else if (side === 'rgb') {
+      this.selectedDualMapRgbKey = familyKey;
+      this.selectedDualMapRgbCompIdx = compIdx;
+    } else {
+      this.selectedDualMapSubKey = familyKey;
+      this.selectedDualMapSubCompIdx = compIdx;
+    }
+    this._pushDualMapPreview();
+  }
+
+  getDualMapSubOptions(): Array<{ key: string; label: string }> {
+    const so = this.sideOutputs;
+    const imgIdx = Math.max(0, this.previewImageIndex || 0);
+    const opts: Array<{ key: string; label: string }> = [];
+    if (this._dualMapKeyHasData(so, 'sub_soft_membership_jet_base64', imgIdx))
+      opts.push({ key: 'sub_soft_membership_jet',  label: 'Sub Soft membership JET' });
+    if (this._dualMapKeyHasData(so, 'sub_component_map_jet_base64', imgIdx))
+      opts.push({ key: 'sub_component_map_jet',    label: 'Sub Komponens térkép JET' });
+    if (this._dualMapKeyHasData(so, 'sub_hard_jet_base64', imgIdx))
+      opts.push({ key: 'sub_hard_jet',             label: 'Sub Hard térkép JET' });
+    if (this._dualMapKeyHasData(so, 'sub_hard_composite_rgb_base64', imgIdx))
+      opts.push({ key: 'sub_hard_composite_rgb',   label: 'Sub Hard kompozit' });
+    if (this._dualMapKeyHasData(so, 'sub_rgb_soft_membership_jet_base64', imgIdx))
+      opts.push({ key: 'sub_rgb_soft_membership_jet',  label: 'Sub RGB Soft membership JET' });
+    if (this._dualMapKeyHasData(so, 'sub_rgb_component_map_jet_base64', imgIdx))
+      opts.push({ key: 'sub_rgb_component_map_jet',    label: 'Sub RGB Komponens térkép JET' });
+    if (this._dualMapKeyHasData(so, 'sub_rgb_hard_jet_base64', imgIdx))
+      opts.push({ key: 'sub_rgb_hard_jet',             label: 'Sub RGB Hard térkép JET' });
+    if (this._dualMapKeyHasData(so, 'sub_rgb_hard_composite_rgb_base64', imgIdx))
+      opts.push({ key: 'sub_rgb_hard_composite_rgb',   label: 'Sub RGB Hard kompozit' });
+    return opts;
+  }
+
+  hasDualMapSubData(): boolean {
+    return this.getDualMapSubOptions().length > 0;
+  }
+
+  getDualMapSubItems(): Array<{ key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string }> {
+    if (this.step?.step_def_id !== 'dual_map') return [];
+    const imgIdx = Math.max(0, this.previewImageIndex || 0);
+    const side = this.selectedDualMapSubKey.startsWith('sub_rgb_') ? 'rgb' : 'gray';
+    return this._getDualMapItems(this.selectedDualMapSubKey, imgIdx, side as 'gray' | 'rgb');
+  }
+
+  private _getDualMapSourceImage(sourceKey: string, imgIdx: number): string | null {
+    const source = this.sideOutputs[sourceKey];
+    if (!Array.isArray(source) || source.length === 0) return null;
+    const idx = Math.max(0, Math.min(imgIdx, source.length - 1));
+    const item = source[idx];
+    if (typeof item === 'string' && item.trim()) return `data:image/jpeg;base64,${item}`;
+    return null;
+  }
+
+  private _getDualMapOverlay(familyKey: string, compIdx: number, imgIdx: number): string | null {
+    const items = this._getDualMapItems(familyKey, imgIdx, familyKey.startsWith('rgb_') ? 'rgb' : 'gray');
+    if (!items.length) return null;
+    const ci = Math.max(0, Math.min(compIdx, items.length - 1));
+    return items[ci]?.src ?? null;
+  }
+
+  private _pushDualMapPreview(): void {
+    if (this.isPreviewMode) return;
+    const imgIdx = Math.max(0, this.previewImageIndex || 0);
+
+    const grayBase = this._getDualMapSourceImage('gray_source_images_base64', imgIdx);
+    const rgbBase  = this._getDualMapSourceImage('rgb_source_images_base64', imgIdx);
+
+    const grayItems = this._getDualMapItems(this.selectedDualMapGrayKey, imgIdx, 'gray');
+    const rgbItems  = this._getDualMapItems(this.selectedDualMapRgbKey,  imgIdx, 'rgb');
+    const grayOverlays = grayItems.map(it => it.src);
+    const rgbOverlays  = rgbItems.map(it => it.src);
+
+    // Sub overlays
+    let subBase: string | null = null;
+    let subOverlays: string[] = [];
+    let subLabel = 'Aláosztályozás';
+    const subOpts = this.getDualMapSubOptions();
+    if (subOpts.length > 0) {
+      const isSub = subOpts.some(o => o.key === this.selectedDualMapSubKey);
+      const subKey = isSub ? this.selectedDualMapSubKey : subOpts[0].key;
+      if (!isSub) this.selectedDualMapSubKey = subKey;
+      const subSide = subKey.startsWith('sub_rgb_') ? 'rgb' : 'gray';
+      subBase = subSide === 'rgb'
+        ? this._getDualMapSourceImage('rgb_source_images_base64', imgIdx)
+        : this._getDualMapSourceImage('gray_source_images_base64', imgIdx);
+      const subItems = this._getDualMapItems(subKey, imgIdx, subSide as 'gray' | 'rgb');
+      subOverlays = subItems.map(it => it.src);
+      subLabel = subSide === 'rgb' ? 'Sub RGB' : 'Sub szürke';
+    }
+
+    this.pipelineState.setDualMapPreview({ grayBase, grayOverlays, rgbBase, rgbOverlays, subBase, subOverlays, subLabel });
+  }
+
+  private syncDualMapPreview(): void {
+    if (this.isPreviewMode) return;
+    if (this.step?.step_def_id !== 'dual_map') return;
+    if (!this.hasDualMapData()) return;
+
+    if (!this.dualMapInitialized) {
+      const grayOpts = this.getDualMapGrayOptions();
+      const rgbOpts  = this.getDualMapRgbOptions();
+      const subOpts  = this.getDualMapSubOptions();
+      this.selectedDualMapGrayKey = grayOpts.length ? grayOpts[0].key : 'soft_membership_jet';
+      this.selectedDualMapRgbKey  = rgbOpts.length  ? rgbOpts[0].key  : 'rgb_soft_membership_jet';
+      this.selectedDualMapSubKey  = subOpts.length  ? subOpts[0].key  : 'sub_soft_membership_jet';
+      this.selectedDualMapGrayCompIdx = 0;
+      this.selectedDualMapRgbCompIdx  = 0;
+      this.selectedDualMapSubCompIdx  = 0;
+      this.dualMapInitialized = true;
+    }
+
+    this._pushDualMapPreview();
+  }
+
+  // ── end dual_map helpers ───────────────────────────────────────────────────
+
   savePipelineImages(): void {
     if (this.isPreviewMode) return;
     if (!this.step || this.step.step_def_id !== 'save_images') return;
@@ -2743,9 +3688,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     }
 
     const pipeline = this.pipelineState.getPipeline();
+    const scaleBarOverlay = this.pipelineState.getScaleBarExportParams();
     this.saveImagesInProgress = true;
 
-    this.recipeService.savePipelineImages(pipeline, this.selectedIndex).subscribe({
+    this.recipeService.savePipelineImages(pipeline, this.selectedIndex, scaleBarOverlay).subscribe({
       next: (res) => {
         this.saveImagesInProgress = false;
         this.saveImagesResultText = `${res.saved_count} kép mentve`;
@@ -3326,8 +4272,19 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
   maximizeChart(data: any): void {
     if (this.isPreviewMode) return;
-    const omitted = this.pipelineState.getOmittedPoints();
-    this.pipelineState.requestMaximizeGraph(data, omitted.indices, this.selectedIndex);
+    // Determine chart type and send to pipeline preview
+    if (data.x_values && data.y_values) {
+      // Scatter chart (curve fit data)
+      this.pipelineState.showExpandedChart(data, 'scatter', 'Görbe illesztés');
+    } else if (data.scores) {
+      // PCA chart
+      this.pipelineState.showExpandedChart(data, 'pca', 'PCA Vizualizáció');
+    }
+  }
+
+  closeExpandedChart(): void {
+    // Expanded chart state is managed by pipeline-preview via PipelineStateService
+    // Nothing to do here
   }
 
   // --- Run curve fit manually ---

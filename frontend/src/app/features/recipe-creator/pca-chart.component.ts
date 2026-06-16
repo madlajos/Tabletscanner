@@ -37,24 +37,18 @@ export interface PCAData {
           </div>
         </div>
         <div class="chart-section">
-          <canvas #canvas class="pca-canvas"></canvas>
+          <canvas #canvas [width]="canvasWidth" [height]="canvasHeight"></canvas>
         </div>
-        <div class="pca-stats">
-          <div class="stat-item">
-            <span class="stat-label">PC{{ pcX + 1 }} variancia:</span>
-            <span class="stat-value">{{ (data.explained_ratio[pcX] * 100).toFixed(1) }}%</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">PC{{ pcY + 1 }} variancia:</span>
-            <span class="stat-value">{{ (data.explained_ratio[pcY] * 100).toFixed(1) }}%</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Kumulatív (PC{{ pcX + 1 }}+PC{{ pcY + 1 }}):</span>
-            <span class="stat-value">{{ ((data.cumulative_ratio[pcX] + (data.cumulative_ratio[pcY] - (pcX > 0 ? data.cumulative_ratio[pcX - 1] : 0))) * 100).toFixed(1) }}%</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Minták száma:</span>
-            <span class="stat-value">{{ data.scores.length }}</span>
+        <div class="pca-info">
+          <div class="pca-stats-row">
+            <span class="pca-stat-label">PC{{ pcX + 1 }}:</span>
+            <span class="pca-stat-value">{{ (data.explained_ratio[pcX] * 100).toFixed(1) }}%</span>
+            <span class="pca-stat-label">PC{{ pcY + 1 }}:</span>
+            <span class="pca-stat-value">{{ (data.explained_ratio[pcY] * 100).toFixed(1) }}%</span>
+            <span class="pca-stat-label">Kumulatív:</span>
+            <span class="pca-stat-value">{{ ((data.cumulative_ratio[pcX] + (data.cumulative_ratio[pcY] - (pcX > 0 ? data.cumulative_ratio[pcX - 1] : 0))) * 100).toFixed(1) }}%</span>
+            <span class="pca-stat-label">n:</span>
+            <span class="pca-stat-value">{{ data.scores.length }}</span>
           </div>
         </div>
       } @else {
@@ -66,17 +60,15 @@ export interface PCAData {
     .pca-chart-container {
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      padding: 12px;
-      background: #f5f5f5;
-      border-radius: 8px;
+      gap: 8px;
+      width: 100%;
     }
 
     .controls-section {
       display: flex;
       gap: 16px;
       padding: 8px 12px;
-      background: white;
+      background: #2a2a2a;
       border-radius: 4px;
       align-items: center;
     }
@@ -84,82 +76,81 @@ export interface PCAData {
     .control-group {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
 
     .control-group label {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
-      color: #333;
-      min-width: 60px;
+      color: #888;
+      min-width: 50px;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
 
     .control-group select {
-      padding: 6px 8px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 12px;
-      background: white;
+      padding: 4px 6px;
+      border: 1px solid #444;
+      border-radius: 3px;
+      font-size: 11px;
+      background: #1e1e1e;
+      color: #bbb;
       cursor: pointer;
     }
 
     .control-group select:focus {
       outline: none;
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+      border-color: #6b8fad;
     }
 
     .chart-section {
       position: relative;
       width: 100%;
-      height: 400px;
-      background: white;
-      border-radius: 6px;
-      border: 1px solid #ddd;
+      height: 250px;
+      background: #1e1e1e;
+      border-radius: 4px;
       overflow: hidden;
     }
 
-    .pca-canvas {
+    canvas {
       width: 100%;
       height: 100%;
       display: block;
     }
 
-    .pca-stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 12px;
-      padding: 8px;
-    }
-
-    .stat-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 8px 12px;
-      background: white;
+    .pca-info {
+      margin-top: 4px;
+      padding: 6px 8px;
+      background: #1e1e1e;
       border-radius: 4px;
-      border-left: 3px solid #6b8fad;
+      font-size: 10px;
+      font-family: monospace;
     }
 
-    .stat-label {
-      font-size: 12px;
-      color: #666;
+    .pca-stats-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .pca-stat-label {
+      color: #7f8792;
+      font-weight: 600;
+    }
+
+    .pca-stat-value {
+      color: #d2d9e3;
       font-weight: 500;
     }
 
-    .stat-value {
-      font-size: 14px;
-      font-weight: bold;
-      color: #333;
-    }
-
     .no-data {
-      padding: 40px;
+      padding: 40px 20px;
       text-align: center;
-      color: #999;
-      background: white;
+      color: #666;
+      background: #1e1e1e;
       border-radius: 4px;
+      font-size: 12px;
     }
   `],
 })
@@ -170,6 +161,8 @@ export class PCAChartComponent implements OnChanges, AfterViewInit {
 
   pcX = 0;
   pcY = 1;
+  canvasWidth = 400;
+  canvasHeight = 350;
 
   getComponentOptions(): number[] {
     if (!this.data || !this.data.scores[0]) return [];
@@ -205,12 +198,6 @@ export class PCAChartComponent implements OnChanges, AfterViewInit {
     const ctx = canvas.getContext('2d');
     if (!ctx || !this.data) return;
 
-    const rect = canvas.parentElement?.getBoundingClientRect();
-    if (!rect) return;
-
-    canvas.width = rect.width;
-    canvas.height = rect.height;
-
     this.drawChart(ctx, canvas);
   }
 
@@ -219,86 +206,80 @@ export class PCAChartComponent implements OnChanges, AfterViewInit {
       return;
     }
 
-    const width = canvas.width;
-    const height = canvas.height;
-    const padding = 50;
+    const w = canvas.width;
+    const h = canvas.height;
+    const pad = { top: 12, right: 12, bottom: 26, left: 48 };
+    const plotW = w - pad.left - pad.right;
+    const plotH = h - pad.top - pad.bottom;
 
-    // Clear canvas
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, width, height);
+    // Clear and fill background
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#1e1e1e';
+    ctx.fillRect(0, 0, w, h);
 
-    // Extract selected PC scores
+    // Extract scores
     const pc_x_scores = this.data.scores.map(row => row[this.pcX] ?? 0);
     const pc_y_scores = this.data.scores.map(row => row[this.pcY] ?? 0);
 
     // Calculate bounds
-    const min_x = Math.min(...pc_x_scores);
-    const max_x = Math.max(...pc_x_scores);
-    const min_y = Math.min(...pc_y_scores);
-    const max_y = Math.max(...pc_y_scores);
+    const xMin = Math.min(...pc_x_scores);
+    const xMax = Math.max(...pc_x_scores);
+    const yMin = Math.min(...pc_y_scores);
+    const yMax = Math.max(...pc_y_scores);
+    const xRange = xMax - xMin || 1;
+    const yRange = yMax - yMin || 1;
+    const xPad = xRange * 0.05;
+    const yPad = yRange * 0.05;
 
-    const range_x = max_x - min_x || 1;
-    const range_y = max_y - min_y || 1;
+    const toX = (v: number) => pad.left + ((v - xMin + xPad) / (xRange + 2 * xPad)) * plotW;
+    const toY = (v: number) => pad.top + plotH - ((v - yMin + yPad) / (yRange + 2 * yPad)) * plotH;
 
-    const margin_x = range_x * 0.1;
-    const margin_y = range_y * 0.1;
-
-    const chart_width = width - 2 * padding;
-    const chart_height = height - 2 * padding;
-
-    // Draw grid
-    ctx.strokeStyle = '#e0e0e0';
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 5; i++) {
-      const x = padding + (i / 5) * chart_width;
-      const y = padding + (i / 5) * chart_height;
+    // Grid
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + (plotH / 4) * i;
       ctx.beginPath();
-      ctx.moveTo(x, padding);
-      ctx.lineTo(x, height - padding);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(padding, y);
-      ctx.lineTo(width - padding, y);
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + plotW, y);
       ctx.stroke();
     }
 
-    // Draw axes
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
+    // Axes
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(padding, height - padding);
-    ctx.lineTo(width - padding, height - padding);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(padding, padding);
-    ctx.lineTo(padding, height - padding);
+    ctx.moveTo(pad.left, pad.top);
+    ctx.lineTo(pad.left, pad.top + plotH);
+    ctx.lineTo(pad.left + plotW, pad.top + plotH);
     ctx.stroke();
 
-    // Draw axis labels
-    ctx.fillStyle = '#333';
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-
-    const pc_x_var = (this.data.explained_ratio[this.pcX] * 100).toFixed(1);
-    ctx.fillText(`PC${this.pcX + 1} (${pc_x_var}%)`, width / 2, height - 20);
-
-    ctx.save();
-    ctx.translate(20, height / 2);
-    ctx.rotate(-Math.PI / 2);
-    const pc_y_var = (this.data.explained_ratio[this.pcY] * 100).toFixed(1);
-    ctx.fillText(`PC${this.pcY + 1} (${pc_y_var}%)`, 0, 0);
-    ctx.restore();
-
-    // Draw data points
+    // Data points (dots)
     ctx.fillStyle = '#6b8fad';
     for (let i = 0; i < this.data.scores.length; i++) {
-      const x = padding + ((pc_x_scores[i] - min_x + margin_x) / (range_x + 2 * margin_x)) * chart_width;
-      const y = height - padding - ((pc_y_scores[i] - min_y + margin_y) / (range_y + 2 * margin_y)) * chart_height;
-
+      const px = toX(pc_x_scores[i]);
+      const py = toY(pc_y_scores[i]);
       ctx.beginPath();
-      ctx.arc(x, y, 3.5, 0, 2 * Math.PI);
+      ctx.arc(px, py, 3.5, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    // Axis labels
+    ctx.fillStyle = '#777';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    const xLabels = 5;
+    for (let i = 0; i <= xLabels; i++) {
+      const val = xMin + (xRange / xLabels) * i;
+      const x = toX(val);
+      ctx.fillText(val.toFixed(1), x, pad.top + plotH + 14);
+    }
+
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const val = yMax - ((yMax - yMin) / 4) * i;
+      const y = pad.top + (plotH / 4) * i;
+      ctx.fillText(val.toFixed(1), pad.left - 4, y + 3);
     }
   }
 }

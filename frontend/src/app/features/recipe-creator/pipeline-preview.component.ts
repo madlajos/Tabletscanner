@@ -5,11 +5,36 @@ import { Subscription, combineLatest } from 'rxjs';
 import { DataType } from '../../models/pipeline.models';
 import { PipelineStateService } from '../../services/pipeline-state.service';
 import { RecipeService } from '../../services/recipe.service';
+import { ScatterChartComponent } from './scatter-chart.component';
+import { PCAChartComponent } from './pca-chart.component';
+
+interface ScaleBarOverlayState {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  barStartX: number;
+  barEndX: number;
+  barY: number;
+  labelX: number;
+  labelY: number;
+  label: string;
+  fontFamily: string;
+  fontSize: number;
+  barThickness: number;
+  fontThickness: number;
+  padding: number;
+  textGap: number;
+  backgroundOpacity: number;
+  backgroundColor: string;
+  textColor: string;
+  barColor: string;
+}
 
 @Component({
   selector: 'app-pipeline-preview',
   standalone: true,
-  imports: [CommonModule, FormsModule, DecimalPipe],
+  imports: [CommonModule, FormsModule, DecimalPipe, ScatterChartComponent, PCAChartComponent],
   template: `
     <div class="preview-wrapper" #previewContainer
          (wheel)="onWheel($event)"
@@ -29,8 +54,8 @@ import { RecipeService } from '../../services/recipe.service';
                     (click)="toggleRuler()" title="Vonalz\u00f3 (t\u00e1vols\u00e1gm\u00e9r\u00e9s)">
               \uD83D\uDCCF
             </button>
-            <button class="tool-btn icon-tool-btn" [class.active]="scaleActive"
-                    (click)="toggleScale()" title="Sk\u00e1la eszk\u00f6z">
+                <button class="tool-btn icon-tool-btn" [class.active]="scaleActive"
+                  (click)="toggleScale()" [disabled]="showScaleBar" title="Sk\u00e1la eszk\u00f6z">
               \uD83D\uDCD0
             </button>
             <button class="tool-btn icon-btn icon-tool-btn" (click)="saveAnnotatedImage()" title="K\u00e9p ment\u00e9se"
@@ -46,44 +71,78 @@ import { RecipeService } from '../../services/recipe.service';
             <span class="pixel-color-space">{{ pixelColorSpace }}</span>
             <div class="pixel-values-display">
               @for (val of pixelGridValues; track $index) {
-                <span class="pixel-value-item">{{ val }}</span>
+                }
+              </div>
+              <button class="tool-btn icon-btn" (click)="copyPixelValues()"
+                      title="Értékek másolása" [disabled]="!pixelCurrentPos && !pixelFrozenPos">
+                ⎘
+              </button>
+            }
+            @if (rulerActive) {
+              @for (i of rulerSlots; track i) {
+                <input type="text" class="ruler-measurement-box" readonly
+                       [value]="getRulerMeasurement(i)"
+                       [class.used]="i < rulerLines.length || (i === rulerLines.length && rulerDrawingStart)">
               }
-            </div>
-            <button class="tool-btn icon-btn" (click)="copyPixelValues()"
-                    title="Értékek másolása" [disabled]="!pixelCurrentPos && !pixelFrozenPos">
-              \u2398
-            </button>
-          }
-          @if (rulerActive) {
-            @for (i of rulerSlots; track i) {
-              <input type="text" class="ruler-measurement-box" readonly
-                     [value]="getRulerMeasurement(i)"
-                     [class.used]="i < rulerLines.length || (i === rulerLines.length && rulerDrawingStart)">
+              <button class="tool-btn icon-btn" (click)="copyRulerMeasurements()"
+                      title="Mérések másolása" [disabled]="rulerLines.length === 0">
+                ⎘
+              </button>
+              <button class="tool-btn icon-btn" (click)="clearAllRulerLines()"
+                      title="Vonalak törlése" [disabled]="rulerLines.length === 0">
+                ✕
+              </button>
             }
-            <button class="tool-btn icon-btn" (click)="copyRulerMeasurements()"
-                    title="M\u00e9r\u00e9sek m\u00e1sol\u00e1sa" [disabled]="rulerLines.length === 0">
-              \u2398
-            </button>
-            <button class="tool-btn icon-btn" (click)="clearAllRulerLines()"
-                    title="Vonalak t\u00f6rl\u00e9se" [disabled]="rulerLines.length === 0">
-              \u2715
-            </button>
-          }
-          @if (scaleActive) {
-            @if (pxPerMm > 0) {
-              <span class="scale-ratio-display">{{ pxPerMm | number:'1.2-2' }} px/mm</span>
+            @if (scaleActive || showScaleBar) {
+              @if (pxPerMm > 0) {
+                  <span class="scale-ratio-display">{{ getScaleResolutionDisplay() }}</span>
+              }
+              <span class="scale-label">Mértékegység:</span>
+              <select class="scale-unit-select" [ngModel]="scaleMeasureUnit" (ngModelChange)="onScaleMeasureUnitChange($event)">
+                <option value="mm">mm</option>
+                <option value="cm">cm</option>
+                <option value="um">um</option>
+              </select>
+              <span class="scale-label">Valós távolság:</span>
+              <input type="number" class="scale-mm-input" [(ngModel)]="scaleMm"
+                [placeholder]="scaleMeasureUnit" min="0" step="0.1"
+                     (ngModelChange)="onScaleMmChange()">
+              <span class="scale-unit">{{ scaleMeasureUnit }}</span>
+              <button class="tool-btn icon-btn" (click)="clearScaleLine()"
+                      title="Kalibráló vonal törlése" [disabled]="scaleStart === null && scaleEnd === null">
+                ✕
+              </button>
+              <span class="scale-label">Skála hossza:</span>
+              <input type="number" class="scale-mm-input" [(ngModel)]="scaleBarLengthMm"
+                [placeholder]="scaleBarUnit" min="0" step="1"
+                (ngModelChange)="onScaleBarLengthChange()">
+              <span class="scale-label">Betűméret:</span>
+              <input type="number" class="scale-mm-input" [(ngModel)]="scaleBarFontSize"
+                     min="8" step="1" (ngModelChange)="onScaleBarStyleChange()">
+              <span class="scale-label">Vonalvastagság:</span>
+              <input type="number" class="scale-mm-input" [(ngModel)]="scaleBarBarThickness"
+                     min="1" step="1" (ngModelChange)="onScaleBarStyleChange()">
+              <span class="scale-label">Betűvastagság:</span>
+              <input type="number" class="scale-mm-input" [(ngModel)]="scaleBarFontThickness"
+                     min="1" step="1" (ngModelChange)="onScaleBarStyleChange()">
+              <span class="scale-label">Vonal színe:</span>
+              <select class="scale-unit-select" [ngModel]="scaleBarBarColor" (ngModelChange)="onScaleBarStyleChange($event, 'barColor')">
+                <option value="white">fehér</option>
+                <option value="black">fekete</option>
+                <option value="yellow">sárga</option>
+              </select>
+              <span class="scale-label">Szöveg színe:</span>
+              <select class="scale-unit-select" [ngModel]="scaleBarTextColor" (ngModelChange)="onScaleBarStyleChange($event, 'textColor')">
+                <option value="white">fehér</option>
+                <option value="black">fekete</option>
+                <option value="yellow">sárga</option>
+              </select>
+              <label class="scale-checkbox-label">
+                <input type="checkbox" [(ngModel)]="showScaleBar"
+                       (ngModelChange)="onShowScaleBarChange()">
+                <span>Skála mutatása</span>
+              </label>
             }
-            <span class="scale-label">Val\u00f3s t\u00e1vols\u00e1g:</span>
-            <input type="number" class="scale-mm-input" [(ngModel)]="scaleMm"
-                   placeholder="0" min="0" step="0.1"
-                   (ngModelChange)="onScaleMmChange()">
-            <span class="scale-unit">mm</span>
-            <label class="scale-checkbox-label">
-              <input type="checkbox" [(ngModel)]="showScaleBar"
-                     (ngModelChange)="onShowScaleBarChange()">
-              <span>Sk\u00e1la mutat\u00e1sa</span>
-            </label>
-          }
           <div class="toolbar-spacer"></div>
           <!-- Montage button - shows if more than 1 image -->
           @if (imageCount > 1) {
@@ -100,10 +159,10 @@ import { RecipeService } from '../../services/recipe.service';
           }
         </div>
       </div>
-      @if (loading) {
+      @if (loading || generatingMontage) {
         <div class="loading-overlay">
           <div class="spinner"></div>
-          <span>Előnézet betöltése...</span>
+          <span>{{ generatingMontage ? 'Montázs betöltése...' : 'Előnézet betöltése...' }}</span>
         </div>
       }
       @if (showGraphViewer) {
@@ -163,6 +222,31 @@ import { RecipeService } from '../../services/recipe.service';
           }
         </div>
       }
+      @if (showExpandedChart && expandedChartData) {
+        <div class="expanded-chart-viewer">
+          <div class="expanded-chart-toolbar">
+            <span class="expanded-chart-title">{{ expandedChartTitle }}</span>
+            <button class="graph-close-btn" (click)="closeExpandedChart()" title="Bezárás">✕</button>
+          </div>
+          <div class="expanded-chart-container">
+            @if (expandedChartType === 'scatter') {
+              <app-scatter-chart
+                [data]="expandedChartData"
+                [label]="expandedChartTitle"
+                [width]="1400"
+                [height]="800"
+              />
+            } @else if (expandedChartType === 'pca') {
+              <div class="pca-chart-wrapper">
+                <app-pca-chart
+                  [data]="expandedChartData"
+                  (componentChanged)="onPCAComponentChanged($event)"
+                />
+              </div>
+            }
+          </div>
+        </div>
+      }
       <div class="preview-scroll-area" #scrollArea
            [class.zoomed]="zoomLevel > 1">
         @if (showingMontage && montagePreview && !showGraphViewer) {
@@ -176,6 +260,87 @@ import { RecipeService } from '../../services/recipe.service';
                    (load)="onMontageImageLoaded()"
                    style="cursor: pointer;" />
             </div>
+          </div>
+        } @else if (showGrayMapComparison() && grayMapBaseSrc && grayMapOverlaySrc && !showGraphViewer) {
+          <div class="gray-map-compare-container">
+            <div class="gray-map-compare-panel">
+              <div class="gray-map-compare-title">Eredeti betöltött kép</div>
+              <img
+                [src]="grayMapBaseSrc"
+                alt="Eredeti kép"
+                class="gray-map-compare-image"
+                [class.grayscale]="isGrayscale"
+                draggable="false"
+              />
+            </div>
+            <div class="gray-map-compare-panel">
+              <div class="gray-map-compare-title">Kiválasztott eredmény</div>
+              <img
+                [src]="grayMapOverlaySrc"
+                alt="Gray map eredmény"
+                class="gray-map-compare-image"
+                draggable="false"
+              />
+            </div>
+          </div>
+        } @else if (showDualMapView() && dualMapState && !showGraphViewer) {
+          <!-- dual_map: 2-3 rows (gray / RGB / sub), columns = original + N component results -->
+          <div class="dual-map-multipanel"
+               [style.grid-template-columns]="'repeat(' + (dualMapMaxCols + 1) + ', minmax(0, 1fr))'"
+               [style.grid-template-rows]="dualMapState.subOverlays.length > 0 ? '1fr 1fr 1fr' : '1fr 1fr'">
+            <!-- Row 1: Gray original + gray components -->
+            <div class="dual-map-cell">
+              <div class="dual-map-cell-title">Szürke — eredeti</div>
+              @if (dualMapState.grayBase) {
+                <img [src]="dualMapState.grayBase" alt="Szürke eredeti" class="dual-map-cell-image" draggable="false" />
+              } @else {
+                <div class="dual-map-cell-empty">–</div>
+              }
+            </div>
+            @for (overlay of dualMapState.grayOverlays; track $index) {
+              <div class="dual-map-cell">
+                <div class="dual-map-cell-title">Szürke — {{ $index + 1 }}. komponens</div>
+                <img [src]="overlay" alt="Szürke {{ $index + 1 }}. komponens" class="dual-map-cell-image" draggable="false" />
+              </div>
+            }
+            @if (!dualMapState.grayOverlays.length) {
+              <div class="dual-map-cell"><div class="dual-map-cell-empty">–</div></div>
+            }
+            <!-- Row 2: RGB original + RGB components -->
+            <div class="dual-map-cell">
+              <div class="dual-map-cell-title">RGB — eredeti</div>
+              @if (dualMapState.rgbBase) {
+                <img [src]="dualMapState.rgbBase" alt="RGB eredeti" class="dual-map-cell-image" draggable="false" />
+              } @else {
+                <div class="dual-map-cell-empty">–</div>
+              }
+            </div>
+            @for (overlay of dualMapState.rgbOverlays; track $index) {
+              <div class="dual-map-cell">
+                <div class="dual-map-cell-title">RGB — {{ $index + 1 }}. komponens</div>
+                <img [src]="overlay" alt="RGB {{ $index + 1 }}. komponens" class="dual-map-cell-image" draggable="false" />
+              </div>
+            }
+            @if (!dualMapState.rgbOverlays.length) {
+              <div class="dual-map-cell"><div class="dual-map-cell-empty">–</div></div>
+            }
+            <!-- Row 3 (optional): Sub-classification original + sub components -->
+            @if (dualMapState.subOverlays.length > 0) {
+              <div class="dual-map-cell dual-map-cell--sub">
+                <div class="dual-map-cell-title">{{ dualMapState.subLabel }} — eredeti</div>
+                @if (dualMapState.subBase) {
+                  <img [src]="dualMapState.subBase" alt="Sub eredeti" class="dual-map-cell-image" draggable="false" />
+                } @else {
+                  <div class="dual-map-cell-empty">–</div>
+                }
+              </div>
+              @for (overlay of dualMapState.subOverlays; track $index) {
+                <div class="dual-map-cell dual-map-cell--sub">
+                  <div class="dual-map-cell-title">{{ dualMapState.subLabel }} — {{ $index + 1 }}. komponens</div>
+                  <img [src]="overlay" alt="{{ dualMapState.subLabel }} {{ $index + 1 }}. komponens" class="dual-map-cell-image" draggable="false" />
+                </div>
+              }
+            }
           </div>
         } @else if (imageSrc && !showGraphViewer) {
           <div class="image-roi-container" #imageRoiContainer>
@@ -198,47 +363,69 @@ import { RecipeService } from '../../services/recipe.service';
                    (contextmenu)="onRoiContextMenu($event)">
                 <!-- Rectangle ROI -->
                 @if (roiType === 'rect' && (hasRoiShape || roiDragMode === 'draw-rect')) {
-                  <rect [attr.x]="roiRect.x" [attr.y]="roiRect.y"
-                        [attr.width]="roiRect.w" [attr.height]="roiRect.h"
-                        fill="rgba(59,130,246,0.15)" stroke="#3b82f6"
-                        [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)" />
-                  <!-- Corner handles -->
-                  <circle [attr.cx]="roiRect.x" [attr.cy]="roiRect.y" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="tl" />
-                  <circle [attr.cx]="roiRect.x + roiRect.w" [attr.cy]="roiRect.y" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="tr" />
-                  <circle [attr.cx]="roiRect.x" [attr.cy]="roiRect.y + roiRect.h" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="bl" />
-                  <circle [attr.cx]="roiRect.x + roiRect.w" [attr.cy]="roiRect.y + roiRect.h" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="br" />
-                  <!-- Edge handles -->
-                  <circle [attr.cx]="roiRect.x + roiRect.w / 2" [attr.cy]="roiRect.y" [attr.r]="4 * roiScale"
-                          class="roi-handle edge" data-handle="t" />
-                  <circle [attr.cx]="roiRect.x + roiRect.w / 2" [attr.cy]="roiRect.y + roiRect.h" [attr.r]="4 * roiScale"
-                          class="roi-handle edge" data-handle="b" />
-                  <circle [attr.cx]="roiRect.x" [attr.cy]="roiRect.y + roiRect.h / 2" [attr.r]="4 * roiScale"
-                          class="roi-handle edge" data-handle="l" />
-                  <circle [attr.cx]="roiRect.x + roiRect.w" [attr.cy]="roiRect.y + roiRect.h / 2" [attr.r]="4 * roiScale"
-                          class="roi-handle edge" data-handle="r" />
+                  <g [attr.transform]="roiRectTransform()">
+                    <rect [attr.x]="roiRect.x" [attr.y]="roiRect.y"
+                          [attr.width]="roiRect.w" [attr.height]="roiRect.h"
+                          [attr.fill]="roiAllSelected ? 'rgba(249,115,22,0.25)' : 'rgba(59,130,246,0.15)'"
+                          [attr.stroke]="roiAllSelected ? '#f97316' : '#3b82f6'"
+                          [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)"
+                          class="roi-shape-body" />
+                    <!-- Corner handles -->
+                    <circle [attr.cx]="roiRect.x" [attr.cy]="roiRect.y" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="tl" />
+                    <circle [attr.cx]="roiRect.x + roiRect.w" [attr.cy]="roiRect.y" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="tr" />
+                    <circle [attr.cx]="roiRect.x" [attr.cy]="roiRect.y + roiRect.h" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="bl" />
+                    <circle [attr.cx]="roiRect.x + roiRect.w" [attr.cy]="roiRect.y + roiRect.h" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="br" />
+                    <!-- Edge handles -->
+                    <circle [attr.cx]="roiRect.x + roiRect.w / 2" [attr.cy]="roiRect.y" [attr.r]="4 * roiScale"
+                            class="roi-handle edge" data-handle="t" />
+                    <circle [attr.cx]="roiRect.x + roiRect.w / 2" [attr.cy]="roiRect.y + roiRect.h" [attr.r]="4 * roiScale"
+                            class="roi-handle edge" data-handle="b" />
+                    <circle [attr.cx]="roiRect.x" [attr.cy]="roiRect.y + roiRect.h / 2" [attr.r]="4 * roiScale"
+                            class="roi-handle edge" data-handle="l" />
+                    <circle [attr.cx]="roiRect.x + roiRect.w" [attr.cy]="roiRect.y + roiRect.h / 2" [attr.r]="4 * roiScale"
+                            class="roi-handle edge" data-handle="r" />
+                    <!-- Rotation handle (inside top-right corner) -->
+                    <circle [attr.cx]="roiRect.x + roiRect.w - 14 * roiScale" [attr.cy]="roiRect.y + 14 * roiScale"
+                            [attr.r]="10 * roiScale" [attr.fill]="'#f97316'" [attr.stroke]="'#ea580c'" [attr.stroke-width]="2 * roiScale"
+                            class="roi-rot-btn" data-handle="rot" />
+                    <text [attr.x]="roiRect.x + roiRect.w - 14 * roiScale" [attr.y]="roiRect.y + 14 * roiScale + 5 * roiScale"
+                          text-anchor="middle" [attr.fill]="'white'" [attr.font-size]="13 * roiScale" font-family="Arial, sans-serif"
+                          class="roi-rot-icon" data-handle="rot">&#x21bb;</text>
+                  </g>
                 }
                 <!-- Ellipse ROI -->
                 @if (roiType === 'ellipse' && hasRoiShape) {
-                  <ellipse [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy"
-                           [attr.rx]="roiEllipse.rx" [attr.ry]="roiEllipse.ry"
-                           fill="rgba(59,130,246,0.15)" stroke="#3b82f6"
-                           [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)" />
-                  <!-- Bounding rect handles -->
-                  <circle [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy - roiEllipse.ry" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="t" />
-                  <circle [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy + roiEllipse.ry" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="b" />
-                  <circle [attr.cx]="roiEllipse.cx - roiEllipse.rx" [attr.cy]="roiEllipse.cy" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="l" />
-                  <circle [attr.cx]="roiEllipse.cx + roiEllipse.rx" [attr.cy]="roiEllipse.cy" [attr.r]="5 * roiScale"
-                          class="roi-handle" data-handle="r" />
-                  <!-- Center handle -->
-                  <circle [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy" [attr.r]="4 * roiScale"
-                          class="roi-handle center" data-handle="c" />
+                  <g [attr.transform]="roiEllipseTransform()">
+                    <ellipse [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy"
+                             [attr.rx]="roiEllipse.rx" [attr.ry]="roiEllipse.ry"
+                             [attr.fill]="roiAllSelected ? 'rgba(249,115,22,0.25)' : 'rgba(59,130,246,0.15)'"
+                             [attr.stroke]="roiAllSelected ? '#f97316' : '#3b82f6'"
+                             [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)"
+                             class="roi-shape-body" />
+                    <!-- Bounding rect handles -->
+                    <circle [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy - roiEllipse.ry" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="t" />
+                    <circle [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy + roiEllipse.ry" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="b" />
+                    <circle [attr.cx]="roiEllipse.cx - roiEllipse.rx" [attr.cy]="roiEllipse.cy" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="l" />
+                    <circle [attr.cx]="roiEllipse.cx + roiEllipse.rx" [attr.cy]="roiEllipse.cy" [attr.r]="5 * roiScale"
+                            class="roi-handle" data-handle="r" />
+                    <!-- Center handle -->
+                    <circle [attr.cx]="roiEllipse.cx" [attr.cy]="roiEllipse.cy" [attr.r]="4 * roiScale"
+                            class="roi-handle center" data-handle="c" />
+                    <!-- Rotation handle (near top of ellipse, offset right) -->
+                    <circle [attr.cx]="roiEllipse.cx + roiEllipse.rx * 0.7" [attr.cy]="roiEllipse.cy - roiEllipse.ry * 0.7"
+                            [attr.r]="10 * roiScale" [attr.fill]="'#f97316'" [attr.stroke]="'#ea580c'" [attr.stroke-width]="2 * roiScale"
+                            class="roi-rot-btn" data-handle="rot" />
+                    <text [attr.x]="roiEllipse.cx + roiEllipse.rx * 0.7" [attr.y]="roiEllipse.cy - roiEllipse.ry * 0.7 + 5 * roiScale"
+                          text-anchor="middle" [attr.fill]="'white'" [attr.font-size]="13 * roiScale" font-family="Arial, sans-serif"
+                          class="roi-rot-icon" data-handle="rot">&#x21bb;</text>
+                  </g>
                 }
                 <!-- Ellipse guide points during 4-point drawing -->
                 @if (roiType === 'ellipse' && roiEllipseDrawing) {
@@ -274,20 +461,51 @@ import { RecipeService } from '../../services/recipe.service';
                 }
                 <!-- Polygon ROI -->
                 @if (roiType === 'polygon' && roiPolygon.length > 0) {
-                  @if (roiPolygon.length > 2) {
-                    <polygon [attr.points]="polygonPointsStr()"
-                             fill="rgba(59,130,246,0.15)" stroke="#3b82f6"
-                             [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)" />
-                  } @else {
-                    <polyline [attr.points]="polygonPointsStr()"
-                              fill="none" stroke="#3b82f6"
-                              [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)" />
-                  }
-                  @for (pt of roiPolygon; track $index) {
-                    <circle [attr.cx]="pt.x" [attr.cy]="pt.y" [attr.r]="($index === 0 && roiPolygonDrawing) ? 7 * roiScale : 5 * roiScale"
-                            class="roi-handle" [attr.data-handle]="'p' + $index"
-                            [class.first-point]="$index === 0 && roiPolygonDrawing" />
-                  }
+                  <g [attr.transform]="roiPolygonTransform()">
+                    @if (roiPolygon.length > 2) {
+                      <polygon [attr.points]="polygonPointsStr()"
+                               [attr.fill]="roiAllSelected ? 'rgba(249,115,22,0.25)' : 'rgba(59,130,246,0.15)'"
+                               [attr.stroke]="roiAllSelected ? '#f97316' : '#3b82f6'"
+                               [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)"
+                               class="roi-shape-body" />
+                    } @else {
+                      <polyline [attr.points]="polygonPointsStr()"
+                                fill="none" stroke="#3b82f6"
+                                [attr.stroke-width]="2 * roiScale" [attr.stroke-dasharray]="(6 * roiScale) + ' ' + (3 * roiScale)" />
+                    }
+                    @for (pt of roiPolygon; track $index) {
+                      <circle [attr.cx]="pt.x" [attr.cy]="pt.y" [attr.r]="($index === 0 && roiPolygonDrawing) ? 7 * roiScale : 5 * roiScale"
+                              class="roi-handle" [attr.data-handle]="'p' + $index"
+                              [class.first-point]="$index === 0 && roiPolygonDrawing" />
+                    }
+                    <!-- Rotation handle (at topmost point of polygon) -->
+                    @if (roiPolygon.length >= 3 && !roiPolygonDrawing) {
+                      <circle [attr.cx]="roiPolygonTopRight().x" [attr.cy]="roiPolygonTopRight().y"
+                              [attr.r]="10 * roiScale" [attr.fill]="'#f97316'" [attr.stroke]="'#ea580c'" [attr.stroke-width]="2 * roiScale"
+                              class="roi-rot-btn" data-handle="rot" />
+                      <text [attr.x]="roiPolygonTopRight().x" [attr.y]="roiPolygonTopRight().y + 5 * roiScale"
+                            text-anchor="middle" [attr.fill]="'white'" [attr.font-size]="13 * roiScale" font-family="Arial, sans-serif"
+                            class="roi-rot-icon" data-handle="rot">&#x21bb;</text>
+                    }
+                  </g>
+                }
+                <!-- Selection hint (Ctrl+A active) -->
+                @if (roiAllSelected) {
+                  <rect [attr.x]="0" [attr.y]="roiImgH - 28 * roiScale" [attr.width]="roiImgW" [attr.height]="28 * roiScale"
+                        fill="rgba(0,0,0,0.55)" />
+                  <text [attr.x]="10 * roiScale" [attr.y]="roiImgH - 9 * roiScale"
+                        fill="#f97316" [attr.font-size]="13 * roiScale" font-family="sans-serif">
+                    ROI kijelölve — Delete a törléshez, Esc a kijelölés megszüntetéséhez
+                  </text>
+                }
+                <!-- Per-image ROI hint -->
+                @if (hasRoiShape && imageCount > 1 && !roiHasOverride) {
+                  <rect [attr.x]="0" [attr.y]="0" [attr.width]="roiImgW" [attr.height]="28 * roiScale"
+                        fill="rgba(0,0,0,0.55)" />
+                  <text [attr.x]="10 * roiScale" [attr.y]="19 * roiScale"
+                        fill="#fbbf24" [attr.font-size]="13 * roiScale" font-family="sans-serif">
+                    ⚠ Örökölt ROI — húzza a kívánt pozícióba
+                  </text>
                 }
               </svg>
             }
@@ -324,8 +542,8 @@ import { RecipeService } from '../../services/recipe.service';
             @if (rulerActive || scaleActive || pixelActive || hasAnnotations) {
               <svg class="ruler-overlay"
                    [attr.viewBox]="'0 0 ' + rulerImgW + ' ' + rulerImgH"
-                   [style.pointer-events]="(rulerActive || scaleActive || pixelActive) ? 'auto' : 'none'"
-                   [style.cursor]="(rulerActive || scaleActive || pixelActive) ? 'crosshair' : 'default'"
+                   [style.pointer-events]="(rulerActive || scaleActive || pixelActive || showScaleBar) ? 'auto' : 'none'"
+                   [style.cursor]="(rulerActive || scaleActive || pixelActive) ? 'crosshair' : (showScaleBar ? 'grab' : 'default')"
                    (mousedown)="onToolMouseDown($event)"
                    (mousemove)="onToolMouseMove($event)"
                    (mouseleave)="onToolMouseLeave()"
@@ -370,7 +588,7 @@ import { RecipeService } from '../../services/recipe.service';
                   }
                 }
                 <!-- Scale line (only show while drawing, hide once calibrated) -->
-                @if (scaleStart && !(scaleEnd && scaleMm > 0)) {
+                @if (scaleStart) {
                   <circle [attr.cx]="scaleStart.x" [attr.cy]="scaleStart.y" [attr.r]="6 * rulerScale"
                           fill="#e67e22" stroke="#fff" [attr.stroke-width]="1.5 * rulerScale"/>
                   @if (scaleEnd) {
@@ -379,11 +597,23 @@ import { RecipeService } from '../../services/recipe.service';
                           stroke="#e67e22" [attr.stroke-width]="2 * rulerScale"/>
                     <circle [attr.cx]="scaleEnd.x" [attr.cy]="scaleEnd.y" [attr.r]="6 * rulerScale"
                             fill="#e67e22" stroke="#fff" [attr.stroke-width]="1.5 * rulerScale"/>
+                    <text [attr.x]="(scaleStart.x + scaleEnd.x) / 2 + 16 * rulerScale"
+                          [attr.y]="(scaleStart.y + scaleEnd.y) / 2 - 12 * rulerScale"
+                          fill="#fff" [attr.font-size]="14 * rulerScale" font-family="monospace"
+                          stroke="#000" [attr.stroke-width]="3 * rulerScale" paint-order="stroke">
+                      {{ scaleLinePx | number:'1.1-1' }} px
+                    </text>
                   } @else if (scaleCurrentPos) {
                     <line [attr.x1]="scaleStart.x" [attr.y1]="scaleStart.y"
                           [attr.x2]="scaleCurrentPos.x" [attr.y2]="scaleCurrentPos.y"
                           stroke="#e67e22" [attr.stroke-width]="2 * rulerScale"
                           [attr.stroke-dasharray]="(8 * rulerScale) + ' ' + (5 * rulerScale)"/>
+                    <text [attr.x]="scaleCurrentPos.x + 16 * rulerScale"
+                          [attr.y]="scaleCurrentPos.y - 12 * rulerScale"
+                          fill="#fff" [attr.font-size]="14 * rulerScale" font-family="monospace"
+                          stroke="#000" [attr.stroke-width]="3 * rulerScale" paint-order="stroke">
+                      {{ scaleLinePx | number:'1.1-1' }} px
+                    </text>
                   }
                 }
                 <!-- Pixel measurement 3x3 grid -->
@@ -393,54 +623,95 @@ import { RecipeService } from '../../services/recipe.service';
                     @for (val of pixelGridValues; track $index) {
                       @let row = Math.floor($index / 3) - 1;
                       @let col = ($index % 3) - 1;
-                        @let cx = pos.x + col * pixelGridSpacing + pixelGridOffsetX;
-                        @let cy = pos.y + row * pixelGridSpacing + pixelGridOffsetY;
-                        @let lines = getPixelDisplayLines(val);
-                    <g>
+                      @let cx = pos.x + col * pixelGridSpacing + pixelGridOffsetX;
+                      @let cy = pos.y + row * pixelGridSpacing + pixelGridOffsetY;
+                      @let lines = getPixelDisplayLines(val);
+                      <g>
                         <rect [attr.x]="cx - pixelGridHalfSize" [attr.y]="cy - pixelGridHalfSize"
                               [attr.width]="pixelGridCellSize" [attr.height]="pixelGridCellSize"
-                            [attr.fill]="pixelGridColors[$index]"
+                              [attr.fill]="pixelGridColors[$index]"
                               stroke="#fff" [attr.stroke-width]="pixelGridStrokeWidth"/>
                         <text [attr.x]="cx" [attr.y]="getPixelTextStartY(cy, lines.length)"
-                            [attr.fill]="isColorBright(pixelGridColors[$index]) ? '#000' : '#fff'"
+                              [attr.fill]="isColorBright(pixelGridColors[$index]) ? '#000' : '#fff'"
                               [attr.font-size]="pixelGridFontSize" font-family="monospace"
-                            text-anchor="middle">
+                              text-anchor="middle">
                           @for (line of lines; track $index) {
                             <tspan [attr.x]="cx" [attr.dy]="$index === 0 ? 0 : pixelGridLineHeight">{{ line }}</tspan>
                           }
-                      </text>
-                    </g>
+                        </text>
+                      </g>
                     }
                   }
                 }
                 <!-- Scale bar overlay -->
-                @if (showScaleBar && pxPerMm > 0 && scaleBarPx > 0) {
-                  <rect [attr.x]="rulerImgW - scaleBarPx - 35 * rulerScale"
+                  @if (showScaleBar && pxPerMm > 0 && scaleBarPx > 0 && !scaleBarOverlay) {
+                    <g [style.cursor]="scaleBarDragging ? 'grabbing' : 'grab'"
+                           (mousedown)="onScaleBarMouseDown($event)">
+                      <rect [attr.x]="rulerImgW - scaleBarPx - 35 * rulerScale"
                         [attr.y]="rulerImgH - 58 * rulerScale"
                         [attr.width]="scaleBarPx + 30 * rulerScale"
                         [attr.height]="44 * rulerScale"
                         fill="rgba(0,0,0,0.55)" [attr.rx]="4 * rulerScale"/>
-                  <line [attr.x1]="rulerImgW - scaleBarPx - 20 * rulerScale"
+                      <line [attr.x1]="rulerImgW - scaleBarPx - 20 * rulerScale"
                         [attr.y1]="rulerImgH - 25 * rulerScale"
                         [attr.x2]="rulerImgW - 20 * rulerScale"
                         [attr.y2]="rulerImgH - 25 * rulerScale"
-                        stroke="#fff" [attr.stroke-width]="3 * rulerScale"/>
-                  <line [attr.x1]="rulerImgW - scaleBarPx - 20 * rulerScale"
-                        [attr.y1]="rulerImgH - 34 * rulerScale"
-                        [attr.x2]="rulerImgW - scaleBarPx - 20 * rulerScale"
-                        [attr.y2]="rulerImgH - 16 * rulerScale"
-                        stroke="#fff" [attr.stroke-width]="2 * rulerScale"/>
-                  <line [attr.x1]="rulerImgW - 20 * rulerScale"
-                        [attr.y1]="rulerImgH - 34 * rulerScale"
-                        [attr.x2]="rulerImgW - 20 * rulerScale"
-                        [attr.y2]="rulerImgH - 16 * rulerScale"
-                        stroke="#fff" [attr.stroke-width]="2 * rulerScale"/>
-                  <text [attr.x]="rulerImgW - scaleBarPx / 2 - 20 * rulerScale"
+                        stroke="#fff" [attr.stroke-width]="3 * rulerScale" stroke-linecap="round"/>
+                      <circle [attr.cx]="rulerImgW - scaleBarPx - 20 * rulerScale"
+                          [attr.cy]="rulerImgH - 25 * rulerScale"
+                          [attr.r]="Math.max(1.5, 1.4 * rulerScale)"
+                          fill="#fff"/>
+                      <circle [attr.cx]="rulerImgW - 20 * rulerScale"
+                          [attr.cy]="rulerImgH - 25 * rulerScale"
+                          [attr.r]="Math.max(1.5, 1.4 * rulerScale)"
+                          fill="#fff"/>
+                      <text [attr.x]="rulerImgW - scaleBarPx / 2 - 20 * rulerScale"
                         [attr.y]="rulerImgH - 42 * rulerScale"
                         fill="#fff" [attr.font-size]="13 * rulerScale" font-family="sans-serif"
                         text-anchor="middle">
-                    {{ scaleBarMm }} mm
-                  </text>
+                      {{ formatScaleBarLabel() }}
+                      </text>
+                    </g>
+                }
+                @if (scaleBarOverlay) {
+                  <g [style.cursor]="scaleBarDragging ? 'grabbing' : 'grab'"
+                         (mousedown)="onScaleBarMouseDown($event)">
+                    <rect [attr.x]="scaleBarOverlay.x"
+                      [attr.y]="scaleBarOverlay.y"
+                      [attr.width]="scaleBarOverlay.width"
+                      [attr.height]="scaleBarOverlay.height"
+                      [attr.fill]="'rgba(0,0,0,' + scaleBarOverlay.backgroundOpacity + ')'"
+                      [attr.rx]="4 * rulerScale"
+                      [attr.stroke]="scaleBarDragging ? '#ffd166' : 'rgba(255, 209, 102, 0.9)'"
+                      [attr.stroke-width]="2 * rulerScale"
+                      [attr.stroke-dasharray]="scaleBarDragging ? '8 4' : '6 4'"/>
+                    <line [attr.x1]="scaleBarOverlay.barStartX"
+                      [attr.y1]="scaleBarOverlay.barY"
+                      [attr.x2]="scaleBarOverlay.barEndX"
+                      [attr.y2]="scaleBarOverlay.barY"
+                      [attr.stroke]="scaleBarOverlay.barColor"
+                      [attr.stroke-width]="scaleBarOverlay.barThickness"
+                      stroke-linecap="round"/>
+                    <circle [attr.cx]="scaleBarOverlay.barStartX"
+                      [attr.cy]="scaleBarOverlay.barY"
+                      [attr.r]="Math.max(1.5, scaleBarOverlay.barThickness * 0.55)"
+                      [attr.fill]="scaleBarOverlay.barColor"/>
+                    <circle [attr.cx]="scaleBarOverlay.barEndX"
+                      [attr.cy]="scaleBarOverlay.barY"
+                      [attr.r]="Math.max(1.5, scaleBarOverlay.barThickness * 0.55)"
+                      [attr.fill]="scaleBarOverlay.barColor"/>
+                    <text [attr.x]="scaleBarOverlay.labelX"
+                      [attr.y]="scaleBarOverlay.labelY"
+                      [attr.fill]="scaleBarOverlay.textColor"
+                      [attr.font-size]="scaleBarOverlay.fontSize"
+                      [attr.font-family]="scaleBarOverlay.fontFamily"
+                      [attr.stroke]="scaleBarOverlay.backgroundColor"
+                      [attr.stroke-width]="scaleBarOverlay.fontThickness + 2"
+                      paint-order="stroke"
+                      text-anchor="middle">
+                      {{ scaleBarOverlay.label }}
+                    </text>
+                  </g>
                 }
               </svg>
             }
@@ -488,6 +759,9 @@ import { RecipeService } from '../../services/recipe.service';
               [max]="imageCount"
             />
             <span class="page-total">/ {{ imageCount }}</span>
+            @if (roiActive && roiHasOverride) {
+              <span class="roi-override-dot" title="Egyedi ROI ezen a képen">●</span>
+            }
           </div>
           <button
             class="page-btn"
@@ -558,6 +832,109 @@ import { RecipeService } from '../../services/recipe.service';
     .preview-scroll-area.zoomed .preview-image {
       max-width: none;
       max-height: none;
+    }
+
+    .gray-map-compare-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      gap: 16px;
+      padding: 16px;
+      box-sizing: border-box;
+      overflow: auto;
+      align-items: stretch;
+      justify-content: center;
+    }
+
+    .gray-map-compare-panel {
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .gray-map-compare-title {
+      font-size: 12px;
+      color: #c9d4e5;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .gray-map-compare-image {
+      flex: 1;
+      min-height: 0;
+      max-width: 100%;
+      object-fit: contain;
+      background: #111;
+      border-radius: 6px;
+    }
+
+    /* multi-panel dual_map layout — 2-3 rows (gray / RGB / sub), columns = original + N components */
+    .dual-map-multipanel {
+      display: grid;
+      grid-auto-flow: row;
+      gap: 12px;
+      padding: 16px;
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+    }
+
+    .dual-map-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px 12px 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .dual-map-cell--sub {
+      background: rgba(100, 180, 80, 0.04);
+      border-color: rgba(100, 180, 80, 0.18);
+    }
+
+    .dual-map-cell-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #c9d4e5;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .dual-map-cell-image {
+      flex: 1;
+      width: 100%;
+      min-height: 0;
+      min-width: 0;
+      max-width: 100%;
+      object-fit: contain;
+      background: #111;
+      border-radius: 6px;
+    }
+
+    .dual-map-cell-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #555;
+      font-size: 18px;
     }
 
     .loading-overlay {
@@ -639,6 +1016,29 @@ import { RecipeService } from '../../services/recipe.service';
     .roi-handle.edge { fill: #bfdbfe; }
 
     .roi-handle.center { fill: #93c5fd; cursor: move; }
+
+    .roi-shape-body { cursor: move; }
+
+    .roi-handle.rotate {
+      fill: #f97316;
+      stroke: #ea580c;
+      cursor: grab;
+    }
+    .roi-handle.rotate:hover { fill: #fb923c; }
+
+    .roi-rot-btn {
+      fill: #f97316 !important;
+      stroke: #ea580c !important;
+      cursor: grab;
+      pointer-events: all;
+    }
+    .roi-rot-btn:hover { fill: #fb923c !important; }
+
+    .roi-rot-icon {
+      fill: white !important;
+      pointer-events: none;
+      user-select: none;
+    }
 
     .roi-handle.first-point {
       fill: #22c55e;
@@ -1132,6 +1532,13 @@ import { RecipeService } from '../../services/recipe.service';
       font-variant-numeric: tabular-nums;
     }
 
+    .roi-override-dot {
+      color: #3b82f6;
+      font-size: 10px;
+      margin-left: 2px;
+      line-height: 1;
+    }
+
     .montage-gallery-container {
       display: flex;
       flex-direction: column;
@@ -1159,6 +1566,71 @@ import { RecipeService } from '../../services/recipe.service';
       object-fit: contain;
       display: block;
     }
+
+    /* Expanded chart viewer */
+    .expanded-chart-viewer {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      background: #1a1a1a;
+      z-index: 10;
+    }
+
+    .expanded-chart-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid #333;
+      background: #1e1e1e;
+    }
+
+    .expanded-chart-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+
+    .expanded-chart-container {
+      flex: 1;
+      overflow: auto;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: calc(100% - 45px);
+      background: #1a1a1a;
+    }
+
+    .expanded-chart-container app-scatter-chart {
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    .expanded-chart-container app-pca-chart {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .pca-chart-wrapper {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: auto;
+    }
+
+    .pca-chart-wrapper app-pca-chart {
+      flex: 1;
+      width: 100%;
+      min-height: 600px;
+    }
   `],
 })
 export class PipelinePreviewComponent implements OnInit, OnDestroy {
@@ -1169,6 +1641,17 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   @ViewChild('imageRoiContainer') imageRoiContainer!: ElementRef<HTMLDivElement>;
 
   imageSrc: string | null = null;
+  grayMapOverlaySrc: string | null = null;
+  grayMapBaseSrc: string | null = null;
+  dualMapState: {
+    grayBase: string | null;
+    grayOverlays: string[];
+    rgbBase: string | null;
+    rgbOverlays: string[];
+    subBase: string | null;
+    subOverlays: string[];
+    subLabel: string;
+  } | null = null;
   isGrayscale = false;
   loading = false;
   imageCount = 0;
@@ -1209,6 +1692,12 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private pointCoords: { px: number; py: number }[] = [];
   private graphPad = { top: 30, right: 20, bottom: 36, left: 56 };
 
+  // Expanded chart viewer state
+  showExpandedChart = false;
+  expandedChartData: any = null;
+  expandedChartTitle = '';
+  expandedChartType: 'scatter' | 'pca' = 'scatter';
+
   // ROI editing state
   roiActive = false;
   roiType: 'rect' | 'ellipse' | 'polygon' = 'rect';
@@ -1221,6 +1710,11 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   roiEllipseDrawing = false;
   roiEllipseGuidePoints: { x: number; y: number }[] = [];
   hasRoiShape = false;
+  roiAngle = 0; // degrees, for rect and ellipse
+  roiAllSelected = false;
+
+  /** Whether the current image has its own per-image ROI override */
+  roiHasOverride = false;
 
   // ROI right-click context menu
   showRoiContextMenu = false;
@@ -1237,6 +1731,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   roiDragMode: string | null = null;
   private roiDragStart = { mx: 0, my: 0, ox: 0, oy: 0, ow: 0, oh: 0 };
   private roiSelectedStepIndex = -1;
+  private roiCurrentImageIndex = 0;
+  private boundOnKeyDown: ((e: KeyboardEvent) => void) | null = null;
 
   // Particle contour click overlay
   particleOverlayActive = false;
@@ -1272,9 +1768,26 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   scaleCurrentPos: {x: number; y: number} | null = null;
   scaleLinePx = 0;
   scaleMm = 0;
+  scaleMeasureUnit = 'mm';
   showScaleBar = false;
   scaleBarPx = 0;
   scaleBarMm = 0;
+  scaleBarLengthMm = 0;
+  scaleBarUnit = 'mm';
+  scaleBarFontSize = 24;
+  scaleBarFontThickness = 1;
+  scaleBarBarThickness = 3;
+  scaleBarBarColor = 'white';
+  scaleBarTextColor = 'white';
+  scaleBarBackgroundColor = 'black';
+  scaleBarPositionX = -1;
+  scaleBarPositionY = -1;
+  scaleBarOverlayActive = false;
+  scaleBarOverlay: ScaleBarOverlayState | null = null;
+  scaleBarDragging = false;
+  private scaleBarDragOffset = { x: 0, y: 0 };
+  private scaleBarSelectedStepIndex = -1;
+  private scaleBarSelectedParams: Record<string, any> | null = null;
 
   // Pixel measurement tool state
   pixelActive = false;
@@ -1301,14 +1814,28 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private montageCellWidth = 0;
   private montageCellHeight = 0;
   private montageImageCount = 0;
+  private montageCache = new Map<string, any>();
+  private montageCacheKey = '';
 
   readonly Math = Math;
 
   get pxPerMm(): number {
-    if (this.scaleLinePx > 0 && this.scaleMm > 0) {
-      return this.scaleLinePx / this.scaleMm;
+    const measuredMm = this.getScaleMeasurementMm();
+    if (this.scaleLinePx > 0 && measuredMm > 0) {
+      return this.scaleLinePx / measuredMm;
     }
     return 0;
+  }
+
+  getScaleResolutionDisplay(): string {
+    const measuredMm = this.getScaleMeasurementMm();
+    if (this.scaleLinePx <= 0 || measuredMm <= 0) {
+      return '';
+    }
+
+    const valueInUnitPerPx = this.scaleMm > 0 ? this.scaleMm / this.scaleLinePx : 0;
+    const decimals = valueInUnitPerPx < 0.1 ? 3 : valueInUnitPerPx < 1 ? 2 : valueInUnitPerPx < 10 ? 1 : 0;
+    return `${valueInUnitPerPx.toFixed(decimals)} ${this.scaleMeasureUnit}/px`;
   }
 
   get rulerScale(): number {
@@ -1368,9 +1895,31 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   get hasAnnotations(): boolean {
     return this.rulerLines.length > 0 ||
            this.rulerDrawingStart !== null ||
-           (this.scaleStart !== null && !(this.scaleEnd && this.scaleMm > 0)) ||
+           (this.scaleStart !== null && !(this.scaleEnd && this.getScaleMeasurementMm() > 0)) ||
+           this.scaleBarOverlayActive ||
            (this.showScaleBar && this.pxPerMm > 0) ||
            (this.pixelActive && (this.pixelCurrentPos !== null || this.pixelFrozenPos !== null));
+  }
+
+  showGrayMapComparison(): boolean {
+    if (!this.grayMapOverlaySrc || !this.currentPipeline) return false;
+    const step = this.currentPipeline.steps[this.selectedStepIndex];
+    return step?.step_def_id === 'gray_map';
+  }
+
+  showDualMapView(): boolean {
+    if (!this.dualMapState || !this.currentPipeline) return false;
+    const step = this.currentPipeline.steps[this.selectedStepIndex];
+    return step?.step_def_id === 'dual_map';
+  }
+
+  get dualMapMaxCols(): number {
+    if (!this.dualMapState) return 1;
+    return Math.max(
+      this.dualMapState.grayOverlays.length || 1,
+      this.dualMapState.rgbOverlays.length  || 1,
+      this.dualMapState.subOverlays.length  || 0,
+    );
   }
 
   private subs: Subscription[] = [];
@@ -1382,6 +1931,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    this.boundOnKeyDown = this.onRoiKeyDown.bind(this);
+    window.addEventListener('keydown', this.boundOnKeyDown);
     this.subs.push(
       this.pipelineState.previewImage$.subscribe((img) => {
         this.imageSrc = img;
@@ -1393,6 +1944,17 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pixelGridColors = ['#000', '#000', '#000', '#000', '#000', '#000', '#000', '#000', '#000'];
         this.pixelCanvasCache = null;
         this.pixelImageDataCache = null;
+      }),
+      this.pipelineState.previewImageOverride$.subscribe((img) => {
+        this.grayMapOverlaySrc = img;
+        if (img) {
+          this.grayMapBaseSrc = this.imageSrc;
+        } else {
+          this.grayMapBaseSrc = null;
+        }
+      }),
+      this.pipelineState.dualMapPreview$.subscribe((state) => {
+        this.dualMapState = state;
       }),
       this.pipelineState.previewImageIsGrayscale$.subscribe((isGray) => {
         this.isGrayscale = isGray;
@@ -1412,6 +1974,12 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.imageNames = so?.['loaded_paths'] ?? [];
         this.selectedStepIndex = stepIdx;
         this.currentPipeline = pipeline;
+        // Invalidate montage cache when pipeline or step changes
+        const newCacheKey = `${stepIdx}:${JSON.stringify(pipeline)}`;
+        if (newCacheKey !== this.montageCacheKey) {
+          this.montageCache.clear();
+          this.montageCacheKey = newCacheKey;
+        }
         
         // For color_thresh steps, show the mask overlay on top of the original image
         if (stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'color_thresh') {
@@ -1443,6 +2011,12 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           this.drawGraph();
         }
       }),
+      this.pipelineState.expandedChart$.subscribe(({ data, type, title }) => {
+        this.expandedChartData = data;
+        this.expandedChartType = type;
+        this.expandedChartTitle = title;
+        this.showExpandedChart = true;
+      }),
       this.pipelineState.selectedStepIndex$.subscribe((idx) => {
         if (this.showGraphViewer && this.graphViewerStepIndex >= 0 && idx !== this.graphViewerStepIndex) {
           this.closeGraphViewer();
@@ -1468,14 +2042,17 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pipelineState.pipeline$,
         this.pipelineState.selectedStepIndex$,
         this.pipelineState.imageDims$,
-      ]).subscribe(([pipeline, idx, dims]) => {
+        this.pipelineState.previewImageIndex$,
+      ]).subscribe(([pipeline, idx, dims, imgIdx]) => {
         if (idx >= 0 && idx < pipeline.steps.length &&
             pipeline.steps[idx].step_def_id === 'mask_rect_roi') {
+          this.deactivateMeasurementTools();
           const step = pipeline.steps[idx];
+          const isCropMode = step.param_values?.['output_mode'] === 'crop';
           this.roiSelectedStepIndex = idx;
           this.roiImgW = dims.w || 100;
           this.roiImgH = dims.h || 100;
-          const newType = step.param_values?.['roi_type'] ?? 'rect';
+          const newType = this.normalizeRoiType(step.param_values?.['roi_type']);
           if (newType !== this.roiType) {
             // Reset drawing state when ROI type changes
             this.roiEllipseDrawing = false;
@@ -1483,8 +2060,12 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
             this.roiPolygonDrawing = false;
           }
           this.roiType = newType;
-          this.syncRoiFromParams(step.param_values);
-          this.roiActive = true;
+          this.roiCurrentImageIndex = imgIdx;
+          this.syncRoiFromParams(step.param_values, imgIdx);
+          this.roiActive = !isCropMode;
+          if (isCropMode) {
+            this.roiSelectedStepIndex = -1;
+          }
         } else {
           this.roiActive = false;
           this.roiSelectedStepIndex = -1;
@@ -1537,8 +2118,10 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           this.circleImgW = dims.w || 100;
           this.circleImgH = dims.h || 100;
           const circles = sideOutputs?.['circles'];
-          if (Array.isArray(circles) && Array.isArray(circles[imgIdx])) {
-            this.circlesForOverlay = circles[imgIdx];
+          // In single-image preview mode, circles array has only 1 element (index 0)
+          const cIdx = Array.isArray(circles) && circles.length === 1 ? 0 : imgIdx;
+          if (Array.isArray(circles) && Array.isArray(circles[cIdx])) {
+            this.circlesForOverlay = circles[cIdx];
           } else {
             this.circlesForOverlay = [];
           }
@@ -1551,11 +2134,42 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           this.circleStepIndex = -1;
         }
       }),
+      // Track scale bar overlay when scale_bar_overlay step is selected
+      combineLatest([
+        this.pipelineState.pipeline$,
+        this.pipelineState.selectedStepIndex$,
+        this.pipelineState.imageDims$,
+        this.pipelineState.previewImageIndex$,
+      ]).subscribe(([pipeline, idx, dims, imgIdx]) => {
+        if (idx >= 0 && idx < pipeline.steps.length &&
+            pipeline.steps[idx].step_def_id === 'scale_bar_overlay') {
+          this.scaleBarOverlayActive = true;
+          this.scaleBarSelectedStepIndex = idx;
+          this.scaleBarSelectedParams = pipeline.steps[idx].param_values ?? {};
+          this.showScaleBar = true;
+          this.syncScaleBarEditorFromParams(this.scaleBarSelectedParams);
+          this.scaleBarUnit = String(this.scaleBarSelectedParams?.['label_unit'] ?? this.scaleBarSelectedParams?.['bar_length_unit'] ?? this.scaleBarUnit ?? 'mm');
+          const selectedBarLengthMm = Number(this.scaleBarSelectedParams?.['bar_length_mm'] ?? 0) || 0;
+          this.scaleBarLengthMm = selectedBarLengthMm > 0 ? this.fromMm(selectedBarLengthMm, this.scaleBarUnit) : 0;
+          this.scaleBarPositionX = Number(this.scaleBarSelectedParams?.['position_x'] ?? -1) || -1;
+          this.scaleBarPositionY = Number(this.scaleBarSelectedParams?.['position_y'] ?? -1) || -1;
+          this.syncScaleBarCalibration(this.pxPerMm);
+          this.pipelineState.setScaleBarExportParams(this.scaleBarSelectedParams);
+          this.rebuildScaleBarOverlay(this.scaleBarSelectedParams, dims.w || 100, dims.h || 100, imgIdx);
+        } else {
+          this.scaleBarOverlayActive = false;
+          this.scaleBarDragging = false;
+          this.refreshScaleBarOverlay();
+        }
+      }),
     );
   }
 
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+    if (this.boundOnKeyDown) {
+      window.removeEventListener('keydown', this.boundOnKeyDown);
+    }
   }
 
   // --- Gallery zoom/pan ---
@@ -1609,6 +2223,10 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   }
 
   onMouseMove(event: MouseEvent): void {
+    if (this.scaleBarDragging) {
+      this.onScaleBarMouseMove(event);
+      return;
+    }
     const isZoomed = this.showingMontage ? this.montageZoomLevel > 1.0 : this.zoomLevel > 1.0;
     if (this.showGraphViewer || !this.isDragging || !isZoomed) return;
     
@@ -1627,6 +2245,9 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   }
 
   onMouseUp(): void {
+    if (this.scaleBarDragging) {
+      this.onScaleBarMouseUp();
+    }
     this.isDragging = false;
   }
 
@@ -1786,8 +2407,19 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     this.graphViewerStepIndex = -1;
   }
 
+  // --- Expanded chart viewer ---
+
   getOmittedIndices(): Set<number> {
     return this.graphOmittedIndices;
+  }
+
+  onPCAComponentChanged(event: { pcX: number; pcY: number }): void {
+    // Pass through from PCA chart component
+  }
+
+  closeExpandedChart(): void {
+    this.showExpandedChart = false;
+    this.expandedChartData = null;
   }
 
   /** Draw the interactive graph on the full-size canvas */
@@ -2191,24 +2823,41 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     }
   }
 
-  private syncRoiFromParams(params: Record<string, any>): void {
-    const t = params?.['roi_type'] ?? 'rect';
+  private syncRoiFromParams(params: Record<string, any>, imageIndex?: number): void {
+    // Check for per-image override first
+    let effectiveParams = params;
+    const imgIdx = imageIndex ?? this.roiCurrentImageIndex;
+    const overridesRaw = params?.['roi_overrides'] ?? '{}';
+    let hasOwnOverride = false;
+    try {
+      const overrides = typeof overridesRaw === 'string' ? JSON.parse(overridesRaw) : (overridesRaw || {});
+      const imgKey = String(imgIdx);
+      if (overrides[imgKey]) {
+        // Merge: per-image override values take precedence over global params
+        effectiveParams = { ...params, ...overrides[imgKey] };
+        hasOwnOverride = true;
+      }
+    } catch { /* ignore parse errors, use global params */ }
+    this.roiHasOverride = hasOwnOverride;
+
+    const t = this.normalizeRoiType(effectiveParams?.['roi_type'] ?? 'rect');
+    this.roiAngle = effectiveParams?.['roi_angle'] ?? 0;
     if (t === 'rect') {
-      const rx = params?.['roi_x'] ?? 0;
-      const ry = params?.['roi_y'] ?? 0;
-      const rw = params?.['roi_width'] ?? 0;
-      const rh = params?.['roi_height'] ?? 0;
+      const rx = effectiveParams?.['roi_x'] ?? 0;
+      const ry = effectiveParams?.['roi_y'] ?? 0;
+      const rw = effectiveParams?.['roi_width'] ?? 0;
+      const rh = effectiveParams?.['roi_height'] ?? 0;
       this.roiRect = { x: rx, y: ry, w: rw, h: rh };
       this.hasRoiShape = rw > 0 && rh > 0;
     } else if (t === 'ellipse') {
-      const ecx = params?.['roi_cx'] ?? 0;
-      const ecy = params?.['roi_cy'] ?? 0;
-      const erx = params?.['roi_rx'] ?? 0;
-      const ery = params?.['roi_ry'] ?? 0;
+      const ecx = effectiveParams?.['roi_cx'] ?? 0;
+      const ecy = effectiveParams?.['roi_cy'] ?? 0;
+      const erx = effectiveParams?.['roi_rx'] ?? 0;
+      const ery = effectiveParams?.['roi_ry'] ?? 0;
       this.roiEllipse = { cx: ecx, cy: ecy, rx: erx, ry: ery };
       this.hasRoiShape = erx > 0 && ery > 0;
     } else if (t === 'polygon') {
-      const raw = params?.['roi_points'] ?? '[]';
+      const raw = effectiveParams?.['roi_points'] ?? '[]';
       try {
         const pts = typeof raw === 'string' ? JSON.parse(raw) : raw;
         this.roiPolygon = Array.isArray(pts) ? pts : [];
@@ -2217,6 +2866,12 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       }
       this.hasRoiShape = this.roiPolygon.length > 0;
     }
+  }
+
+  private normalizeRoiType(value: any): 'rect' | 'ellipse' | 'polygon' {
+    if (value === 'circle') return 'ellipse';
+    if (value === 'ellipse' || value === 'polygon' || value === 'rect') return value;
+    return 'rect';
   }
 
   private svgCoords(event: MouseEvent): { x: number; y: number } {
@@ -2233,11 +2888,21 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   onRoiMouseDown(event: MouseEvent): void {
     if (event.button !== 0) return;
     this.showRoiContextMenu = false;
+    this.roiAllSelected = false;
     const { x, y } = this.svgCoords(event);
     const target = event.target as SVGElement;
     const handle = target.getAttribute?.('data-handle');
 
     if (this.roiType === 'polygon') {
+      // Rotation handle for polygon
+      if (handle === 'rot' && this.roiPolygon.length >= 3 && !this.roiPolygonDrawing) {
+        const c = this.roiPolygonCentroid();
+        this.roiDragMode = 'rot';
+        this.roiDragStart = { mx: x, my: y, ox: c.x, oy: c.y, ow: this.roiAngle, oh: 0 };
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (handle?.startsWith('p')) {
         const idx = parseInt(handle.substring(1), 10);
         // Click on first point while drawing → close polygon
@@ -2325,7 +2990,14 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
     if (handle) {
       this.roiDragMode = handle;
-      if (this.roiType === 'rect') {
+      if (handle === 'rot') {
+        // Store center for angle calculation
+        if (this.roiType === 'rect') {
+          this.roiDragStart = { mx: x, my: y, ox: this.roiRect.x + this.roiRect.w / 2, oy: this.roiRect.y + this.roiRect.h / 2, ow: this.roiAngle, oh: 0 };
+        } else {
+          this.roiDragStart = { mx: x, my: y, ox: this.roiEllipse.cx, oy: this.roiEllipse.cy, ow: this.roiAngle, oh: 0 };
+        }
+      } else if (this.roiType === 'rect') {
         this.roiDragStart = { mx: x, my: y, ox: this.roiRect.x, oy: this.roiRect.y, ow: this.roiRect.w, oh: this.roiRect.h };
       } else {
         this.roiDragStart = { mx: x, my: y, ox: this.roiEllipse.cx, oy: this.roiEllipse.cy, ow: this.roiEllipse.rx, oh: this.roiEllipse.ry };
@@ -2359,6 +3031,20 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     const dx = x - this.roiDragStart.mx;
     const dy = y - this.roiDragStart.my;
     const s = this.roiDragStart;
+
+    // Handle rotation for rect/ellipse
+    if (this.roiDragMode === 'rot') {
+      const cx = s.ox; // center x
+      const cy = s.oy; // center y
+      const startAngle = Math.atan2(s.mx - cx, -(s.my - cy)) * 180 / Math.PI;
+      const currAngle = Math.atan2(x - cx, -(y - cy)) * 180 / Math.PI;
+      let newAngle = s.ow + (currAngle - startAngle);
+      // Normalize to -180..180
+      while (newAngle > 180) newAngle -= 360;
+      while (newAngle < -180) newAngle += 360;
+      this.roiAngle = Math.round(newAngle * 10) / 10;
+      return;
+    }
 
     if (this.roiType === 'rect') {
       if (this.roiDragMode === 'draw-rect') {
@@ -2519,15 +3205,33 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   private isInsideRect(x: number, y: number): boolean {
     const r = this.roiRect;
-    return r.w > 0 && r.h > 0 && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+    if (r.w <= 0 || r.h <= 0) return false;
+    // Rotate point back to axis-aligned space around rect center
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    const { x: ux, y: uy } = this.unrotatePoint(x, y, cx, cy);
+    return ux >= r.x && ux <= r.x + r.w && uy >= r.y && uy <= r.y + r.h;
   }
 
   private isInsideEllipse(x: number, y: number): boolean {
     const e = this.roiEllipse;
     if (e.rx < 1 || e.ry < 1) return false;
-    const dx = (x - e.cx) / e.rx;
-    const dy = (y - e.cy) / e.ry;
+    // Rotate point back to axis-aligned space around ellipse center
+    const { x: ux, y: uy } = this.unrotatePoint(x, y, e.cx, e.cy);
+    const dx = (ux - e.cx) / e.rx;
+    const dy = (uy - e.cy) / e.ry;
     return (dx * dx + dy * dy) <= 1;
+  }
+
+  /** Rotate a point (px, py) by -roiAngle around (cx, cy) to get unrotated coordinates */
+  private unrotatePoint(px: number, py: number, cx: number, cy: number): { x: number; y: number } {
+    if (Math.abs(this.roiAngle) < 0.01) return { x: px, y: py };
+    const rad = -this.roiAngle * Math.PI / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const dx = px - cx;
+    const dy = py - cy;
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
   }
 
   private commitRoi(): void {
@@ -2537,21 +3241,43 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (!step) return;
 
     const updated = { ...step.param_values };
+
+    const roiValues: Record<string, any> = {};
+    roiValues['roi_angle'] = this.roiAngle;
+    roiValues['roi_type'] = this.roiType;
     if (this.roiType === 'rect') {
-      updated['roi_x'] = Math.round(this.roiRect.x);
-      updated['roi_y'] = Math.round(this.roiRect.y);
-      updated['roi_width'] = Math.round(this.roiRect.w);
-      updated['roi_height'] = Math.round(this.roiRect.h);
+      roiValues['roi_x'] = Math.round(this.roiRect.x);
+      roiValues['roi_y'] = Math.round(this.roiRect.y);
+      roiValues['roi_width'] = Math.round(this.roiRect.w);
+      roiValues['roi_height'] = Math.round(this.roiRect.h);
     } else if (this.roiType === 'ellipse') {
-      updated['roi_cx'] = Math.round(this.roiEllipse.cx);
-      updated['roi_cy'] = Math.round(this.roiEllipse.cy);
-      updated['roi_rx'] = Math.round(this.roiEllipse.rx);
-      updated['roi_ry'] = Math.round(this.roiEllipse.ry);
+      roiValues['roi_cx'] = Math.round(this.roiEllipse.cx);
+      roiValues['roi_cy'] = Math.round(this.roiEllipse.cy);
+      roiValues['roi_rx'] = Math.round(this.roiEllipse.rx);
+      roiValues['roi_ry'] = Math.round(this.roiEllipse.ry);
     } else if (this.roiType === 'polygon') {
-      updated['roi_points'] = JSON.stringify(
+      roiValues['roi_points'] = JSON.stringify(
         this.roiPolygon.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }))
       );
     }
+
+    // Update per-image override in roi_overrides
+    let overrides: Record<string, any> = {};
+    try {
+      const raw = updated['roi_overrides'] ?? '{}';
+      overrides = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+    } catch { overrides = {}; }
+
+    const imgKey = String(this.roiCurrentImageIndex);
+    overrides[imgKey] = roiValues;
+    updated['roi_overrides'] = JSON.stringify(overrides);
+
+    // Sync shape to global fallback (images without overrides inherit this),
+    // but keep roi_angle per-image only so rotating one image doesn't affect others.
+    const { roi_angle: _ignoreAngle, ...shapeValues } = roiValues;
+    Object.assign(updated, shapeValues);
+
+    this.roiHasOverride = true;
     this.pipelineState.updateParams(this.roiSelectedStepIndex, updated);
   }
 
@@ -2580,6 +3306,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   clearRoiSelection(): void {
     this.showRoiContextMenu = false;
+    this.roiAngle = 0;
     if (this.roiType === 'rect') {
       this.roiRect = { x: 0, y: 0, w: 0, h: 0 };
     } else if (this.roiType === 'ellipse') {
@@ -2591,7 +3318,45 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       this.roiPolygonDrawing = false;
     }
     this.hasRoiShape = false;
-    this.commitRoi();
+    this.roiHasOverride = false;
+    // Clear all per-image overrides (full reset)
+    if (this.roiSelectedStepIndex >= 0) {
+      const pipeline = this.pipelineState.getPipeline();
+      const step = pipeline.steps[this.roiSelectedStepIndex];
+      if (step) {
+        const updated = { ...step.param_values };
+        updated['roi_overrides'] = '{}';
+        updated['roi_angle'] = 0;
+        // Zero out global ROI params
+        updated['roi_x'] = 0; updated['roi_y'] = 0;
+        updated['roi_width'] = 0; updated['roi_height'] = 0;
+        updated['roi_cx'] = 0; updated['roi_cy'] = 0;
+        updated['roi_rx'] = 0; updated['roi_ry'] = 0;
+        updated['roi_points'] = '[]';
+        this.pipelineState.updateParams(this.roiSelectedStepIndex, updated);
+      }
+    }
+  }
+
+  private onRoiKeyDown(event: KeyboardEvent): void {
+    if (!this.roiActive || !this.hasRoiShape) return;
+    // Ctrl+A → select all (visual feedback, marks shape for deletion)
+    if ((event.ctrlKey || event.metaKey) && event.key === 'a') {
+      event.preventDefault();
+      this.roiAllSelected = true;
+      return;
+    }
+    // Delete or Backspace → clear ROI if selected
+    if (this.roiAllSelected && (event.key === 'Delete' || event.key === 'Backspace')) {
+      event.preventDefault();
+      this.roiAllSelected = false;
+      this.clearRoiSelection();
+      return;
+    }
+    // Escape → deselect
+    if (event.key === 'Escape') {
+      this.roiAllSelected = false;
+    }
   }
 
   private isInsidePolygon(px: number, py: number): boolean {
@@ -2609,6 +3374,46 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   polygonPointsStr(): string {
     return this.roiPolygon.map((p) => `${p.x},${p.y}`).join(' ');
+  }
+
+  /** Centroid of the polygon */
+  roiPolygonCentroid(): { x: number; y: number } {
+    if (this.roiPolygon.length === 0) return { x: 0, y: 0 };
+    const sx = this.roiPolygon.reduce((a, p) => a + p.x, 0);
+    const sy = this.roiPolygon.reduce((a, p) => a + p.y, 0);
+    return { x: sx / this.roiPolygon.length, y: sy / this.roiPolygon.length };
+  }
+
+  /** Position for the polygon rotation handle (topmost-rightmost vertex, offset outward) */
+  roiPolygonTopRight(): { x: number; y: number } {
+    if (this.roiPolygon.length < 3) return { x: 0, y: 0 };
+    // Find the point with the smallest y (topmost), break ties with largest x
+    let best = this.roiPolygon[0];
+    for (const p of this.roiPolygon) {
+      if (p.y < best.y || (p.y === best.y && p.x > best.x)) best = p;
+    }
+    return { x: best.x, y: best.y - 18 * this.roiScale };
+  }
+
+  /** SVG transform string for rotated polygon group */
+  roiPolygonTransform(): string {
+    if (Math.abs(this.roiAngle) < 0.01 || this.roiPolygon.length < 3) return '';
+    const c = this.roiPolygonCentroid();
+    return `rotate(${this.roiAngle} ${c.x} ${c.y})`;
+  }
+
+  /** SVG transform string for rotated rectangle group */
+  roiRectTransform(): string {
+    if (Math.abs(this.roiAngle) < 0.01) return '';
+    const cx = this.roiRect.x + this.roiRect.w / 2;
+    const cy = this.roiRect.y + this.roiRect.h / 2;
+    return `rotate(${this.roiAngle} ${cx} ${cy})`;
+  }
+
+  /** SVG transform string for rotated ellipse group */
+  roiEllipseTransform(): string {
+    if (Math.abs(this.roiAngle) < 0.01) return '';
+    return `rotate(${this.roiAngle} ${this.roiEllipse.cx} ${this.roiEllipse.cy})`;
   }
 
   /** Preview ellipse while placing guide points */
@@ -2672,7 +3477,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   toggleRuler(): void {
     this.rulerActive = !this.rulerActive;
     if (this.rulerActive) {
-      this.scaleActive = false;
+      this.deactivateMeasurementTools('ruler');
     }
     this.rulerDrawingStart = null;
     this.rulerDrawingCurrent = null;
@@ -2705,12 +3510,12 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   // === Scale tool methods ===
 
   toggleScale(): void {
+    if (this.showScaleBar) {
+      return;
+    }
     this.scaleActive = !this.scaleActive;
     if (this.scaleActive) {
-      this.rulerActive = false;
-      this.rulerDrawingStart = null;
-      this.rulerDrawingCurrent = null;
-      this.rulerDrawingDistance = 0;
+      this.deactivateMeasurementTools('scale');
     }
   }
 
@@ -2725,7 +3530,45 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     this.computeScaleBar();
   }
 
+  onScaleMeasureUnitChange(nextUnit: string): void {
+    const previousUnit = this.scaleMeasureUnit || 'mm';
+    const currentValue = Number(this.scaleMm) || 0;
+    const currentMm = currentValue > 0 ? this.toMm(currentValue, previousUnit) : 0;
+    this.scaleMeasureUnit = nextUnit || 'mm';
+    this.scaleMm = currentMm > 0 ? this.fromMm(currentMm, this.scaleMeasureUnit) : 0;
+    this.computeScaleBar();
+  }
+
   onShowScaleBarChange(): void {
+    if (this.showScaleBar) {
+      this.scaleActive = false;
+    }
+    this.computeScaleBar();
+  }
+
+  onScaleBarLengthChange(): void {
+    this.scaleBarLengthMm = this.normalizeScaleBarLength(this.scaleBarLengthMm);
+    this.syncScaleBarEditorToSelectedStep();
+    this.computeScaleBar();
+  }
+
+  onScaleBarStyleChange(nextValue?: string, field?: 'barColor' | 'textColor'): void {
+    if (field === 'barColor' && nextValue) {
+      this.scaleBarBarColor = nextValue;
+    }
+    if (field === 'textColor' && nextValue) {
+      this.scaleBarTextColor = nextValue;
+    }
+    this.syncScaleBarEditorToSelectedStep();
+    this.computeScaleBar();
+  }
+
+  onScaleBarUnitChange(nextUnit: string): void {
+    const hadManualLength = this.scaleBarLengthMm > 0;
+    const currentMm = hadManualLength ? this.toMm(this.scaleBarLengthMm, this.scaleBarUnit) : 0;
+    this.scaleBarUnit = nextUnit || 'mm';
+    this.scaleBarLengthMm = hadManualLength && currentMm > 0 ? this.normalizeScaleBarLength(this.fromMm(currentMm, this.scaleBarUnit)) : 0;
+    this.syncScaleBarEditorToSelectedStep();
     this.computeScaleBar();
   }
 
@@ -2734,22 +3577,397 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (pm <= 0) {
       this.scaleBarPx = 0;
       this.scaleBarMm = 0;
+      this.scaleBarOverlay = null;
       return;
     }
-    const targetPx = this.rulerImgW / 5;
-    const targetMm = targetPx / pm;
+    this.syncScaleBarCalibration(pm);
+    const autoTargetPx = this.rulerImgW / 5;
+    const autoTargetMm = autoTargetPx / pm;
     const niceValues = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
     let best = niceValues[0];
-    let bestDiff = Math.abs(targetMm - best);
+    let bestDiff = Math.abs(autoTargetMm - best);
     for (const v of niceValues) {
-      const diff = Math.abs(targetMm - v);
+      const diff = Math.abs(autoTargetMm - v);
       if (diff < bestDiff) {
         bestDiff = diff;
         best = v;
       }
     }
-    this.scaleBarMm = best;
-    this.scaleBarPx = best * pm;
+
+    const barLengthMm = this.scaleBarLengthMm > 0 ? this.getScaleBarLengthMm() : best;
+    this.scaleBarMm = barLengthMm;
+    this.scaleBarPx = Math.max(1, Math.round(barLengthMm * pm));
+
+    this.refreshScaleBarOverlay();
+  }
+
+  private refreshScaleBarOverlay(): void {
+    const imgW = this.rulerImgW || 100;
+    const imgH = this.rulerImgH || 100;
+    if (!this.showScaleBar || this.pxPerMm <= 0) {
+      this.scaleBarOverlay = null;
+      this.pipelineState.setScaleBarExportParams(null);
+      return;
+    }
+
+    if (this.scaleBarOverlayActive && this.scaleBarSelectedStepIndex >= 0 && this.scaleBarSelectedParams) {
+      this.pipelineState.setScaleBarExportParams(this.scaleBarSelectedParams);
+      this.rebuildScaleBarOverlay(this.scaleBarSelectedParams, imgW, imgH, this.currentIndex);
+      return;
+    }
+
+    const toolbarParams: Record<string, any> = {
+      pixels_per_mm: this.pxPerMm,
+      bar_length_mm: this.getScaleBarLengthMm(),
+      label_unit: this.scaleBarUnit,
+      position_x: this.scaleBarPositionX,
+      position_y: this.scaleBarPositionY,
+      font_family: 'sans',
+      font_size: this.scaleBarFontSize,
+      font_thickness: this.scaleBarFontThickness,
+      bar_thickness: this.scaleBarBarThickness,
+      box_padding: 14,
+      text_gap: 16,
+      background_opacity: 0,
+      background_color: this.scaleBarBackgroundColor,
+      show_background: false,
+      text_color: this.scaleBarTextColor,
+      bar_color: this.scaleBarBarColor,
+      label_text: this.formatScaleBarLabel(),
+    };
+    this.pipelineState.setScaleBarExportParams(toolbarParams);
+    this.rebuildScaleBarOverlay(toolbarParams, imgW, imgH, this.currentIndex);
+  }
+
+  formatScaleBarLabel(): string {
+    const unit = this.scaleBarUnit || 'mm';
+    const value = this.scaleBarLengthMm > 0 ? this.scaleBarLengthMm : this.fromMm(this.scaleBarMm, unit);
+    return `${Math.round(value)} ${unit}`;
+  }
+
+  private getScaleMeasurementMm(): number {
+    return this.scaleMm > 0 ? this.toMm(this.scaleMm, this.scaleMeasureUnit) : 0;
+  }
+
+  private getScaleBarLengthMm(): number {
+    if (this.scaleBarLengthMm <= 0) {
+      return this.scaleBarMm;
+    }
+    return this.toMm(this.scaleBarLengthMm, this.scaleBarUnit);
+  }
+
+  private normalizeScaleBarLength(value: number): number {
+    if (!Number.isFinite(value) || value <= 0) {
+      return 0;
+    }
+    return Math.round(value);
+  }
+
+  private syncScaleBarEditorFromParams(params: Record<string, any>): void {
+    this.scaleBarFontSize = Math.max(8, Number(params?.['font_size'] ?? 24) || 24);
+    this.scaleBarFontThickness = Math.max(1, Number(params?.['font_thickness'] ?? 1) || 1);
+    this.scaleBarBarThickness = Math.max(1, Number(params?.['bar_thickness'] ?? 3) || 3);
+    this.scaleBarBackgroundColor = String(params?.['background_color'] ?? 'black');
+    this.scaleBarTextColor = String(params?.['text_color'] ?? 'white');
+    this.scaleBarBarColor = String(params?.['bar_color'] ?? 'white');
+  }
+
+  private syncScaleBarEditorToSelectedStep(): void {
+    if (this.scaleBarSelectedStepIndex < 0) {
+      return;
+    }
+
+    const pipeline = this.pipelineState.getPipeline();
+    if (this.scaleBarSelectedStepIndex >= pipeline.steps.length) {
+      return;
+    }
+
+    const step = pipeline.steps[this.scaleBarSelectedStepIndex];
+    if (!step || step.step_def_id !== 'scale_bar_overlay') {
+      return;
+    }
+
+    const updated = {
+      ...step.param_values,
+      pixels_per_mm: this.pxPerMm,
+      bar_length_mm: this.normalizeScaleBarLength(this.getScaleBarLengthMm()),
+      label_unit: this.scaleBarUnit,
+      position_x: this.scaleBarPositionX,
+      position_y: this.scaleBarPositionY,
+      font_family: 'sans',
+      font_size: this.scaleBarFontSize,
+      font_thickness: this.scaleBarFontThickness,
+      bar_thickness: this.scaleBarBarThickness,
+      box_padding: 14,
+      text_gap: 16,
+      background_opacity: 0,
+      background_color: this.scaleBarBackgroundColor,
+      show_background: false,
+      text_color: this.scaleBarTextColor,
+      bar_color: this.scaleBarBarColor,
+      label_text: this.formatScaleBarLabel(),
+    };
+
+    this.scaleBarSelectedParams = updated;
+    this.pipelineState.setScaleBarExportParams(updated);
+    this.pipelineState.updateParams(this.scaleBarSelectedStepIndex, updated);
+  }
+
+  private toMm(value: number, unit: string): number {
+    switch ((unit || 'mm').trim().toLowerCase()) {
+      case 'cm':
+        return value * 10;
+      case 'um':
+        return value / 1000;
+      default:
+        return value;
+    }
+  }
+
+  private fromMm(valueMm: number, unit: string): number {
+    switch ((unit || 'mm').trim().toLowerCase()) {
+      case 'cm':
+        return valueMm / 10;
+      case 'um':
+        return valueMm * 1000;
+      default:
+        return valueMm;
+    }
+  }
+
+  private syncScaleBarCalibration(pm: number): void {
+    if (this.scaleBarSelectedStepIndex < 0 || !this.scaleBarSelectedParams) {
+      return;
+    }
+
+    const pipeline = this.pipelineState.getPipeline();
+    if (this.scaleBarSelectedStepIndex >= pipeline.steps.length) {
+      return;
+    }
+
+    const step = pipeline.steps[this.scaleBarSelectedStepIndex];
+    if (!step || step.step_def_id !== 'scale_bar_overlay') {
+      return;
+    }
+
+    const currentPixelsPerMm = Number(step.param_values?.['pixels_per_mm'] ?? step.param_values?.['px_per_mm'] ?? 0) || 0;
+    if (Math.abs(currentPixelsPerMm - pm) < 0.0001) {
+      return;
+    }
+
+    const { px_per_mm: _unusedAlias, ...rest } = step.param_values ?? {};
+    const updated = { ...rest, pixels_per_mm: pm };
+    this.scaleBarSelectedParams = updated;
+    this.pipelineState.setScaleBarExportParams(updated);
+    this.pipelineState.updateParams(this.scaleBarSelectedStepIndex, updated);
+  }
+
+  private rebuildScaleBarOverlay(params: Record<string, any>, imgW: number, imgH: number, imageIndex: number): void {
+    void imageIndex;
+    const rawPixelsPerMm = Number(params?.['pixels_per_mm'] ?? params?.['px_per_mm'] ?? this.pxPerMm ?? 0) || 0;
+    if (rawPixelsPerMm <= 0) {
+      this.scaleBarOverlay = null;
+      return;
+    }
+
+    const rawLengthMm = Number(params?.['bar_length_mm'] ?? 0) || 0;
+    const barLengthMm = rawLengthMm > 0 ? rawLengthMm : this.getAutoScaleBarMm(rawPixelsPerMm, imgW);
+    const barLengthPx = Math.max(1, Math.round(barLengthMm * rawPixelsPerMm));
+    const fontSize = Math.max(8, Number(params?.['font_size'] ?? 24) || 24);
+    const fontThickness = Math.max(1, Number(params?.['font_thickness'] ?? 1) || 1);
+    const barThickness = Math.max(1, Number(params?.['bar_thickness'] ?? 3) || 3);
+    const padding = Math.max(0, Number(params?.['box_padding'] ?? 14) || 14);
+    const textGap = Math.max(0, Number(params?.['text_gap'] ?? 16) || 16);
+    const backgroundOpacity = Math.max(0, Math.min(1, Number(params?.['background_opacity'] ?? 0.55) || 0.55));
+    const fontFamily = this.mapFontFamily(String(params?.['font_family'] ?? 'sans'));
+    const labelUnit = String(params?.['label_unit'] ?? this.scaleBarUnit ?? 'mm');
+    const labelValue = this.fromMm(barLengthMm, labelUnit);
+    const label = `${Math.round(labelValue)} ${labelUnit}`;
+    const estimatedTextWidth = Math.max(1, Math.round(label.length * fontSize * 0.62));
+    const boxWidth = Math.max(barLengthPx, estimatedTextWidth) + 2 * padding;
+    const boxHeight = padding + fontSize + textGap + Math.max(barThickness * 2, 12) + padding;
+
+    let boxX = Number(params?.['position_x'] ?? -1);
+    let boxY = Number(params?.['position_y'] ?? -1);
+    if (!Number.isFinite(boxX) || boxX < 0 || !Number.isFinite(boxY) || boxY < 0) {
+      boxX = Math.max(0, imgW - boxWidth - 20);
+      boxY = Math.max(0, imgH - boxHeight - 20);
+    } else {
+      boxX = Math.max(0, Math.min(imgW - boxWidth, boxX));
+      boxY = Math.max(0, Math.min(imgH - boxHeight, boxY));
+    }
+
+    const overlay: ScaleBarOverlayState = {
+      x: boxX,
+      y: boxY,
+      width: boxWidth,
+      height: boxHeight,
+      barStartX: boxX + Math.round((boxWidth - barLengthPx) / 2),
+      barEndX: boxX + Math.round((boxWidth - barLengthPx) / 2) + barLengthPx,
+      barY: boxY + padding + barThickness,
+      labelX: boxX + boxWidth / 2,
+      labelY: boxY + padding + barThickness + textGap + fontSize,
+      label,
+      fontFamily,
+      fontSize,
+      barThickness,
+      fontThickness,
+      padding,
+      textGap,
+      backgroundOpacity,
+      backgroundColor: this.mapSimpleColor(String(params?.['background_color'] ?? 'black')),
+      textColor: this.mapSimpleColor(String(params?.['text_color'] ?? 'white')),
+      barColor: this.mapSimpleColor(String(params?.['bar_color'] ?? 'white')),
+    };
+
+    if (this.scaleBarDragging && this.scaleBarOverlay) {
+      overlay.x = this.scaleBarOverlay.x;
+      overlay.y = this.scaleBarOverlay.y;
+    }
+
+    this.scaleBarOverlay = overlay;
+  }
+
+  private getAutoScaleBarMm(pxPerMm: number, imgW: number): number {
+    if (pxPerMm <= 0) return 0;
+    const targetPx = imgW / 5;
+    const targetMm = targetPx / pxPerMm;
+    const niceValues = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+    let best = niceValues[0];
+    let bestDiff = Math.abs(targetMm - best);
+    for (const value of niceValues) {
+      const diff = Math.abs(targetMm - value);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = value;
+      }
+    }
+    return best;
+  }
+
+  private mapFontFamily(fontFamily: string): string {
+    switch (fontFamily) {
+      case 'serif': return 'serif';
+      case 'mono': return 'monospace';
+      case 'complex': return 'fantasy';
+      case 'script': return 'cursive';
+      default: return 'sans-serif';
+    }
+  }
+
+  private mapSimpleColor(colorName: string): string {
+    switch (colorName.trim().toLowerCase()) {
+      case 'black': return '#000000';
+      case 'yellow': return '#ffd166';
+      default: return '#ffffff';
+    }
+  }
+
+  onScaleBarMouseDown(event: MouseEvent): void {
+    if (!this.scaleBarOverlay || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pos = this.scaleBarSvgCoords(event);
+    if (!pos) return;
+    this.scaleBarDragging = true;
+    this.scaleBarDragOffset = {
+      x: pos.x - this.scaleBarOverlay.x,
+      y: pos.y - this.scaleBarOverlay.y,
+    };
+  }
+
+  onScaleBarMouseMove(event: MouseEvent): void {
+    if (!this.scaleBarDragging || !this.scaleBarOverlay) return;
+    event.preventDefault();
+    const pos = this.scaleBarSvgCoords(event);
+    if (!pos) return;
+    const nextX = Math.max(0, Math.min(this.rulerImgW - this.scaleBarOverlay.width, pos.x - this.scaleBarDragOffset.x));
+    const nextY = Math.max(0, Math.min(this.rulerImgH - this.scaleBarOverlay.height, pos.y - this.scaleBarDragOffset.y));
+    const barLengthPx = this.scaleBarOverlay.barEndX - this.scaleBarOverlay.barStartX;
+    if (this.scaleBarOverlay) {
+      this.scaleBarOverlay = {
+        ...this.scaleBarOverlay,
+        x: nextX,
+        y: nextY,
+        barStartX: nextX + this.scaleBarOverlay.padding,
+        barEndX: nextX + this.scaleBarOverlay.padding + barLengthPx,
+        barY: nextY + this.scaleBarOverlay.padding + this.scaleBarOverlay.barThickness,
+        labelX: nextX + this.scaleBarOverlay.width / 2,
+        labelY: nextY + this.scaleBarOverlay.padding + this.scaleBarOverlay.barThickness + this.scaleBarOverlay.textGap + this.scaleBarOverlay.fontSize,
+      };
+    }
+    this.cdr.markForCheck();
+  }
+
+  onScaleBarMouseUp(): void {
+    if (!this.scaleBarDragging || !this.scaleBarOverlay || this.scaleBarSelectedStepIndex < 0) {
+      if (this.scaleBarDragging && this.scaleBarOverlay) {
+        this.scaleBarPositionX = Math.round(this.scaleBarOverlay.x);
+        this.scaleBarPositionY = Math.round(this.scaleBarOverlay.y);
+        this.refreshScaleBarOverlay();
+      }
+      this.scaleBarDragging = false;
+      return;
+    }
+
+    this.scaleBarDragging = false;
+    const pipeline = this.pipelineState.getPipeline();
+    const step = pipeline.steps[this.scaleBarSelectedStepIndex];
+    if (!step) return;
+
+    const updated = {
+      ...step.param_values,
+      position_x: Math.round(this.scaleBarOverlay.x),
+      position_y: Math.round(this.scaleBarOverlay.y),
+    };
+    this.scaleBarSelectedParams = updated;
+    this.pipelineState.updateParams(this.scaleBarSelectedStepIndex, updated);
+    this.scaleBarPositionX = Math.round(this.scaleBarOverlay.x);
+    this.scaleBarPositionY = Math.round(this.scaleBarOverlay.y);
+  }
+
+  private scaleBarSvgCoords(event: MouseEvent): { x: number; y: number } | null {
+    const img = this.previewImg?.nativeElement;
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const sx = this.rulerImgW / rect.width;
+    const sy = this.rulerImgH / rect.height;
+    return {
+      x: Math.max(0, Math.min(this.rulerImgW, (event.clientX - rect.left) * sx)),
+      y: Math.max(0, Math.min(this.rulerImgH, (event.clientY - rect.top) * sy)),
+    };
+  }
+
+  private drawScaleBarOverlayToCanvas(ctx: CanvasRenderingContext2D, overlay: ScaleBarOverlayState, scale: number): void {
+    const bgColor = overlay.backgroundColor === '#000000' ? '0,0,0' : '255,255,255';
+    ctx.fillStyle = `rgba(${bgColor},${overlay.backgroundOpacity})`;
+    ctx.fillRect(overlay.x, overlay.y, overlay.width, overlay.height);
+
+    ctx.beginPath();
+    ctx.moveTo(overlay.barStartX, overlay.barY);
+    ctx.lineTo(overlay.barEndX, overlay.barY);
+    ctx.strokeStyle = overlay.barColor;
+    ctx.lineWidth = overlay.barThickness * scale;
+    ctx.stroke();
+
+    for (const capX of [overlay.barStartX, overlay.barEndX]) {
+      ctx.beginPath();
+      ctx.moveTo(capX, overlay.barY - 10 * scale);
+      ctx.lineTo(capX, overlay.barY + 10 * scale);
+      ctx.strokeStyle = overlay.barColor;
+      ctx.lineWidth = Math.max(1, overlay.barThickness - 1) * scale;
+      ctx.stroke();
+    }
+
+    ctx.font = `${overlay.fontSize * scale}px ${overlay.fontFamily}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = overlay.textColor;
+    ctx.strokeStyle = overlay.backgroundColor;
+    ctx.lineWidth = (overlay.fontThickness + 2) * scale;
+    ctx.strokeText(overlay.label, overlay.labelX, overlay.labelY);
+    ctx.fillText(overlay.label, overlay.labelX, overlay.labelY);
+    ctx.textAlign = 'start';
   }
 
   // === Montage feature ===
@@ -2762,6 +3980,22 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         hasPipeline: !!this.currentPipeline,
         selectedStepIndex: this.selectedStepIndex
       });
+      return;
+    }
+
+    // Check cache first
+    const cacheKey = `${this.selectedStepIndex}:${JSON.stringify(this.currentPipeline)}`;
+    const cached = this.montageCache.get(cacheKey);
+    if (cached) {
+      this.montagePreview = cached.preview;
+      this.montageImageCount = cached.imageCount;
+      this.montageGridRows = cached.gridRows;
+      this.montageGridCols = cached.gridCols;
+      this.montageCellWidth = cached.cellWidth;
+      this.montageCellHeight = cached.cellHeight;
+      this.montageZoomLevel = 1.0;
+      this.showingMontage = true;
+      this.cdr.markForCheck();
       return;
     }
 
@@ -2779,8 +4013,19 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.montageGridCols = response.grid_cols || 0;
         this.montageCellWidth = response.cell_width || 0;
         this.montageCellHeight = response.cell_height || 0;
-        this.montageZoomLevel = 1.0;  // Reset zoom when displaying new montage
+        this.montageZoomLevel = 1.0;
         this.showingMontage = true;
+
+        // Store in cache
+        this.montageCache.set(cacheKey, {
+          preview: this.montagePreview,
+          imageCount: this.montageImageCount,
+          gridRows: this.montageGridRows,
+          gridCols: this.montageGridCols,
+          cellWidth: this.montageCellWidth,
+          cellHeight: this.montageCellHeight,
+        });
+
         console.log('Montage displayed successfully', {
           imageCount: this.montageImageCount,
           rows: this.montageGridRows,
@@ -2803,7 +4048,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   closeMontage(): void {
     this.showingMontage = false;
-    this.montagePreview = null;
+    // Keep montagePreview in memory for cache - don't null it
     this.montageZoomLevel = 1.0;
   }
 
@@ -3049,7 +4294,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     }
 
     // Draw scale line (only if not fully calibrated)
-    if (this.scaleStart && this.scaleEnd && !(this.scaleMm > 0)) {
+    if (this.scaleStart && this.scaleEnd) {
       ctx.beginPath();
       ctx.moveTo(this.scaleStart.x, this.scaleStart.y);
       ctx.lineTo(this.scaleEnd.x, this.scaleEnd.y);
@@ -3069,7 +4314,9 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     }
 
     // Draw scale bar
-    if (this.showScaleBar && this.pxPerMm > 0 && this.scaleBarPx > 0) {
+    if (this.scaleBarOverlayActive && this.scaleBarOverlay) {
+      this.drawScaleBarOverlayToCanvas(ctx, this.scaleBarOverlay, s);
+    } else if (this.showScaleBar && this.pxPerMm > 0 && this.scaleBarPx > 0) {
       const barX = w - this.scaleBarPx - 20 * s;
       const barEndX = w - 20 * s;
       const barY = h - 25 * s;
@@ -3097,7 +4344,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       }
 
       // Label
-      const label = `${this.scaleBarMm} mm`;
+      const label = this.formatScaleBarLabel();
       ctx.font = `${13 * s}px sans-serif`;
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
@@ -3164,15 +4411,26 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   togglePixelTool(): void {
     this.pixelActive = !this.pixelActive;
     if (this.pixelActive) {
-      this.rulerActive = false;
-      this.scaleActive = false;
-      this.rulerDrawingStart = null;
-      this.scaleStart = null;
-      this.pixelCurrentPos = null;
-      this.pixelFrozenPos = null;
-      this.pixelCanvasCache = null;
-      this.pixelImageDataCache = null;
+      this.deactivateMeasurementTools('pixel');
     }
+  }
+
+  private deactivateMeasurementTools(activeTool: 'ruler' | 'scale' | 'pixel' | null = null): void {
+    this.rulerActive = activeTool === 'ruler';
+    this.scaleActive = activeTool === 'scale';
+    this.pixelActive = activeTool === 'pixel';
+
+    this.rulerDrawingStart = null;
+    this.rulerDrawingCurrent = null;
+    this.rulerDrawingDistance = 0;
+    this.scaleStart = null;
+    this.scaleEnd = null;
+    this.scaleCurrentPos = null;
+    this.scaleLinePx = 0;
+    this.pixelCurrentPos = null;
+    this.pixelFrozenPos = null;
+    this.pixelCanvasCache = null;
+    this.pixelImageDataCache = null;
   }
 
   private handlePixelClick(event: MouseEvent): void {

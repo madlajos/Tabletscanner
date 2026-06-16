@@ -74,6 +74,12 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2640": "Érvénytelen képek száma szintenként (pozitív egész szám szükséges).",
     "E2641": "A lépésköz nem lehet nulla.",
     "E2642": "A generált értékek száma nem egyezik a képek számával.",
+    # gray_map
+    "E2601": "Nincsenek feldolgozandó képek vagy a bemeneti adatok hiányoznak.",
+    "E2602": "A kezdő centroidok száma nem egyezik a megadott komponensek számával.",
+    "E2603": "Hiányzó vagy érvénytelen maszkok. Futtassa előbb a ROI vagy maszkoló lépést.",
+    "E2604": "A kép és a maszk mérete nem egyezik.",
+    "E2605": "Érvénytelen numerikus lista a gray_map node paramétereiben.",
     # fit_curve
     "E2701": "Nincsenek eredmények (results) az adatokban.",
     "E2702": "Az X tengely változó nem található.",
@@ -317,6 +323,129 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
                             circle_overlay_b64.append(b64_str)
             side["circle_overlay_base64"] = circle_overlay_b64
             continue
+        elif key in {"gray_source_images", "rgb_source_images"}:
+            # Dual-map original-image previews: encode each as a plain JPEG.
+            import cv2
+            import base64
+            b64_list = []
+            if isinstance(val, list):
+                for img in val:
+                    if img is None or not hasattr(img, 'shape'):
+                        b64_list.append(None)
+                        continue
+                    arr = img
+                    if arr.dtype != np.uint8:
+                        arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+                    if arr.ndim == 2:
+                        arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+                    success, jpeg_buf = cv2.imencode('.jpg', arr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    b64_list.append(base64.b64encode(jpeg_buf.tobytes()).decode('ascii') if success else None)
+            side[f"{key}_base64"] = b64_list
+            continue
+        elif key in {
+            "hard_composite_rgb", "component_map", "soft_membership",
+            "hard_jet", "component_map_jet", "soft_membership_jet",
+            "cls_residual",
+            # dual_map RGB-side equivalents
+            "rgb_hard_composite_rgb", "rgb_component_map", "rgb_soft_membership",
+            "rgb_hard_jet", "rgb_component_map_jet", "rgb_soft_membership_jet",
+        }:
+            import cv2
+            import base64
+
+            # Normalise key so inner routing works for both gray and rgb_ variants
+            _norm_key = key[4:] if key.startswith("rgb_") else key
+
+            encoded_images = []
+            if isinstance(val, list):
+                for img in val:
+                    if img is None or not hasattr(img, 'shape'):
+                        if _norm_key in {"soft_membership_jet", "component_map_jet", "hard_jet"} and isinstance(img, list):
+                            component_images = []
+                            for comp_img in img:
+                                if comp_img is None or not hasattr(comp_img, 'shape'):
+                                    component_images.append(None)
+                                    continue
+
+                                comp_arr = comp_img
+                                if comp_arr.dtype != np.uint8:
+                                    comp_arr = np.clip(comp_arr * 255.0, 0, 255).astype(np.uint8)
+                                success, jpeg_buf = cv2.imencode('.jpg', comp_arr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                if success:
+                                    component_images.append(base64.b64encode(jpeg_buf.tobytes()).decode('ascii'))
+                                else:
+                                    component_images.append(None)
+                            encoded_images.append(component_images)
+                            continue
+
+                        encoded_images.append(None)
+                        continue
+
+                    arr = img
+                    if _norm_key in {"hard_composite_rgb", "hard_jet", "component_map_jet"}:
+                        if arr.dtype != np.uint8:
+                            arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+                    elif _norm_key == "cls_residual":
+                        # CLS reconstruction residual: convert to JET visualization
+                        if arr.ndim == 2 and arr.dtype != np.uint8:
+                            arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+                        if arr.ndim == 2:
+                            # Apply JET colormap
+                            arr = cv2.applyColorMap(arr, cv2.COLORMAP_JET)
+                    elif _norm_key == "component_map":
+                        if arr.ndim == 2:
+                            palette = np.zeros((arr.shape[0], arr.shape[1], 3), dtype=np.uint8)
+                            labels = np.asarray(arr)
+                            palette[labels == 1] = (38, 38, 220)
+                            palette[labels == 2] = (74, 163, 22)
+                            palette[labels == 3] = (235, 99, 37)
+                            arr = palette
+                        elif arr.ndim == 3 and arr.shape[2] == 3 and arr.dtype != np.uint8:
+                            arr = np.clip(arr * 85.0, 0, 255).astype(np.uint8)
+                    elif _norm_key == "soft_membership":
+                        # Store one image per membership component so the frontend can render all centroids.
+                        component_images = []
+                        if arr.ndim == 3 and arr.shape[2] >= 1:
+                            component_count = arr.shape[2]
+                            for comp_idx in range(component_count):
+                                comp_arr = arr[..., comp_idx]
+                                if comp_arr.dtype != np.uint8:
+                                    comp_arr = np.clip(comp_arr * 255.0, 0, 255).astype(np.uint8)
+                                success, jpeg_buf = cv2.imencode('.jpg', comp_arr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                if success:
+                                    component_images.append(base64.b64encode(jpeg_buf.tobytes()).decode('ascii'))
+                                else:
+                                    component_images.append(None)
+                        encoded_images.append(component_images)
+                        continue
+                    elif _norm_key in {"soft_membership_jet", "component_map_jet", "hard_jet"}:
+                        # Keep one encoded image per component so the frontend can render all memberships.
+                        component_images = []
+                        if arr.ndim == 4 and arr.shape[-1] == 3:
+                            component_count = arr.shape[2]
+                            for comp_idx in range(component_count):
+                                comp_arr = arr[..., comp_idx, :]
+                                if comp_arr.dtype != np.uint8:
+                                    comp_arr = np.clip(comp_arr * 255.0, 0, 255).astype(np.uint8)
+                                success, jpeg_buf = cv2.imencode('.jpg', comp_arr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                if success:
+                                    component_images.append(base64.b64encode(jpeg_buf.tobytes()).decode('ascii'))
+                                else:
+                                    component_images.append(None)
+                        encoded_images.extend(component_images)
+                        continue
+
+                    if arr.ndim == 2:
+                        arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+
+                    success, jpeg_buf = cv2.imencode('.jpg', arr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    if success:
+                        encoded_images.append(base64.b64encode(jpeg_buf.tobytes()).decode('ascii'))
+                    else:
+                        encoded_images.append(None)
+
+            side[f"{key}_base64"] = encoded_images
+            continue
         side[key] = _serialize_value(val)
 
     # Copy meta (skip overlay image arrays)
@@ -355,6 +484,7 @@ def execute_pipeline(
     up_to_step: int = -1,
     single_image_index: int = -1,
     omitted_indices: list = None,
+    thumbnail_max_dim: int = 0,
 ) -> PipelineResult:
     """
     Execute pipeline steps 0..up_to_step (inclusive).
@@ -363,6 +493,10 @@ def execute_pipeline(
     (``load_image``) creates the dict; subsequent steps modify it in
     place.  If ``data["error"]`` is set by a processing element, execution
     stops immediately.
+
+    If *thumbnail_max_dim* > 0, images are down-scaled after the
+    ``load_image`` step so that subsequent processing is much faster.
+    Intended for montage / thumbnail preview, not analytical accuracy.
     """
     validation_errors = validate_pipeline(doc)
     if validation_errors:
@@ -413,6 +547,16 @@ def execute_pipeline(
 
         params = _clamp_params(step_inst.step_def_id, step_inst.param_values)
 
+        # Pass single_image_index hint to load_image executor
+        if step_inst.step_def_id == "load_image" and single_image_index >= 0:
+            params = dict(params)
+            params["_single_image_index"] = single_image_index
+
+        # Pass thumbnail_max_dim hint to load_image executor
+        if step_inst.step_def_id == "load_image" and thumbnail_max_dim > 0:
+            params = dict(params) if not isinstance(params, dict) else params
+            params["_thumbnail_max_dim"] = thumbnail_max_dim
+
         try:
             data = executor(data, params)
         except cv2.error as e:
@@ -461,12 +605,19 @@ def execute_pipeline(
                 and single_image_index >= 0
                 and data is not None
                 and data.get("images")):
-            data["_original_count"] = data["count"]
-            data["_original_paths"] = list(data.get("paths", []))
-            idx = min(single_image_index, len(data["images"]) - 1)
-            data["images"] = [data["images"][idx]]
-            data["paths"] = [data["paths"][idx]] if data.get("paths") else []
-            data["count"] = 1
+            if not data.get("_single_image_loaded"):
+                # Fallback: full load happened (e.g. reordering), trim now
+                data["_original_count"] = data["count"]
+                data["_original_paths"] = list(data.get("paths", []))
+                idx = min(single_image_index, len(data["images"]) - 1)
+                data["images"] = [data["images"][idx]]
+                data["paths"] = [data["paths"][idx]] if data.get("paths") else []
+                data["count"] = 1
+                data["_single_image_index"] = idx
+            else:
+                # Already loaded single image in load_image(), just set original paths
+                data["_original_paths"] = list(data.get("paths", []))
+                data["_single_image_index"] = single_image_index
 
         # Inject omitted indices into data dict for curve fitting
         if step_inst.step_def_id == "load_image" and data is not None and omitted_indices:

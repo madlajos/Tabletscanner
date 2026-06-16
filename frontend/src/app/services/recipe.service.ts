@@ -76,6 +76,7 @@ export class RecipeService {
     previewImageIndex: number = 0,
     singleImageOnly: boolean = false,
     omittedIndices: number[] = [],
+    scaleBarOverlay?: Record<string, any> | null,
   ): Observable<PreviewResponse> {
     return this.http.post<PreviewResponse>(`${BASE_URL}/pipeline/preview`, {
       pipeline,
@@ -83,14 +84,20 @@ export class RecipeService {
       preview_image_index: previewImageIndex,
       single_image_only: singleImageOnly,
       omitted_indices: omittedIndices,
+      scale_bar_overlay: scaleBarOverlay ?? undefined,
     });
   }
 
   /** Execute batch image saving for a save_images node. */
-  savePipelineImages(pipeline: PipelineDocument, stepIndex: number): Observable<SaveImagesResponse> {
+  savePipelineImages(
+    pipeline: PipelineDocument,
+    stepIndex: number,
+    scaleBarOverlay?: Record<string, any> | null,
+  ): Observable<SaveImagesResponse> {
     return this.http.post<SaveImagesResponse>(`${BASE_URL}/pipeline/save-images`, {
       pipeline,
       step_index: stepIndex,
+      scale_bar_overlay: scaleBarOverlay ?? undefined,
     });
   }
 

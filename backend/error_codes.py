@@ -201,6 +201,9 @@ class ErrorCode:
     PE_CIRC_BAD_KSIZE = "E3605"
     PE_CIRC_NULL_IMG = "E3606"
     PE_CIRC_BAD_SHAPE = "E3607"
+    PE_CIRC_BAD_RADIUS_MULTIPLIER = "E3608"
+    PE_CIRC_BAD_MASK_BACKGROUND = "E3609"
+    PE_CIRC_BAD_DETECT_SCALE = "E3610"
 
 def load_error_messages():
     file_path = os.path.join(os.path.dirname(__file__), "error_messages.json")

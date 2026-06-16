@@ -38,10 +38,16 @@ from proc_elements import (
     robust_stretch_gamma as _pe_robust_stretch_gamma,
     advanced_illumin_corr as _pe_advanced_illumin_corr,
     mask_roi as _pe_mask_roi,
+    scale_bar_overlay as _pe_scale_bar_overlay,
     resize_images as _pe_resize_images,
     detect_particles as _pe_detect_particles,
     histogram_pca as _pe_histogram_pca,
     detect_circles as _pe_detect_circles,
+    gray_map as _pe_gray_map,
+    rgb_gray_map as _pe_rgb_gray_map,
+    dual_map as _pe_dual_map,
+    rgb_cls_reference_mapping as _pe_rgb_cls_reference_mapping,
+    store_as_gray_images as _pe_store_as_gray_images,
     characterize_particles as _pe_characterize_particles,
     color_threshold as _pe_color_threshold,
 )
@@ -57,6 +63,33 @@ STEP_EXECUTORS: dict[str, callable] = {}
 def _register(defn: StepDefinition, executor):
     STEP_DEFINITIONS[defn.id] = defn
     STEP_EXECUTORS[defn.id] = executor
+
+
+def _parse_float_sequence_param(raw_value, default_values, param_name, allowed_lengths=None):
+    if raw_value is None or raw_value == "":
+        return tuple(default_values), None
+
+    if isinstance(raw_value, (list, tuple)):
+        raw_items = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return tuple(default_values), None
+        text = text.strip("[]()")
+        raw_items = [part.strip() for part in text.split(",") if part.strip()]
+
+    try:
+        values = tuple(float(item) for item in raw_items)
+    except (TypeError, ValueError):
+        return None, "E2605"
+
+    if allowed_lengths is None:
+        allowed_lengths = (len(default_values),)
+
+    if len(values) not in allowed_lengths:
+        return None, "E2602" if param_name == "initial_centroids" else "E2605"
+
+    return values, None
 
 
 # ---------------------------------------------------------------------------
@@ -89,17 +122,25 @@ def _exec_load_image(data: dict, params: dict) -> dict:
         data = create_data()
         data["error"] = "E2002"
         return data
-    result = _pe_load_image(path)
-    # Apply custom image order if specified
+    single_idx = params.get("_single_image_index", -1)
+    thumb_dim = params.get("_thumbnail_max_dim", 0)
+    # When reordering is active, we need all images to reorder, then trim in engine
     order_str = params.get("file_order", "")
+    if order_str and single_idx >= 0:
+        # Load all images for reordering, engine will trim afterwards
+        result = _pe_load_image(path, thumbnail_max_dim=thumb_dim)
+    else:
+        result = _pe_load_image(path, single_image_index=single_idx, thumbnail_max_dim=thumb_dim)
+    # Apply custom image order if specified
     if order_str and result.get("images") and not result.get("error"):
         try:
             indices = [int(x.strip()) for x in order_str.split(",") if x.strip()]
-            n = len(result["images"])
+            n = len(result["paths"])
             # Validate indices
             if indices and all(0 <= i < n for i in indices) and len(indices) == n:
-                result["images"] = [result["images"][i] for i in indices]
                 result["paths"] = [result["paths"][i] for i in indices]
+                if not result.get("_single_image_loaded"):
+                    result["images"] = [result["images"][i] for i in indices]
         except (ValueError, IndexError):
             pass  # Ignore invalid order, keep original
     return result
@@ -1010,7 +1051,68 @@ _register(_advanced_illum_def, _exec_advanced_illum)
 
 
 # ---------------------------------------------------------------------------
-# 19. ROI Mask  (draw_roi.py)
+# 19. Scale Bar Overlay  (scale_bar.py)
+# ---------------------------------------------------------------------------
+_scale_bar_overlay_def = StepDefinition(
+    id="scale_bar_overlay",
+    name="Skála feliratozás",
+    category="adjustment",
+    description="Draggable scale bar overlay a képre, testre szabható betűtípussal, betűmérettel és pozícióval.",
+    icon="straighten",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="pixels_per_mm", label="Pixels per mm", type="float",
+                    default=0.0, min=0.0, max=100000.0, step=0.01,
+                    description="A kalibrált pixels/mm érték. Ha 0, a node nem rajzol skálát."),
+        ParamSchema(name="bar_length_mm", label="Skála hossza (mm)", type="float",
+                    default=0.0, min=0.0, max=100000.0, step=1,
+                    description="0 esetén automatikus, szép érték választódik a képméret és a kalibráció alapján."),
+        ParamSchema(name="label_unit", label="Felirat mértékegysége", type="enum",
+                default="mm", options=["mm", "cm", "um"],
+                description="A skála feliratának megjelenítési egysége."),
+        ParamSchema(name="position_x", label="Pozíció X", type="int",
+                    default=-1, min=-1, max=100000, step=1,
+                    description="A skáladoboz bal felső sarka. -1 esetén automatikusan jobb alsó sarokba kerül."),
+        ParamSchema(name="position_y", label="Pozíció Y", type="int",
+                    default=-1, min=-1, max=100000, step=1,
+                    description="A skáladoboz bal felső sarka. -1 esetén automatikusan jobb alsó sarokba kerül."),
+        ParamSchema(name="font_family", label="Betűtípus", type="enum",
+                    default="sans", options=["sans", "serif", "mono", "complex", "script"],
+                    description="A felirat rajzolásához használt OpenCV betűtípus."),
+        ParamSchema(name="font_size", label="Betűméret", type="int",
+                    default=24, min=8, max=120, step=1),
+        ParamSchema(name="font_thickness", label="Betűvastagság", type="int",
+                    default=1, min=1, max=8, step=1),
+        ParamSchema(name="bar_thickness", label="Skála vonal vastagság", type="int",
+                    default=3, min=1, max=12, step=1),
+        ParamSchema(name="box_padding", label="Keret belső margó", type="int",
+                    default=14, min=0, max=80, step=1),
+        ParamSchema(name="text_gap", label="Felirat távolság", type="int",
+                    default=8, min=0, max=50, step=1),
+        ParamSchema(name="background_opacity", label="Háttér átlátszóság", type="float",
+                    default=0.55, min=0.0, max=1.0, step=0.05),
+        ParamSchema(name="bar_color", label="Vonal színe", type="enum",
+                    default="white", options=["white", "black", "yellow"]),
+        ParamSchema(name="text_color", label="Felirat színe", type="enum",
+                    default="white", options=["white", "black", "yellow"]),
+        ParamSchema(name="background_color", label="Háttér színe", type="enum",
+                    default="black", options=["black", "white"]),
+        ParamSchema(name="show_background", label="Háttér megjelenítése", type="bool",
+                    default=True),
+    ],
+)
+
+
+def _exec_scale_bar_overlay(data: dict, params: dict) -> dict:
+    return _pe_scale_bar_overlay(data, **params)
+
+
+_register(_scale_bar_overlay_def, _exec_scale_bar_overlay)
+
+
+# ---------------------------------------------------------------------------
+# 20. ROI Mask  (draw_roi.py)
 # ---------------------------------------------------------------------------
 _mask_roi_def = StepDefinition(
     id="mask_rect_roi",
@@ -1022,7 +1124,7 @@ _mask_roi_def = StepDefinition(
     output_type=DataType.IMAGE,
     params=[
         ParamSchema(name="roi_type", label="ROI típusa", type="enum",
-                    default="rect", options=["rect", "ellipse", "polygon"]),
+                        default="rect", options=["rect", "ellipse", "circle", "polygon"]),
         # Rectangle params
         ParamSchema(name="roi_x", label="X kezdőpont", type="int",
                     default=0, min=0, max=100000, step=1),
@@ -1041,12 +1143,36 @@ _mask_roi_def = StepDefinition(
                     default=0, min=0, max=100000, step=1),
         ParamSchema(name="roi_ry", label="Sugár Y", type="int",
                     default=0, min=0, max=100000, step=1),
+        # Rotation angle (degrees, applies to rect and ellipse)
+        ParamSchema(name="roi_angle", label="Forgatás (°)", type="float",
+                    default=0.0, min=-180.0, max=180.0, step=0.1, required=False),
         # Polygon params (JSON string of [{x,y}, ...])
         ParamSchema(name="roi_points", label="Pontok (JSON)", type="string",
                     default="[]"),
+        ParamSchema(name="output_mode", label="Kimenet módja", type="enum",
+                default="mask", options=["mask", "crop"],
+                description="Mask mód: a ROI-n kívüli területet kezeli. Crop mód: az eredményt a ROI határoló téglalapjára vágja."),
+        ParamSchema(name="apply_mask", label="Alkalmaz maszkként", type="bool",
+                    default=True,
+                    description="Ha engedélyezve: a ROI-n kívüli terület lesz fekete/fehér."),
+        ParamSchema(name="shape_only", label="Csak körvonal", type="bool",
+            default=False,
+            description="Ha engedélyezve: a ROI csak körvonalként jelenik meg, kitöltés nélkül."),
+        ParamSchema(name="shape_outline_color", label="Körvonal színe", type="enum",
+                default="fehér", options=["fekete", "fehér"],
+                description="A körvonal színe csak körvonal mód esetén."),
+        ParamSchema(name="shape_outline_thickness", label="Körvonal vastagsága", type="int",
+                default=2, min=1, max=100, step=1,
+                description="A körvonal vastagsága pixelben csak körvonal mód esetén."),
         ParamSchema(name="background_color", label="Háttér színe", type="enum",
                     default="fekete", options=["fekete", "fehér"],
-                    description="A ROI-n kívüli terület színe"),
+                    description="A ROI-n kívüli terület színe (csak maszk mód esetén aktív)"),
+        ParamSchema(name="invert_mask", label="Maszk invertálása", type="bool",
+                    default=False,
+                    description="Ha engedélyezve: ROI-n belül háttér, ROI-n kívül eredeti kép (csak maszk mód esetén aktív)"),
+        ParamSchema(name="roi_overrides", label="Képenkénti ROI", type="string",
+                    default="{}",
+                    description="Képenkénti ROI felülírások (JSON, automatikusan kezelve)"),
     ],
     side_output_types={"roi_masks": "MASK"},
 )
@@ -1055,48 +1181,104 @@ _mask_roi_def = StepDefinition(
 def _exec_mask_roi(data: dict, params: dict) -> dict:
     import json as _json
     roi_type = params.get("roi_type", "rect")
+    roi_angle = float(params.get("roi_angle", 0.0))
 
-    if roi_type == "rect":
-        w = int(params.get("roi_width", 0))
-        h = int(params.get("roi_height", 0))
-        if w <= 0 or h <= 0:
-            return data  # No ROI defined
-        roi = {
-            "type": "rect",
-            "x": int(params.get("roi_x", 0)),
-            "y": int(params.get("roi_y", 0)),
-            "width": w,
-            "height": h,
-        }
-    elif roi_type == "ellipse":
-        rx = int(params.get("roi_rx", 0))
-        ry = int(params.get("roi_ry", 0))
-        if rx <= 0 or ry <= 0:
-            return data  # No ROI defined
-        roi = {
-            "type": "ellipse",
-            "cx": int(params.get("roi_cx", 0)),
-            "cy": int(params.get("roi_cy", 0)),
-            "rx": rx,
-            "ry": ry,
-        }
-    else:
-        pts_raw = params.get("roi_points", "[]")
-        try:
-            pts = _json.loads(pts_raw) if isinstance(pts_raw, str) else pts_raw
-        except Exception:
-            pts = []
-        if not pts or len(pts) < 3:
-            return data  # No ROI defined
-        roi = {
-            "type": "polygon",
-            "points": [{'x': int(p.get('x', 0)), 'y': int(p.get('y', 0))} for p in pts],
-        }
+    # Parse per-image overrides
+    overrides_raw = params.get("roi_overrides", "{}")
+    try:
+        overrides = _json.loads(overrides_raw) if isinstance(overrides_raw, str) else (overrides_raw or {})
+    except Exception:
+        overrides = {}
+
+    def _build_roi_from_params(p):
+        """Build a single ROI dict from a flat param dict."""
+        t = p.get("roi_type", roi_type)
+        angle = float(p.get("roi_angle", roi_angle))
+        if t == "rect":
+            w = int(p.get("roi_width", 0))
+            h = int(p.get("roi_height", 0))
+            if w <= 0 or h <= 0:
+                return None
+            return {
+                "type": "rect",
+                "x": int(p.get("roi_x", 0)),
+                "y": int(p.get("roi_y", 0)),
+                "width": w,
+                "height": h,
+                "angle": angle,
+            }
+        elif t in ("ellipse", "circle"):
+            rx = int(p.get("roi_rx", 0))
+            ry = int(p.get("roi_ry", 0))
+            if t == "circle":
+                r = int(p.get("roi_r", p.get("roi_radius", 0)))
+                if r > 0:
+                    rx = r
+                    ry = r
+                elif rx > 0 or ry > 0:
+                    r = max(rx, ry)
+                    rx = r
+                    ry = r
+            if rx <= 0 or ry <= 0:
+                return None
+            return {
+                "type": "ellipse",
+                "cx": int(p.get("roi_cx", 0)),
+                "cy": int(p.get("roi_cy", 0)),
+                "rx": rx,
+                "ry": ry,
+                "angle": angle,
+            }
+        else:
+            pts_raw = p.get("roi_points", "[]")
+            try:
+                pts = _json.loads(pts_raw) if isinstance(pts_raw, str) else pts_raw
+            except Exception:
+                pts = []
+            if not pts or len(pts) < 3:
+                return None
+            return {
+                "type": "polygon",
+                "points": [{'x': int(pt.get('x', 0)), 'y': int(pt.get('y', 0))} for pt in pts],
+                "angle": angle,
+            }
+
+    # Build default ROI from top-level params
+    default_roi = _build_roi_from_params(params)
+
+    # Build per-image ROI list
+    image_count = data.get("count", 0) if data else 0
+    single_img_idx = data.get("_single_image_index", -1) if data else -1
+    roi_list = []
+    for i in range(image_count):
+        # In single-image preview mode, use the original image index for override lookup
+        orig_idx = single_img_idx if (single_img_idx >= 0 and image_count == 1) else i
+        img_key = str(orig_idx)
+        if img_key in overrides and overrides[img_key]:
+            override_roi = _build_roi_from_params(overrides[img_key])
+            roi_list.append(override_roi if override_roi else default_roi)
+        else:
+            roi_list.append(default_roi)
+
+    # If no valid ROI at all, pass through
+    if not any(roi_list):
+        return data
 
     bg_color_str = params.get("background_color", "fekete")
     background_color = 255 if bg_color_str == "fehér" else 0
+    output_mode = params.get("output_mode", "mask")
+    apply_mask = params.get("apply_mask", True)
+    invert_mask = params.get("invert_mask", False)
+    shape_only = params.get("shape_only", False)
+    shape_outline_color = params.get("shape_outline_color", "fehér")
+    shape_outline_thickness = int(params.get("shape_outline_thickness", 2))
 
-    return _pe_mask_roi(data, roi=roi, background_color=background_color)
+    return _pe_mask_roi(data, roi_list=roi_list, background_color=background_color,
+                        apply_mask=apply_mask, invert_mask=invert_mask,
+                        shape_only=shape_only,
+                        shape_outline_color=shape_outline_color,
+                        shape_outline_thickness=shape_outline_thickness,
+                        output_mode=output_mode)
 
 
 _register(_mask_roi_def, _exec_mask_roi)
@@ -1304,12 +1486,18 @@ _detect_circles_def = StepDefinition(
         ParamSchema(name="dp", label="Felbontás arány", type="float",
                     default=1.2, min=0.5, max=5.0, step=0.1,
                     description="Az akkumulátor felbontásának inverz aránya"),
-        ParamSchema(name="min_radius", label="Min. sugár", type="int",
-                    default=20, min=1, max=5000, step=1,
-                    description="Minimális kör sugár pixelben"),
-        ParamSchema(name="max_radius", label="Max. sugár", type="int",
-                    default=25, min=1, max=5000, step=1,
-                    description="Maximális kör sugár pixelben"),
+        ParamSchema(name="detect_scale", label="Detektálási méretarány", type="float",
+                    default=1.0, min=0.25, max=1.0, step=0.05,
+                    description="A kördetektálásra használt kép méretezési aránya. 1.0 = teljes méret, kisebb érték = gyorsabb futás, de finomhangolást igényelhet."),
+        ParamSchema(name="edge_threshold", label="Élküszöb", type="float",
+                    default=100.0, min=1.0, max=255.0, step=1.0,
+                    description="A Canny élkereső felső küszöbe. Kisebb érték érzékenyebb a halványabb, kevésbé éles élekre, de nagyobb méretarány mellett lassabb lehet."),
+        ParamSchema(name="min_diameter", label="Min. átmérő", type="int",
+                    default=40, min=1, max=10000, step=1,
+                    description="Minimális kör átmérő pixelben, a teljes felbontású képre értendő."),
+        ParamSchema(name="max_diameter", label="Max. átmérő", type="int",
+                    default=50, min=1, max=10000, step=1,
+                    description="Maximális kör átmérő pixelben, a teljes felbontású képre értendő."),
         ParamSchema(name="radius_multiplier", label="Sugár szorzó", type="float",
                     default=1.0, min=0.1, max=5.0, step=0.1,
                     description="A detektált körök sugarának szorzója (1.0 = nincs módosítás, 0.8 = 80%, 1.2 = 120%)"),
@@ -1334,24 +1522,26 @@ _detect_circles_def = StepDefinition(
 
 def _exec_detect_circles(data: dict, params: dict) -> dict:
     dp = float(params.get("dp", 1.2))
-    min_radius = int(params.get("min_radius", 20))
-    max_radius = int(params.get("max_radius", 25))
+    detect_scale = float(params.get("detect_scale", 1.0))
+    edge_threshold = float(params.get("edge_threshold", 100.0))
+    min_diameter = int(params.get("min_diameter", 40))
+    max_diameter = int(params.get("max_diameter", 50))
     radius_multiplier = float(params.get("radius_multiplier", 1.0))
     apply_mask = params.get("apply_mask", False)
     mask_background = params.get("mask_background", "black")
     invert_mask = params.get("invert_mask", False)
     polarity = params.get("polarity", "dark")
-    # These parameters use fixed defaults (not configurable from UI)
+    # These parameters keep stable defaults; only the edge threshold is exposed in the UI.
     min_dist = 20
     blur_ksize = 5
-    edge_threshold = 100
     accumulator_threshold = 20
     return _pe_detect_circles(
         data,
         dp=dp,
         min_dist=min_dist,
-        min_radius=min_radius,
-        max_radius=max_radius,
+        min_diameter=min_diameter,
+        max_diameter=max_diameter,
+        detect_scale=detect_scale,
         blur_ksize=blur_ksize,
         edge_threshold=edge_threshold,
         accumulator_threshold=accumulator_threshold,
@@ -1364,6 +1554,453 @@ def _exec_detect_circles(data: dict, params: dict) -> dict:
 
 
 _register(_detect_circles_def, _exec_detect_circles)
+
+
+# ---------------------------------------------------------------------------
+# 24/b. Gray Map  (gray_map.py)
+# ---------------------------------------------------------------------------
+_gray_map_def = StepDefinition(
+    id="gray_map",
+    name="Szürke térkép",
+    category="analysis",
+    description="Fixed-centroid soft/hard szürke térkép körmaszkolt képeken, 3 vagy 4 komponenssel és JET kimenetekkel.",
+    icon="gradient",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="initial_centroids", label="Kezdő centroidok", type="string",
+                    default="140,155,0", required=False,
+                    description="Három vagy négy, vesszővel elválasztott intenzitásérték 0 és 255 között"),
+        ParamSchema(name="hard_weights", label="Hard súlyok", type="string",
+                    default="2,1,1", required=False,
+                    description="Három, vesszővel elválasztott súly a hard kompozithoz"),
+        ParamSchema(name="hard_threshold", label="Hard küszöb", type="float",
+                    default=0.10, min=0.0, max=1.0, step=0.01),
+        ParamSchema(name="c1_threshold", label="C1 küszöb", type="float",
+                    default=0.29, min=0.0, max=1.0, step=0.01),
+        ParamSchema(name="c2_threshold", label="C2 küszöb", type="float",
+                    default=0.55, min=0.0, max=1.0, step=0.01),
+        ParamSchema(name="debug", label="Debug", type="bool",
+                    default=False, required=False),
+    ],
+    side_output_types={
+        "soft_membership": "SCALAR",
+        "hard_composite_rgb": "SCALAR",
+        "component_map": "SCALAR",
+        "soft_membership_jet": "SCALAR",
+        "hard_jet": "SCALAR",
+        "component_map_jet": "SCALAR",
+        "hard_index_map": "SCALAR",
+        "x_um": "SCALAR",
+        "y_um": "SCALAR",
+        "circle_info": "SCALAR",
+    },
+)
+
+
+def _exec_gray_map(data: dict, params: dict) -> dict:
+    initial_centroids, error_code = _parse_float_sequence_param(
+        params.get("initial_centroids"),
+        (140, 155, 0),
+        "initial_centroids",
+        allowed_lengths=(3, 4),
+    )
+    if error_code:
+        data["error"] = error_code
+        return data
+
+    if any(value < 0.0 or value > 255.0 for value in initial_centroids):
+        data["error"] = "E2605"
+        return data
+
+    initial_centroids = tuple(value / 255.0 for value in initial_centroids)
+
+    k = len(initial_centroids)
+
+    hard_weights, error_code = _parse_float_sequence_param(
+        params.get("hard_weights"),
+        (2, 1, 1),
+        "hard_weights",
+    )
+    if error_code:
+        data["error"] = error_code
+        return data
+
+    return _pe_gray_map(
+        data,
+        k=k,
+        initial_centroids=initial_centroids,
+        hard_weights=hard_weights,
+        hard_threshold=float(params.get("hard_threshold", 0.10)),
+        c1_threshold=float(params.get("c1_threshold", 0.29)),
+        c2_threshold=float(params.get("c2_threshold", 0.55)),
+        debug=bool(params.get("debug", False)),
+    )
+
+
+_register(_gray_map_def, _exec_gray_map)
+
+
+# ---------------------------------------------------------------------------
+# 24/c. RGB–Grayscale Map  (rgb_gray_map.py)
+# ---------------------------------------------------------------------------
+_rgb_gray_map_def = StepDefinition(
+    id="rgb_gray_map",
+    name="RGB-Szürke térkép",
+    category="analysis",
+    description=(
+        "Komponens-térképezés RGB és/vagy szürke referenciaértékek alapján. "
+        "Három üzemmód: rgb_cluster_gray_measure (BGR alapú hozzárendelés, "
+        "szürke intenzitás alapú soft membership), gray_cluster (csak szürke), "
+        "rgb_gray_combined (BGR + szürke súlyozott kombinációja)."
+    ),
+    icon="palette",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(
+            name="mode", label="Üzemmód", type="string",
+            default="rgb_cluster_gray_measure",
+            description=(
+                "rgb_cluster_gray_measure | gray_cluster | rgb_gray_combined"
+            ),
+        ),
+        ParamSchema(
+            name="rgb_references", label="BGR referenciák", type="string",
+            default="0,0,255,0,255,0,255,0,0",
+            description=(
+                "Lapos lista: B1,G1,R1,B2,G2,R2,... (OpenCV BGR sorrend, 0-255). "
+                "rgb_cluster_gray_measure és rgb_gray_combined módban szükséges."
+            ),
+        ),
+        ParamSchema(
+            name="gray_references", label="Szürke referenciák", type="string",
+            default="85,170,255", required=False,
+            description=(
+                "Vesszővel elválasztott szürke értékek (0-255). "
+                "gray_cluster és rgb_gray_combined módban szükséges."
+            ),
+        ),
+        ParamSchema(
+            name="reference_indices", label="Referencia indexek", type="string",
+            default="", required=False,
+            description=(
+                "Opcionális részhalmaz, pl. '0,1,3'. "
+                "Ha üres, az összes referencia szerepel."
+            ),
+        ),
+        ParamSchema(
+            name="rgb_weight", label="BGR súly", type="float",
+            default=1.0, min=0.0, max=10.0, step=0.1,
+            description="Csak rgb_gray_combined módban hat.",
+        ),
+        ParamSchema(
+            name="gray_weight", label="Szürke súly", type="float",
+            default=1.0, min=0.0, max=10.0, step=0.1,
+            description="Csak rgb_gray_combined módban hat.",
+        ),
+        ParamSchema(
+            name="sort_centroids", label="Rendezés lumineszcencia szerint",
+            type="bool", default=True,
+        ),
+        ParamSchema(
+            name="debug", label="Debug", type="bool", default=False,
+        ),
+    ],
+    side_output_types={
+        "soft_membership":     "SCALAR",
+        "soft_membership_jet": "SCALAR",
+        "component_map":       "SCALAR",
+        "component_map_jet":   "SCALAR",
+        "hard_index_map":      "SCALAR",
+        "hard_composite_rgb":  "SCALAR",
+        "hard_jet":            "SCALAR",
+    },
+)
+
+
+def _exec_rgb_gray_map(data: dict, params: dict) -> dict:
+    mode = str(params.get("mode", "rgb_cluster_gray_measure")).strip()
+
+    def _parse_floats(raw):
+        """'1,2,3' → tuple of floats, or (None, error_code)."""
+        s = str(raw or "").strip()
+        if not s:
+            return None, None
+        try:
+            return tuple(float(x.strip()) for x in s.replace(";", ",").split(",") if x.strip()), None
+        except ValueError:
+            return None, "E2602"
+
+    rgb_raw, gray_raw = params.get("rgb_references", ""), params.get("gray_references", "")
+
+    rgb_references, err = _parse_floats(rgb_raw)
+    if err:
+        data["error"] = err
+        return data
+
+    gray_references, err = _parse_floats(gray_raw)
+    if err:
+        data["error"] = err
+        return data
+
+    idx_raw = str(params.get("reference_indices", "") or "").strip()
+    reference_indices = None
+    if idx_raw:
+        try:
+            reference_indices = tuple(
+                int(x.strip()) for x in idx_raw.split(",") if x.strip()
+            )
+        except ValueError:
+            data["error"] = "E2602"
+            return data
+
+    return _pe_rgb_gray_map(
+        data,
+        mode=mode,
+        rgb_references=rgb_references,
+        gray_references=gray_references,
+        reference_indices=reference_indices,
+        rgb_weight=float(params.get("rgb_weight", 1.0)),
+        gray_weight=float(params.get("gray_weight", 1.0)),
+        sort_centroids=bool(params.get("sort_centroids", True)),
+        debug=bool(params.get("debug", False)),
+    )
+
+
+_register(_rgb_gray_map_def, _exec_rgb_gray_map)
+
+
+# ---------------------------------------------------------------------------
+# 24/d. Store as Gray Images  (store_gray_images.py)
+# ---------------------------------------------------------------------------
+_store_gray_images_def = StepDefinition(
+    id="store_as_gray_images",
+    name="Szürke képek mentése",
+    category="analysis",
+    description=(
+        "Az aktuális képeket eltárolja data['gray_images']-ként, hogy egy "
+        "következő 'Kép betöltése' lépés felülírhassa a fő képsorozatot, "
+        "miközben az rgb_gray_map node hozzáférjen mindkettőhöz."
+    ),
+    icon="save",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(
+            name="convert_to_gray", label="Konvertálás szürkére", type="bool",
+            default=False,
+            description=(
+                "Ha bekapcsolt, az eltárolt kép luminancia-csatornára "
+                "lesz konvertálva (float [0,1])."
+            ),
+        ),
+    ],
+)
+
+
+def _exec_store_as_gray_images(data: dict, params: dict) -> dict:
+    return _pe_store_as_gray_images(
+        data,
+        convert_to_gray=bool(params.get("convert_to_gray", False)),
+    )
+
+
+_register(_store_gray_images_def, _exec_store_as_gray_images)
+
+
+# ---------------------------------------------------------------------------
+# 24/e. Dual Map  (dual_map.py)
+# ---------------------------------------------------------------------------
+_dual_map_def = StepDefinition(
+    id="dual_map",
+    name="Kettős térkép",
+    category="analysis",
+    description=(
+        "Szürke + RGB képpár egyidejű komponens-térképezése. "
+        "A node automatikusan azonosítja melyik kép szürke és melyik RGB, "
+        "majd mindkettőre lefuttatja a megfelelő komponens-hozzárendelési algoritmust. "
+        "Kereszt-maszkolás: az egyik oldal hard-komponens-térképe maszkként "
+        "alkalmazható a másik oldalra."
+    ),
+    icon="compare",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(
+            name="initial_centroids", label="Szürke centroidok", type="string",
+            default="140,155,0",
+            description="Vesszővel elválasztott szürke intenzitások (0-255)",
+        ),
+        ParamSchema(
+            name="rgb_references", label="BGR referenciák", type="string",
+            default="0,0,255,0,255,0,255,0,0",
+            description="Lapos lista: B1,G1,R1,B2,G2,R2,... (0-255)",
+        ),
+        ParamSchema(
+            name="hard_weights", label="Hard súlyok (szürke)", type="string",
+            default="2,1,1", required=False,
+        ),
+        ParamSchema(
+            name="hard_threshold", label="Hard küszöb", type="float",
+            default=0.10, min=0.0, max=1.0, step=0.01,
+        ),
+        ParamSchema(
+            name="c1_threshold", label="C1 küszöb", type="float",
+            default=0.29, min=0.0, max=1.0, step=0.01,
+        ),
+        ParamSchema(
+            name="c2_threshold", label="C2 küszöb", type="float",
+            default=0.55, min=0.0, max=1.0, step=0.01,
+        ),
+        ParamSchema(
+            name="sort_centroids", label="Rendezés lumineszcencia szerint",
+            type="bool", default=True,
+        ),
+        ParamSchema(
+            name="auto_detect_channels", label="Automatikus szürke/RGB detektálás",
+            type="bool", default=True,
+            description=(
+                "Ha kikapcsolt, gray_image_indices és rgb_image_indices "
+                "paramétereket kell megadni."
+            ),
+        ),
+        ParamSchema(
+            name="color_channel_threshold", label="Szín detektálási küszöb",
+            type="float", default=5.0, min=0.0, max=100.0, step=1.0,
+            description=(
+                "Átlagos BGR csatorna-különbség küszöbe a szürke/szín azonosításhoz."
+            ),
+        ),
+        ParamSchema(
+            name="gray_image_indices", label="Szürke kép indexek", type="string",
+            default="", required=False,
+            description="Pl. '0,2' — csak auto_detect=False esetén",
+        ),
+        ParamSchema(
+            name="rgb_image_indices", label="RGB kép indexek", type="string",
+            default="", required=False,
+            description="Pl. '1,3' — csak auto_detect=False esetén",
+        ),
+        ParamSchema(
+            name="cross_mask", label="Kereszt-maszkolás", type="string",
+            default="none",
+            description="none | gray_masks_rgb | rgb_masks_gray",
+        ),
+        ParamSchema(
+            name="cross_mask_component", label="Maszk komponens sorszáma",
+            type="float", default=1.0, min=1.0, max=6.0, step=1.0,
+            description="Melyik komponens hard-térképét alkalmazza maszkként (1-tól számozva)",
+        ),
+        ParamSchema(
+            name="sub_initial_centroids", label="Sub szürke centroidok", type="string",
+            default="", required=False,
+            description=(
+                "Ha megadott + cross_mask=rgb_masks_gray: az RGB komponens N területén belül "
+                "újrafuttatja a szürke osztályozást ezekkel a centroidokkal. "
+                "Pl. '100,160' a teljes 3-centroidos besorolás 1 komponensének al-osztályozásához."
+            ),
+        ),
+        ParamSchema(
+            name="sub_rgb_references", label="Sub BGR referenciák", type="string",
+            default="", required=False,
+            description=(
+                "Ha megadott + cross_mask=gray_masks_rgb: a szürke komponens N területén belül "
+                "újrafuttatja az RGB osztályozást ezekkel a referenciákkal. "
+                "Pl. '0,0,255,255,0,0' 2 sub-komponenshez."
+            ),
+        ),
+        ParamSchema(
+            name="debug", label="Debug", type="bool", default=False,
+        ),
+    ],
+    side_output_types={
+        "soft_membership":          "SCALAR",
+        "soft_membership_jet":      "SCALAR",
+        "component_map":            "SCALAR",
+        "component_map_jet":        "SCALAR",
+        "hard_index_map":           "SCALAR",
+        "hard_composite_rgb":       "SCALAR",
+        "hard_jet":                 "SCALAR",
+        "rgb_soft_membership":      "SCALAR",
+        "rgb_soft_membership_jet":  "SCALAR",
+        "rgb_component_map":        "SCALAR",
+        "rgb_component_map_jet":    "SCALAR",
+        "rgb_hard_index_map":       "SCALAR",
+        "rgb_hard_composite_rgb":   "SCALAR",
+        "rgb_hard_jet":             "SCALAR",
+        "gray_source_images":       "SCALAR",
+        "rgb_source_images":        "SCALAR",
+        "sub_soft_membership_jet":  "SCALAR",
+        "sub_component_map_jet":    "SCALAR",
+        "sub_hard_jet":             "SCALAR",
+        "sub_hard_composite_rgb":   "SCALAR",
+        "sub_rgb_soft_membership_jet": "SCALAR",
+        "sub_rgb_component_map_jet":   "SCALAR",
+        "sub_rgb_hard_jet":            "SCALAR",
+        "sub_rgb_hard_composite_rgb":  "SCALAR",
+    },
+)
+
+
+def _exec_dual_map(data: dict, params: dict) -> dict:
+    initial_centroids, err = _parse_float_sequence_param(
+        params.get("initial_centroids"), (140, 155, 0), "initial_centroids",
+        allowed_lengths=(2, 3, 4, 5, 6),
+    )
+    if err:
+        data["error"] = err
+        return data
+
+    initial_centroids = tuple(v / 255.0 for v in initial_centroids)
+
+    hard_weights, err = _parse_float_sequence_param(
+        params.get("hard_weights"), (2, 1, 1), "hard_weights",
+    )
+    if err:
+        data["error"] = err
+        return data
+
+    def _parse_ints(raw):
+        s = str(raw or "").strip()
+        if not s:
+            return None
+        try:
+            return tuple(int(x.strip()) for x in s.split(",") if x.strip())
+        except ValueError:
+            return None
+
+    def _parse_floats_flat(raw):
+        s = str(raw or "").strip()
+        if not s:
+            return None
+        try:
+            return tuple(float(x.strip()) for x in s.replace(";", ",").split(",") if x.strip())
+        except ValueError:
+            return None
+
+    return _pe_dual_map(
+        data,
+        initial_centroids=initial_centroids,
+        rgb_references=_parse_floats_flat(params.get("rgb_references", "")),
+        sub_initial_centroids=_parse_floats_flat(params.get("sub_initial_centroids", "")),
+        sub_rgb_references=_parse_floats_flat(params.get("sub_rgb_references", "")),
+        hard_weights=hard_weights,
+        hard_threshold=float(params.get("hard_threshold", 0.10)),
+        c1_threshold=float(params.get("c1_threshold", 0.29)),
+        c2_threshold=float(params.get("c2_threshold", 0.55)),
+        sort_centroids=bool(params.get("sort_centroids", True)),
+        auto_detect_channels=bool(params.get("auto_detect_channels", True)),
+        color_channel_threshold=float(params.get("color_channel_threshold", 5.0)),
+        gray_image_indices=_parse_ints(params.get("gray_image_indices", "")),
+        rgb_image_indices=_parse_ints(params.get("rgb_image_indices", "")),
+        cross_mask=str(params.get("cross_mask", "none")).strip(),
+        cross_mask_component=int(float(params.get("cross_mask_component", 1))),
+        debug=bool(params.get("debug", False)),
+    )
+
+
+_register(_dual_map_def, _exec_dual_map)
 
 
 # ---------------------------------------------------------------------------
@@ -1530,3 +2167,170 @@ def _exec_color_thresh(data: dict, params: dict) -> dict:
 
 
 _register(_color_thresh_def, _exec_color_thresh)
+
+
+# ---------------------------------------------------------------------------
+# 27. RGB CLS Reference Mapping (cls_like.py)
+# ---------------------------------------------------------------------------
+_rgb_cls_reference_mapping_def = StepDefinition(
+    id="rgb_cls_reference_mapping",
+    name="RGB CLS Referencia Leképezés",
+    category="analysis",
+    description=(
+        "Constrained Least Squares (CLS) referencia leképezés RGB képekhez. "
+        "Az egyes képpontokat az RGB referenciaértékek súlyozott kombinációjaként adja meg. "
+        "Támogatja a 3 komponentes baricetrikus (pontos) és az általános least-squares módszereket."
+    ),
+    icon="gradient",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(
+            name="reference_colors",
+            label="Referenciaértékek (RGB)",
+            type="string",
+            default="255,0,0,0,255,0,0,0,255",
+            required=False,
+            description=(
+                "Referenciaszínek sorozata vesszővel elválasztva. "
+                "Pl. '255,0,0,0,255,0,0,0,255' három (piros, zöld, kék) referenciahoz. "
+                "Értékek: 0-255 vagy 0-1."
+            ),
+        ),
+        ParamSchema(
+            name="method",
+            label="Módszer",
+            type="string",
+            default="auto",
+            required=False,
+            description=(
+                "auto: 3 komponenshez baricetrikus, egyébként least-squares; "
+                "barycentric: csak 3 komponenshez használható (pontos sum-to-one); "
+                "lstsq: általános least-squares."
+            ),
+        ),
+        ParamSchema(
+            name="hard_threshold",
+            label="Hard küszöb",
+            type="float",
+            default=0.0,
+            min=0.0,
+            max=1.0,
+            step=0.01,
+            description="Hard hozzárendelés küszöbe (0.0 = nincs küszöbözés)",
+        ),
+        ParamSchema(
+            name="hard_weights",
+            label="Hard súlyok",
+            type="string",
+            default="1,1,1",
+            required=False,
+            description="Hard kompozit súlyok komponensenként (vesszővel elválasztva)",
+        ),
+        ParamSchema(
+            name="use_gamma_linearization",
+            label="Gamma linearizálás",
+            type="bool",
+            default=True,
+            description="Linearizálás gamma korrekció alkalmazása (ajánlott normál sRGB képekhez)",
+        ),
+        ParamSchema(
+            name="gamma",
+            label="Gamma érték",
+            type="float",
+            default=2.2,
+            min=1.0,
+            max=3.0,
+            step=0.1,
+            description="Gamma korrekció kitevője (csak ha linearizálás engedélyezve)",
+        ),
+        ParamSchema(
+            name="normalize_rgb",
+            label="RGB normalizálás",
+            type="bool",
+            default=False,
+            description="RGB normalizálás intenzitás szerint (csökkenti az árnyékolás hatását)",
+        ),
+        ParamSchema(
+            name="sort_references_by_gray",
+            label="Referenciák rendezése",
+            type="bool",
+            default=False,
+            description="Referenciák rendezése szürkeérték szerint",
+        ),
+        ParamSchema(
+            name="debug",
+            label="Debug",
+            type="bool",
+            default=False,
+        ),
+    ],
+    side_output_types={
+        "soft_membership": "SCALAR",
+        "soft_membership_jet": "SCALAR",
+        "component_map": "SCALAR",
+        "component_map_jet": "SCALAR",
+        "hard_index_map": "SCALAR",
+        "hard_composite_rgb": "SCALAR",
+        "hard_jet": "SCALAR",
+        "cls_residual": "SCALAR",
+        "reference_colors": "SCALAR",
+    },
+)
+
+
+def _exec_rgb_cls_reference_mapping(data: dict, params: dict) -> dict:
+    """Execute RGB CLS reference mapping node."""
+    
+    def _parse_floats_flat(raw):
+        """Parse comma-separated float list."""
+        s = str(raw or "").strip()
+        if not s:
+            return None
+        try:
+            return tuple(float(x.strip()) for x in s.split(",") if x.strip())
+        except ValueError:
+            return None
+    
+    def _parse_weights(raw, default):
+        """Parse hard_weights parameter."""
+        weights, err = _parse_float_sequence_param(raw, default, "hard_weights")
+        return weights, err
+    
+    # Parse reference colors
+    ref_colors = _parse_floats_flat(params.get("reference_colors", ""))
+    if ref_colors is None:
+        ref_colors = (255, 0, 0, 0, 255, 0, 0, 0, 255)  # Default: R, G, B
+    
+    # Parse hard weights
+    hard_weights, err = _parse_weights(params.get("hard_weights"), (1, 1, 1))
+    if err:
+        data["error"] = err
+        return data
+    
+    result = _pe_rgb_cls_reference_mapping(
+        data,
+        k=None,
+        reference_colors=ref_colors,
+        roiScale=1.0,
+        hard_weights=hard_weights,
+        hard_threshold=float(params.get("hard_threshold", 0.0)),
+        c1_threshold=float(params.get("c1_threshold", 0.0)),
+        c2_threshold=float(params.get("c2_threshold", 0.0)),
+        component_thresholds=None,
+        use_gamma_linearization=bool(params.get("use_gamma_linearization", True)),
+        gamma=float(params.get("gamma", 2.2)),
+        normalize_rgb=bool(params.get("normalize_rgb", False)),
+        method=str(params.get("method", "auto")).strip(),
+        sort_references_by_gray=bool(params.get("sort_references_by_gray", False)),
+        debug=bool(params.get("debug", False)),
+    )
+    
+    # The pipeline_engine.py will automatically convert side outputs to base64,
+    # so no explicit conversion is needed here (unlike color_thresh which has
+    # custom output keys). The gray_map node uses the same pattern.
+    
+    return result
+
+
+_register(_rgb_cls_reference_mapping_def, _exec_rgb_cls_reference_mapping)

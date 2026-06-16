@@ -442,6 +442,38 @@
       ]
     }
   },
+  "detect_circles": {
+    "purpose": "Kör alakú objektumok detektálása Hough-transzformációval.",
+    "usage": "Az Élküszöb paraméterrel finomhangolható, mennyire érzékenyen keressen a node gyengébb, kevésbé éles körélekre. Ha ez túl lassú, a Detektálási méretarány csökkentésével gyorsítható a keresés.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "Detektálási méretarány",
+        "description": "A körkereséshez használt kép méretezési aránya. Kisebb érték gyorsabb futást ad, mert kisebb képen keres, majd visszaskálázza az eredményt."
+      },
+      {
+        "name": "Élküszöb",
+        "description": "A Canny élkeresés felső küszöbe. Ha a kör széle halvány vagy kevésbé kontrasztos, érdemes csökkenteni. A túl alacsony érték lassíthatja a detektálást."
+      },
+      {
+        "name": "Polaritás",
+        "description": "Sötét körök világos háttéren, világos körök sötét háttéren, vagy mindkettő keresése."
+      },
+      {
+        "name": "Min. átmérő / Max. átmérő",
+        "description": "A keresett körök mérettartománya pixelben. A túl tág tartomány rontja a találati arányt."
+      }
+    ],
+    "outputs": "Detektált körök és az azokat jelölő overlay kép",
+    "placement": {
+      "before": "Képet előállító vagy szürkeárnyalatos képet adó node szükséges előtte.",
+      "after": "Kép bemenetet fogadó node-ok helyezhetők utána.",
+      "restrictions": [
+        "A min. és max. átmérő között érvényes tartomány szükséges.",
+        "Az Élküszöb csökkentése segíthet, ha a kör széle gyengén látszik."
+      ]
+    }
+  },
   "resize_images": {
     "purpose": "A bemeneti képek méretének egységes kicsinyítése a megadott skálázási aránnyal.",
     "usage": "A Skálázási arány értéke határozza meg, hogy a képek eredeti méretükhöz képest mekkorára változzanak. 1 esetén a méret változatlan marad, 1 alatti értéknél kicsinyítés, 1 feletti értéknél nagyítás történik.",
@@ -459,6 +491,38 @@
       "restrictions": [
         "Kép-kép átalakító node, ezért előtte és utána is kép típusú kapcsolódás szükséges.",
         "A skálázási aránynak 0-nál nagyobbnak kell lennie."
+      ]
+    }
+  },
+  "scale_bar_overlay": {
+    "purpose": "A képre rajzolt, húzható skálasáv megjelenítése kalibrált pixels/mm érték alapján.",
+    "usage": "A node a mérésből kapott pixels/mm értéket használja a skálasáv hosszának kiszámításához. A pozíció az előnézeten húzással módosítható, a betűtípus, betűméret és megjelenés pedig külön paraméterekből állítható.",
+    "inputs": "Képek",
+    "parameters": [
+      {
+        "name": "Pixels per mm",
+        "description": "A kalibrált pixels/mm érték. A skálasáv ehhez az arányhoz igazodik."
+      },
+      {
+        "name": "Skála hossza (mm)",
+        "description": "A feliratban és a vonal hosszában megjelenő valós távolság. 0 esetén automatikus, szép érték választódik."
+      },
+      {
+        "name": "Pozíció X / Pozíció Y",
+        "description": "A skálasáv bal felső sarka képpontban. -1 esetén a jobb alsó sarokba kerül alapból."
+      },
+      {
+        "name": "Betűtípus / Betűméret",
+        "description": "A felirat megjelenésének stílusa és mérete."
+      }
+    ],
+    "outputs": "A bemeneti képekhez hozzáadott skálasáv és felirat",
+    "placement": {
+      "before": "Kalibrált képre helyezhető rá, tipikusan a képfeldolgozási lánc vége felé.",
+      "after": "Bármely IMAGE kimenetű node után elhelyezhető.",
+      "restrictions": [
+        "A node csak akkor rajzol értelmes skálát, ha a pixels/mm érték meg van adva.",
+        "Az előnézeten a node kiválasztásakor húzással módosítható a pozíciója."
       ]
     }
   }

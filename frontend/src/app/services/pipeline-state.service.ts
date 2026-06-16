@@ -61,9 +61,42 @@ export class PipelineStateService {
   private previewImageSubject = new BehaviorSubject<string | null>(null);
   previewImage$ = this.previewImageSubject.asObservable();
 
+  /** Optional overlay/result image shown beside the base preview. */
+  private previewImageOverrideSubject = new BehaviorSubject<string | null>(null);
+  previewImageOverride$ = this.previewImageOverrideSubject.asObservable();
+
+  /** Multi-panel dual-map preview (gray/RGB originals + N component results + optional sub-classification). */
+  private dualMapPreviewSubject = new BehaviorSubject<{
+    grayBase: string | null;
+    grayOverlays: string[];
+    rgbBase: string | null;
+    rgbOverlays: string[];
+    subBase: string | null;
+    subOverlays: string[];
+    subLabel: string;
+  } | null>(null);
+  dualMapPreview$ = this.dualMapPreviewSubject.asObservable();
+
+  setDualMapPreview(state: {
+    grayBase: string | null;
+    grayOverlays: string[];
+    rgbBase: string | null;
+    rgbOverlays: string[];
+    subBase: string | null;
+    subOverlays: string[];
+    subLabel: string;
+  } | null): void {
+    this.dualMapPreviewSubject.next(state);
+  }
+
   /** Whether preview image is grayscale. */
   private previewImageIsGrayscaleSubject = new BehaviorSubject<boolean>(false);
   previewImageIsGrayscale$ = this.previewImageIsGrayscaleSubject.asObservable();
+
+  /** Manually set the overlay/result image without replacing the base preview. */
+  setPreviewImageOverride(imageDataUrl: string | null, isGrayscale: boolean = false): void {
+    this.previewImageOverrideSubject.next(imageDataUrl);
+  }
 
   /** Side outputs from the pipeline execution (accumulated). */
   private sideOutputsSubject = new BehaviorSubject<Record<string, any>>({});
@@ -85,12 +118,20 @@ export class PipelineStateService {
   private imageDimsSubject = new BehaviorSubject<{ w: number; h: number }>({ w: 0, h: 0 });
   imageDims$ = this.imageDimsSubject.asObservable();
 
+  /** Current scalebar overlay configuration used for export/save. */
+  private scaleBarExportParamsSubject = new BehaviorSubject<Record<string, any> | null>(null);
+  scaleBarExportParams$ = this.scaleBarExportParamsSubject.asObservable();
+
   /** Emitted when pipeline changes (debounced for preview). */
   private pipelineChangedSubject = new Subject<void>();
 
   /** Emitted when a chart should be maximized in the preview area. */
   private maximizeGraphSubject = new Subject<{ data: any; omittedIndices: Set<number>; sourceStepIndex: number }>();
   maximizeGraph$ = this.maximizeGraphSubject.asObservable();
+
+  /** Emitted when expanded chart (scatter or PCA) should be shown. */
+  private expandedChartSubject = new Subject<{ data: any; type: 'scatter' | 'pca'; title: string }>();
+  expandedChart$ = this.expandedChartSubject.asObservable();
 
   /** Recipe dirty flag. */
   private dirtySubject = new BehaviorSubject<boolean>(false);
@@ -102,18 +143,36 @@ export class PipelineStateService {
 
   /** Steps that aggregate across all images and must not use single-image mode. */
   private readonly AGGREGATING_STEPS = new Set([
-    'fit_curve', 'predict_node', 'add_sequence_values', 'histogram_pca',
+    'fit_curve', 'predict_node', 'add_sequence_values', 'histogram_pca', 'detect_circles',
+    'dual_map',   // needs all images to auto-detect gray/RGB pairs
   ]);
+
+  private shouldPreviewRoiOutput(step: StepInstance | null): boolean {
+    if (!step || step.step_def_id !== 'mask_rect_roi') return false;
+    return step.param_values?.['output_mode'] === 'crop' || step.param_values?.['apply_mask'] !== false;
+  }
 
   constructor(private recipeService: RecipeService) {
     // Auto-preview on pipeline change (debounced)
     this.pipelineChangedSubject.pipe(debounceTime(400)).subscribe(() => {
-      // Skip auto-preview for fit_curve and mask_rect_roi (manual play/apply button)
+      // Skip auto-preview for fit_curve (manual play/apply button)
       const idx = this.selectedStepIndexSubject.value;
       const pipeline = this.getPipeline();
       if (idx >= 0 && idx < pipeline.steps.length) {
         const defId = pipeline.steps[idx].step_def_id;
-        if (defId === 'fit_curve' || defId === 'mask_rect_roi') {
+        if (defId === 'fit_curve') {
+          return;
+        }
+        // For ROI step: show crop output too, but the editor overlay will be disabled on the preview side.
+        if (defId === 'mask_rect_roi') {
+          const roiStep = pipeline.steps[idx];
+          if (this.shouldPreviewRoiOutput(roiStep)) {
+            this.requestPreview();
+          } else if (idx > 0) {
+            this.requestPreviewForStep(idx - 1);
+          } else {
+            this.requestPreview();
+          }
           return;
         }
       }
@@ -348,12 +407,29 @@ export class PipelineStateService {
 
   selectStep(index: number): void {
     this.clearToolboxPreviewStep();
-    this.selectedStepIndexSubject.next(index);
-    this.previewImageIndexSubject.next(0);
-    // For ROI step, preview the previous step to show the input image
     const pipeline = this.getPipeline();
+    const selectedStep = index >= 0 && index < pipeline.steps.length ? pipeline.steps[index] : null;
+    const selectedDef = selectedStep ? this.getStepDefinition(selectedStep.step_def_id) : undefined;
+    this.selectedStepIndexSubject.next(index);
+    if (selectedDef?.id !== 'save_images' && selectedDef?.id !== 'save_array') {
+      this.previewImageIndexSubject.next(0);
+    }
+    // For ROI step, preview the previous step to show the input image
     if (index >= 0 && index < pipeline.steps.length &&
         pipeline.steps[index].step_def_id === 'mask_rect_roi' && index > 0) {
+      const roiStep = pipeline.steps[index];
+      if (this.shouldPreviewRoiOutput(roiStep)) {
+        this.requestPreview();
+      } else {
+        // Show input image when masking is disabled for interactive drawing.
+        this.requestPreviewForStep(index - 1);
+      }
+    } else if (index >= 0 && index < pipeline.steps.length &&
+               (pipeline.steps[index].step_def_id === 'save_images' ||
+                pipeline.steps[index].step_def_id === 'save_array') && index > 0) {
+      this.requestPreviewForStep(index - 1);
+    } else if (index >= 0 && index < pipeline.steps.length &&
+               pipeline.steps[index].step_def_id === 'scale_bar_overlay' && index > 0) {
       this.requestPreviewForStep(index - 1);
     } else if (index >= 0 && index < pipeline.steps.length &&
                pipeline.steps[index].step_def_id === 'fit_curve' && index > 0) {
@@ -376,16 +452,27 @@ export class PipelineStateService {
 
     if (pipeline.steps.length === 0 || stepIndex < 0) {
       this.previewImageSubject.next(null);
+      this.previewImageOverrideSubject.next(null);
+      this.dualMapPreviewSubject.next(null);
       return;
     }
 
     const step = pipeline.steps[stepIndex];
     const isAggregating = this.AGGREGATING_STEPS.has(step.step_def_id);
     const singleImageOnly = !forceAllImages && !isAggregating;
+    const selectedStep = this.selectedStepIndexSubject.value >= 0 && this.selectedStepIndexSubject.value < pipeline.steps.length
+      ? pipeline.steps[this.selectedStepIndexSubject.value]
+      : null;
+    const scaleBarOverlay =
+      selectedStep?.step_def_id === 'save_images' || selectedStep?.step_def_id === 'save_array'
+        ? this.scaleBarExportParamsSubject.value
+        : null;
     const omittedArr = Array.from(this.omittedPointsSubject.value.indices);
 
     this.previewLoadingSubject.next(true);
-    this.recipeService.previewStep(pipeline, stepIndex, imageIndex, singleImageOnly, omittedArr).subscribe({
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
+    this.recipeService.previewStep(pipeline, stepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
       next: (res: PreviewResponse) => {
         this.previewLoadingSubject.next(false);
         if (res.success) {
@@ -397,6 +484,7 @@ export class PipelineStateService {
           }
           this.sideOutputsSubject.next(res.side_outputs || {});
           this.imageCountSubject.next(res.image_count ?? 0);
+          this.previewImageIsGrayscaleSubject.next(res.is_grayscale ?? false);
           if (res.image_width && res.image_height) {
             this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
           }
@@ -414,6 +502,15 @@ export class PipelineStateService {
 
   getSelectedStepIndex(): number {
     return this.selectedStepIndexSubject.value;
+  }
+
+  setScaleBarExportParams(params: Record<string, any> | null): void {
+    this.scaleBarExportParamsSubject.next(params ? { ...params } : null);
+  }
+
+  getScaleBarExportParams(): Record<string, any> | null {
+    const params = this.scaleBarExportParamsSubject.value;
+    return params ? { ...params } : null;
   }
 
   getStepOutputType(stepIndex: number): DataType | null {
@@ -439,12 +536,18 @@ export class PipelineStateService {
     return this.imageDimsSubject.value;
   }
 
+  showExpandedChart(data: any, type: 'scatter' | 'pca', title: string): void {
+    this.expandedChartSubject.next({ data, type, title });
+  }
+
   newPipeline(): void {
     this.pipelineSubject.next(createEmptyPipeline());
     this.selectedStepIndexSubject.next(-1);
     this.clearToolboxPreviewStep();
     this.validationErrorsSubject.next([]);
     this.previewImageSubject.next(null);
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
     this.sideOutputsSubject.next({});
     this.dirtySubject.next(false);
     this.recipeNameSubject.next('');
@@ -456,6 +559,8 @@ export class PipelineStateService {
     this.dirtySubject.next(false);
     this.clearToolboxPreviewStep();
     this.selectedStepIndexSubject.next(doc.steps.length > 0 ? 0 : -1);
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
     this.pipelineChangedSubject.next();
   }
 
@@ -485,20 +590,33 @@ export class PipelineStateService {
 
     if (pipeline.steps.length === 0 || stepIndex < 0) {
       this.previewImageSubject.next(null);
+      this.previewImageOverrideSubject.next(null);
+      this.dualMapPreviewSubject.next(null);
       this.sideOutputsSubject.next({});
       this.imageCountSubject.next(0);
       return;
     }
 
     const step = pipeline.steps[stepIndex];
-    const isAggregating = this.AGGREGATING_STEPS.has(step.step_def_id);
+    const previewStepIndex =
+      step.step_def_id === 'save_images' || step.step_def_id === 'save_array'
+        ? Math.max(0, stepIndex - 1)
+        : stepIndex;
+    const previewStep = pipeline.steps[previewStepIndex];
+    const isAggregating = this.AGGREGATING_STEPS.has(previewStep.step_def_id);
     const singleImageOnly = !forceAllImages && !isAggregating;
+    const scaleBarOverlay =
+      step.step_def_id === 'save_images' || step.step_def_id === 'save_array'
+        ? this.scaleBarExportParamsSubject.value
+        : null;
 
     // Pass omitted indices for curve fitting
     const omittedArr = Array.from(this.omittedPointsSubject.value.indices);
 
     this.previewLoadingSubject.next(true);
-    this.recipeService.previewStep(pipeline, stepIndex, imageIndex, singleImageOnly, omittedArr).subscribe({
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
+    this.recipeService.previewStep(pipeline, previewStepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
       next: (res: PreviewResponse) => {
         this.previewLoadingSubject.next(false);
         if (res.success) {
@@ -517,6 +635,8 @@ export class PipelineStateService {
         } else {
           this.validationErrorsSubject.next(res.errors || []);
           this.previewImageSubject.next(null);
+          this.previewImageOverrideSubject.next(null);
+          this.dualMapPreviewSubject.next(null);
           this.previewImageIsGrayscaleSubject.next(false);
           this.imageCountSubject.next(0);
           this.sideOutputsSubject.next({});
@@ -560,6 +680,15 @@ export class PipelineStateService {
         if (selected.step_def_id === 'fit_curve' && stepIndex > 0) {
           // Fit curve is a manual action. While paging images, only refresh upstream context.
           this.requestPreviewForStep(stepIndex - 1);
+          return;
+        }
+        if (selected.step_def_id === 'mask_rect_roi' && stepIndex > 0) {
+          if (this.shouldPreviewRoiOutput(selected)) {
+            this.requestPreview();
+          } else {
+            // ROI step: preview input image for drawing, ROI overlay handles visualization
+            this.requestPreviewForStep(stepIndex - 1);
+          }
           return;
         }
       }
@@ -732,11 +861,17 @@ export class PipelineStateService {
       const currDir = this.getDirection(currDef);
       const currInput = this.getInputType(currDef);
       const currOutput = this.getOutputType(currDef, main[i].step);
+      const isLast = i === main.length - 1;
 
       if (i === 0) {
         if (currDir !== 'source') return false;
       } else {
         if (currDir === 'source') return false;
+
+        if (currDir === 'sink') {
+          if (!isLast) return false;
+          continue;
+        }
 
         const prevDef = main[i - 1].definition;
         if (!prevDef) return false;
@@ -774,10 +909,8 @@ export class PipelineStateService {
         }
       }
 
-      const isLast = i === main.length - 1;
-      if (!isLast && currDir === 'sink') return false;
       if (!isLast && !currOutput) return false;
-      if (i > 0 && currDir !== 'source' && !currInput) return false;
+      if (i > 0 && currDir === 'transform' && !currInput) return false;
     }
 
     return true;
