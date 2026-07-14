@@ -4,6 +4,23 @@
   font-family: 'Arial', sans-serif;
 }
 
+.camera-settings-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.developer-settings {
+  order: 1;
+}
+
+.divider {
+  order: 2;
+}
+
+.user-settings {
+  order: 3;
+}
+
 .camera-settings-table {
   border-collapse: collapse;
   width: 100%;
@@ -174,16 +191,33 @@ td button:not(.browse-button):disabled {
 /* Section Headers (User & Developer Settings) */
 /* ─────────────────────────────────── */
 
-.user-settings h3,
-.developer-settings h3 {
+.section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 14px;
   color: #ddd;
-  margin-bottom: 8px;
+  margin: 0 0 8px;
   text-transform: uppercase;
-  text-align: center;
+  text-align: left;
   padding: 6px;
   background-color: #222;
+  border: 0;
   border-radius: 4px;
+  cursor: pointer;
+}
+
+.section-toggle:hover:not(:disabled),
+.section-toggle:focus-visible {
+  background-color: #333;
+  outline: 1px solid #2a628c;
+}
+
+.section-toggle mat-icon {
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
 }
 
 

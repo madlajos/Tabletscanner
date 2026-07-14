@@ -51,28 +51,6 @@
     <button
       type="button"
       class="toggle-button"
-      [class.active]="lampTop"
-      (click)="lampTop = !lampTop"
-      [disabled]="measurementActive"
-    >
-      <img src="assets/SVG/ringlight_off.svg" alt="Dome light" />
-      <span class="toggle-label">Dóm fény</span>
-    </button>
-
-    <button
-      type="button"
-      class="toggle-button"
-      [class.active]="lampSide"
-      (click)="lampSide = !lampSide"
-      [disabled]="measurementActive"
-    >
-      <img src="assets/SVG/barlight_off.svg" alt="Bar light" />
-      <span class="toggle-label">Súrló  fény</span>
-    </button>
-
-    <button
-      type="button"
-      class="toggle-button"
       [class.active]="backgroundSubtraction"
       (click)="backgroundSubtraction = !backgroundSubtraction"
       [disabled]="measurementActive"
@@ -81,6 +59,42 @@
       <span class="toggle-label">Háttérlevonás</span>
     </button>
   </div>
+
+  <section class="capture-plan-section">
+    <div class="capture-plan-header">
+      <h4>Automata mérési terv</h4>
+    </div>
+    <div class="capture-plan-scroll">
+      <table class="capture-plan-table">
+        <thead>
+          <tr><th>Hullámhossz</th><th>Szűrő</th><th aria-label="Műveletek"></th></tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let row of capturePlan; let index = index; trackBy: trackCapturePlanRow">
+            <td>
+              <select [(ngModel)]="row.wavelength" (change)="onCapturePlanChanged()" [disabled]="measurementActive">
+                <option *ngFor="let wavelength of wavelengthOptions" [ngValue]="wavelength">{{ lightLabels[wavelength] }}</option>
+              </select>
+            </td>
+            <td>
+              <select [(ngModel)]="row.filter_position" (change)="onCapturePlanChanged()" [disabled]="measurementActive">
+                <option *ngFor="let filter of filterOptions" [ngValue]="filter">{{ filter }}</option>
+              </select>
+            </td>
+            <td>
+              <button type="button" class="delete-capture-row" (click)="removeCapturePlanRow(index)"
+                [disabled]="measurementActive || index === 0" [attr.aria-label]="'Mérési sor ' + (index + 1) + ' törlése'">
+                ×
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="add-capture-row" (click)="addCapturePlanRow()" [disabled]="measurementActive">
+      +
+    </button>
+  </section>
 
   <!-- SELECTION HEADER: COUNT + CLEAR BUTTON -->
   <div class="selection-header">

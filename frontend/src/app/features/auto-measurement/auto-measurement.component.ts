@@ -11,6 +11,7 @@ import {
 import { SharedService } from '../../shared.service';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { BASE_URL } from '../../api-config';
+import { CapturePlanRow, CaptureRequestRow, LightChannel, LIGHT_CHANNEL_LABELS } from '../../models/light.models';
 
 // Type declaration for Electron API (exposed via preload.js)
 declare global {
@@ -69,9 +70,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   // Measurement settings
   autofocus = false;
-  lampTop = false;
-  lampSide = false;
   backgroundSubtraction = false;
+  readonly wavelengthOptions: readonly LightChannel[] = ['uv255', 'uv310', 'uv365', 'vis'];
+  readonly filterOptions = [1, 2, 3, 4, 5, 6] as const;
+  readonly lightLabels = LIGHT_CHANNEL_LABELS;
+  capturePlan: CapturePlanRow[] = [this.createCapturePlanRow('vis', 1)];
 
   // Save location and measurement name
   saveLocation = '';
@@ -178,6 +181,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           this.firstTabletY = settings.first_tablet_y ?? 10.6;
           this.firstTabletZ = settings.first_tablet_z ?? 20.0;
           this.tabletSpacing = settings.tablet_spacing ?? 18.3;
+          if (Array.isArray(settings.capture_plan) && settings.capture_plan.length > 0) {
+            this.capturePlan = settings.capture_plan
+              .filter(row => this.isValidCaptureRequestRow(row))
+              .map(row => this.createCapturePlanRow(row.wavelength, row.filter_position));
+          }
         }
       },
       error: (err) => {
@@ -231,8 +239,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     if (!this.measurementName || this.measurementName.trim() === '') {
       return 'Adja meg a mérés nevét.';
     }
-    if (!this.lampTop && !this.lampSide) {
-      return 'Válasszon legalább egy világítási módot.';
+    if (this.capturePlan.length === 0) {
+      return 'Adjon hozzá legalább egy mérési sort.';
     }
     if (this.selectedSignal().size === 0) {
       return 'Válasszon legalább egy tablettát.';
@@ -258,9 +266,57 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     const connected = this.cameraConnected && this.motionConnected;
     const hasSaveLocation = !!(this.saveLocation && this.saveLocation.trim() !== '');
     const hasMeasurementName = !!(this.measurementName && this.measurementName.trim() !== '');
-    const hasLightSelected = this.lampTop || this.lampSide;
+    const hasCapturePlan = this.capturePlan.length > 0;
 
-    return hasSelected && connected && hasSaveLocation && hasMeasurementName && hasLightSelected;
+    return hasSelected && connected && hasSaveLocation && hasMeasurementName && hasCapturePlan;
+  }
+
+  addCapturePlanRow(): void {
+    const previous = this.capturePlan[this.capturePlan.length - 1];
+    this.capturePlan.push(this.createCapturePlanRow(previous?.wavelength ?? 'vis', previous?.filter_position ?? 1));
+    this.persistCapturePlan();
+  }
+
+  removeCapturePlanRow(index: number): void {
+    if (index === 0 || this.measurementActive) {
+      return;
+    }
+    this.capturePlan.splice(index, 1);
+    this.persistCapturePlan();
+  }
+
+  onCapturePlanChanged(): void {
+    if (!this.measurementActive) {
+      this.persistCapturePlan();
+    }
+  }
+
+  trackCapturePlanRow(_: number, row: CapturePlanRow): string {
+    return row.id;
+  }
+
+  private createCapturePlanRow(wavelength: LightChannel, filterPosition: number): CapturePlanRow {
+    return {
+      id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+      wavelength,
+      filter_position: this.filterOptions.includes(filterPosition as 1 | 2 | 3 | 4 | 5 | 6)
+        ? filterPosition as 1 | 2 | 3 | 4 | 5 | 6
+        : 1
+    };
+  }
+
+  private isValidCaptureRequestRow(row: unknown): row is CaptureRequestRow {
+    if (!row || typeof row !== 'object') return false;
+    const candidate = row as CaptureRequestRow;
+    return this.wavelengthOptions.includes(candidate.wavelength)
+      && this.filterOptions.includes(candidate.filter_position as 1 | 2 | 3 | 4 | 5 | 6);
+  }
+
+  private persistCapturePlan(): void {
+    const capturePlan = this.capturePlan.map(({ wavelength, filter_position }) => ({ wavelength, filter_position }));
+    this.autoService.updateSettings('capture_plan', capturePlan).subscribe({
+      error: err => console.warn('Failed to save capture plan:', err)
+    });
   }
 
   // Get info message to show when button is enabled
@@ -765,8 +821,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       measurement_folder: this.measurementFolder,
       measurement_name: this.measurementName.trim(),
       autofocus: this.autofocus,
-      lamp_top: this.lampTop,
-      lamp_side: this.lampSide,
+      capture_plan: this.capturePlan.map(({ wavelength, filter_position }) => ({ wavelength, filter_position })),
       is_first_tablet: isFirstTablet,
       background_subtraction: this.backgroundSubtraction
     };

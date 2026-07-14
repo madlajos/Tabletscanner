@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { BASE_URL } from '../api-config';
+import { CaptureRequestRow } from '../models/light.models';
 
 export interface AutoMeasurementSettings {
   save_location: string;
@@ -9,6 +10,7 @@ export interface AutoMeasurementSettings {
   first_tablet_y: number;
   first_tablet_z: number;
   tablet_spacing: number;
+  capture_plan?: CaptureRequestRow[];
 }
 
 // Interface for step-by-step measurement
@@ -20,10 +22,13 @@ export interface TabletStepRequest {
   measurement_folder: string;
   measurement_name: string;
   autofocus: boolean;
-  lamp_top: boolean;
-  lamp_side: boolean;
+  capture_plan: CaptureRequestRow[];
   is_first_tablet?: boolean;
   background_subtraction?: boolean;
+}
+
+export interface CapturedPlanRow extends CaptureRequestRow {
+  saved_images: string[];
 }
 
 export interface TabletStepResponse {
@@ -31,6 +36,7 @@ export interface TabletStepResponse {
   message?: string;
   tablet_index?: number;
   saved_images?: string[];
+  captured_plan_rows?: CapturedPlanRow[];
   af_error_code?: string;
   af_error_message?: string;
 }

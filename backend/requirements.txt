@@ -5,3 +5,4 @@ opencv-python
 numpy
 pypylon
 Pillow
+requests

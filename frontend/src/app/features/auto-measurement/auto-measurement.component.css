@@ -164,6 +164,83 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
 }
 
+.capture-plan-section {
+  border: 1px solid #4a4a4a;
+  border-radius: 5px;
+  padding: 6px;
+  background: #252525;
+}
+
+.capture-plan-header h4 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: #ddd;
+}
+
+.capture-plan-scroll {
+  max-height: 112px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.capture-plan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.capture-plan-table th,
+.capture-plan-table td {
+  padding: 2px 3px;
+  border-bottom: 1px solid #444;
+  text-align: left;
+}
+
+.capture-plan-table select {
+  width: 100%;
+  padding: 2px;
+  font-size: 11px;
+  color: #fff;
+  background: #333;
+  border: 1px solid #555;
+  border-radius: 3px;
+}
+
+.delete-capture-row,
+.add-capture-row {
+  border: 1px solid #555;
+  border-radius: 3px;
+  color: #ddd;
+  background: #383838;
+  cursor: pointer;
+}
+
+.delete-capture-row {
+  min-width: 20px;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 16px;
+}
+
+.add-capture-row {
+  margin-top: 5px;
+  min-width: 24px;
+  padding: 0 7px;
+  font-size: 15px;
+}
+
+.delete-capture-row:hover:not(:disabled),
+.add-capture-row:hover:not(:disabled) {
+  background: #4a4a4a;
+}
+
+.delete-capture-row:disabled,
+.add-capture-row:disabled,
+.capture-plan-table select:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
 .toggle-button:active:not(:disabled) {
   transform: translateY(0) scale(0.97);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);

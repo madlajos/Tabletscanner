@@ -13,11 +13,14 @@ latest_image = None
 motion_platform = None
 motion_busy = False
 
-# Latest captured images (BGR numpy arrays) for external viewing endpoints
-latest_dome_image = None           # Most recent dome light capture
-latest_dome_masked_image = None    # Most recent dome light with background subtraction
-latest_bar_image = None            # Most recent bar light capture
-latest_bar_masked_image = None     # Most recent bar light with background subtraction
+# Latest captured images (BGR numpy arrays) keyed by canonical illumination channel.
+# ``dome``/``bar`` aliases are handled at the API boundary for temporary legacy clients.
+latest_images = {
+    'uv255': {'original': None, 'masked': None},
+    'uv310': {'original': None, 'masked': None},
+    'uv365': {'original': None, 'masked': None},
+    'vis': {'original': None, 'masked': None},
+}
 last_toolhead_pos = {"x": None, "y": None, "z": None}
 toolhead_x_pos = "?"
 toolhead_y_pos = "?"

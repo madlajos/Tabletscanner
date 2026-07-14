@@ -1,12 +1,7 @@
 {
-    "camera_params_dome": {
-        "ExposureTime": 30000.0,
-        "Gain": 0.0,
-        "Gamma": 1.0
-    },
-    "camera_params_bar": {
-        "ExposureTime": 1000000,
-        "Gain": 0.0,
+    "settings_schema_version": 2,
+    "camera_params": {
+        "ExposureTime": 100000.0,
         "Gamma": 1.0
     },
     "other_settings": {
@@ -15,10 +10,51 @@
         "background_subtraction": true,
         "save_settings": false,
         "camera_settings_file": "D:/source/Tabletscanner/backend/a2A4508-20ucBAS_40697387.pfs",
-        "spacer_rings": "1",
-        "settings_preset_name": "ok"
+        "spacer_rings": "1"
     },
     "auto_measurement_settings": {
-        "save_location": "C:/Users/madlajos/Downloads"
+        "save_location": "C:/Users/madlajos/Downloads",
+        "capture_plan": [
+            {
+                "wavelength": "uv310",
+                "filter_position": 1
+            },
+            {
+                "wavelength": "uv310",
+                "filter_position": 2
+            },
+            {
+                "wavelength": "uv310",
+                "filter_position": 3
+            }
+        ]
+    },
+    "lamp_settings": {
+        "channels": {
+            "uv255": {
+                "dim_percent": 50.0,
+                "full_percent": 100.0,
+                "dim_timeout_seconds": 100.0,
+                "full_timeout_seconds": 100.0
+            },
+            "uv310": {
+                "dim_percent": 100.0,
+                "full_percent": 100.0,
+                "dim_timeout_seconds": 100.0,
+                "full_timeout_seconds": 100.0
+            },
+            "uv365": {
+                "dim_percent": 100.0,
+                "full_percent": 100.0,
+                "dim_timeout_seconds": 100.0,
+                "full_timeout_seconds": 100.0
+            }
+        },
+        "output_selectors": {
+            "uv255": "P1",
+            "uv310": "P2",
+            "uv365": "P3",
+            "vis": "P0"
+        }
     }
 }

@@ -144,3 +144,28 @@ body {
   margin-top: auto;
   margin-bottom: 10px;
 }
+
+.software-settings-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  margin-top: auto;
+  padding: 9px;
+  color: #eee;
+  background: #333;
+  border: 1px solid #555;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.software-settings-button:hover {
+  background: #414141;
+}
+
+.software-settings-button mat-icon {
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+}

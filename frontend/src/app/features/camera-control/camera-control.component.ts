@@ -90,9 +90,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   isAutofocusing: boolean = false;
   private measurementActiveSub!: Subscription;
   private autofocusActiveSub?: Subscription;
-  private activeLightSub?: Subscription;
-  currentActiveLight: 'dome' | 'bar' | null = null;
   private numericFocusValues: Record<string, number | null | undefined> = {};
+  cameraSettingsExpanded = true;
+  saveSettingsExpanded = true;
 
 
   constructor(private http: HttpClient,
@@ -101,8 +101,13 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     private settingsUpdatesService: SettingsUpdatesService
   ) { }
 
-  // Preset name (Beállítások row)
-  settingsPresetName: string = '';
+  toggleCameraSettings(): void {
+    this.cameraSettingsExpanded = !this.cameraSettingsExpanded;
+  }
+
+  toggleSaveSettings(): void {
+    this.saveSettingsExpanded = !this.saveSettingsExpanded;
+  }
 
   ngOnInit(): void {
     if (!this.settingsLoaded) {
@@ -136,21 +141,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       this.isStreaming = status;
     });
 
-    // Listen for light changes and apply corresponding camera settings
-    this.sharedService.lightSettings$.subscribe(light => {
-      if (light === 'dome') {
-        this.applyLightSpecificSettings('Dome');
-      } else if (light === 'bar') {
-        this.applyLightSpecificSettings('Bar');
-      }
-    });
-
-    // Subscribe to active light changes for debugging and state tracking
-    this.activeLightSub = this.sharedService.activeLight$.subscribe(light => {
-      this.currentActiveLight = light;
-      console.log(`[CameraControl] Active light changed to: ${light || 'none'}`);
-    });
-
     // TODO: Refactor to set current 'other' settings
     this.http.get<{ other_settings: any }>(`${BASE_URL}/get-other-settings?category=other_settings`)
       .subscribe({
@@ -174,10 +164,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
               this.sharedService.setSaveDirectory(this.otherSettings.save_location);
             }
 
-            // Restore preset display name if persisted
-            if (this.otherSettings.settings_preset_name) {
-              this.settingsPresetName = this.stripExtension(this.otherSettings.settings_preset_name);
-            }
           }
         },
         error: err => {
@@ -199,9 +185,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     }
     if (this.autofocusActiveSub) {
       this.autofocusActiveSub.unsubscribe();
-    }
-    if (this.activeLightSub) {
-      this.activeLightSub.unsubscribe();
     }
   }
 
@@ -326,7 +309,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         if (filePath) {
           this.otherSettings.camera_settings_file = filePath;
           this.applyOtherSetting('camera_settings_file');
-          this.invalidatePreset();
           // Load the profile onto the camera
           if (this.isConnected) {
             await this.loadCameraProfile(filePath);
@@ -343,7 +325,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
           if (filePath) {
             this.otherSettings.camera_settings_file = filePath;
             this.applyOtherSetting('camera_settings_file');
-            this.invalidatePreset();
             // Load the profile onto the camera
             if (this.isConnected) {
               await this.loadCameraProfile(filePath);
@@ -543,22 +524,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     this.http.get<any>(`${BASE_URL}/get-camera-settings`)
       .subscribe({
         next: (response: any) => {
-          // Load main settings
           if (response.camera_params) {
             this.cameraSettings = { ...this.cameraSettings, ...response.camera_params };
-          }
-          
-          // Load light-specific settings
-          if (response.camera_params_dome) {
-            Object.keys(response.camera_params_dome).forEach(key => {
-              this.cameraSettings[`${key}_Dome`] = response.camera_params_dome[key];
-            });
-          }
-          
-          if (response.camera_params_bar) {
-            Object.keys(response.camera_params_bar).forEach(key => {
-              this.cameraSettings[`${key}_Bar`] = response.camera_params_bar[key];
-            });
           }
 
           this.settingsUpdatesService.updateCameraSettings(this.cameraSettings);
@@ -572,6 +539,27 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     const value = this.cameraSettings[setting];
     console.log(`Applying setting ${setting}: ${value} (persist=${persist})`);
 
+    if (setting === 'ExposureTime' || setting === 'Gamma') {
+      this.http.post<{ updated_value: number }>(`${BASE_URL}/update-camera-settings`, {
+        setting_name: setting,
+        setting_value: value
+      }).subscribe({
+        next: response => {
+          if (response.updated_value !== value) {
+            this.cameraSettings[setting] = response.updated_value;
+          }
+          this.settingsUpdatesService.updateCameraSettings(this.cameraSettings);
+        },
+        error: error => console.error(`Error applying camera setting ${setting}:`, error)
+      });
+      return;
+    }
+
+    // Schema v2 intentionally has no per-light camera settings.
+    console.warn(`Ignoring retired per-light camera setting: ${setting}`);
+    return;
+
+    /* Retired schema-v1 implementation retained only as a migration reference.
     // Check if this is a light-specific setting (e.g., ExposureTime_Dome, Gamma_Dome)
     const lightMatch = setting.match(/(ExposureTime|Gamma)_(Dome|Bar)/);
     
@@ -595,7 +583,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         console.log(`[CameraControl] → Applying ${setting} to camera hardware (${lightName} light is active)`);
       }
 
-      this.http.post(`${BASE_URL}/update-camera-settings-light`, {
+      this.http.post(`${BASE_URL}/update-camera-settings`, {
         light: lightName,
         setting_name: settingName,
         setting_value: value,
@@ -644,6 +632,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     }
   }
 
+    */
+  }
+
   applyLightSpecificSettings(lightSuffix: 'Dome' | 'Bar'): void {
     // Skip if camera is not connected
     if (!this.isConnected) {
@@ -662,7 +653,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       if (value !== undefined) {
         console.log(`Applying light-specific setting ${setting.key}: ${value}`);
 
-        this.http.post(`${BASE_URL}/update-camera-settings-light`, {
+        this.http.post(`${BASE_URL}/update-camera-settings`, {
           light: lightName,
           setting_name: setting.name,
           setting_value: value,
@@ -820,13 +811,11 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // Trim trailing zeros by storing as number (not string)
     this.cameraSettings[settingKey] = num;
 
-    // Preset is now stale
-    this.invalidatePreset();
-
     // Apply to backend
     this.applySetting(settingKey);
   }
 
+  /* Removed legacy .tss per-light camera preset implementation.
   invalidatePreset(): void {
     this.settingsPresetName = '';
   }
@@ -1001,6 +990,8 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     // Load .pfs profile onto camera
     await this.loadCameraProfile(profilePath);
   }
+
+  */
 
   async loadCameraProfile(profilePath: string): Promise<void> {
     if (!profilePath) return;

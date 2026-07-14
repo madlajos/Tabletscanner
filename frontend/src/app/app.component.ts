@@ -20,6 +20,7 @@ import { AutoMeasurementComponent } from './features/auto-measurement/auto-measu
 import { RecipeCreatorComponent } from './features/recipe-creator/recipe-creator.component';
 import { RecipeApplierComponent } from './features/recipe-applier/recipe-applier.component';
 import { SharedService, AppSection } from './shared.service';
+import { SoftwareSettingsComponent } from './features/software-settings/software-settings.component';
 
 
 @Component({
@@ -41,6 +42,7 @@ import { SharedService, AppSection } from './shared.service';
     AutoMeasurementComponent,
     RecipeCreatorComponent,
     RecipeApplierComponent,
+    SoftwareSettingsComponent,
   ],
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.css']
@@ -49,6 +51,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   backendReady = false;
   title = 'Untitled';  
   activeSection: AppSection = 'scanner';
+  softwareSettingsOpen = false;
   @ViewChild('sidenav') sidenav!: MatSidenav;
 
   constructor(
@@ -100,5 +103,13 @@ export class AppComponent implements OnInit, AfterViewInit {
 
   toggleSettingsPanel(): void {
     this.sidenav.toggle();
+  }
+
+  openSoftwareSettings(): void {
+    this.softwareSettingsOpen = true;
+  }
+
+  closeSoftwareSettings(): void {
+    this.softwareSettingsOpen = false;
   }
 }

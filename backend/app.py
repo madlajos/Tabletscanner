@@ -17,7 +17,8 @@ from datetime import datetime
 import subprocess
 import json
 from threading import Lock
-from settings_manager import load_settings, save_settings, get_settings
+from settings_manager import load_settings, save_settings, get_settings, validate_capture_plan, validate_lamp_output_selectors, validate_lamp_settings
+from light_control import LampSettingsError, LightCommandError, LightConfigurationError, LightController
 import numpy as np
 from PIL import Image
 
@@ -50,6 +51,26 @@ app.debug = True
 
 setup_logger()
 _EPS = 1e-6
+light_controller = LightController(
+    get_settings,
+    lambda: porthandler.motion_platform or globals.motion_platform,
+    porthandler.write_and_wait,
+)
+
+
+def four_channel_lamp_timeout_monitor():
+    """Monitor LightController deadlines without touching legacy lamp state."""
+    while True:
+        try:
+            channel = light_controller.check_timeouts()
+            if channel:
+                app.logger.warning('Four-channel lamp %s switched off at its safety deadline.', channel)
+        except LightConfigurationError:
+            # No configured selectors yet; controller has no active channel in this state.
+            pass
+        except Exception:
+            app.logger.exception('Four-channel lamp timeout monitor failed')
+        time.sleep(0.25)
 
 # Might need to be removed
 camera_properties = None
@@ -378,6 +399,20 @@ def check_axes_homed():
         return jsonify({'x': False, 'y': False, 'z': False}), 200
 
     
+@app.route('/api/disable_steppers', methods=['POST'])
+def disable_steppers():
+    """Disable all motion steppers after an acknowledged M84 command."""
+    ser = globals.motion_platform
+    if not ser or not getattr(ser, 'is_open', False):
+        return jsonify({'error': 'Motion platform not connected', 'popup': True}), 503
+    try:
+        if not motioncontrols.disable_steppers(ser):
+            return jsonify({'error': 'Controller did not acknowledge motor-off command', 'popup': True}), 504
+        return jsonify({'status': 'success'}), 200
+    except (OSError, PermissionError):
+        return _handle_motion_usb_disconnect(ser, 'disable steppers')
+
+
 @app.route('/api/home_toolhead', methods=['POST', 'OPTIONS'])
 def api_home_toolhead():
     if request.method == 'OPTIONS':
@@ -654,13 +689,11 @@ def get_camera_settings():
         app.logger.info("API Call: /api/get-camera-settings")
         
         settings_data = get_settings()
-        camera_settings_dome = settings_data.get('camera_params_dome', {})
-        camera_settings_bar = settings_data.get('camera_params_bar', {})
+        camera_settings = settings_data.get('camera_params', {})
 
         app.logger.info(f"Sending camera settings to frontend")
         return jsonify({
-            "camera_params_dome": camera_settings_dome,
-            "camera_params_bar": camera_settings_bar
+            "camera_params": camera_settings
         }), 200
 
     except Exception as e:
@@ -674,48 +707,52 @@ def get_camera_settings():
     
 @app.route('/api/update-camera-settings', methods=['POST'])
 def update_camera_settings():
+    """Update one global persisted camera setting (ExposureTime or Gamma)."""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         setting_name = data.get('setting_name')
         setting_value = data.get('setting_value')
 
-        app.logger.info(f"Updating camera setting: {setting_name} = {setting_value}")
+        if setting_name not in ('ExposureTime', 'Gamma'):
+            return jsonify({"error": "Only ExposureTime and Gamma are configurable.", "code": ErrorCode.GENERIC, "popup": True}), 400
 
-        # Fetch camera and current camera_properties
+        try:
+            numeric_value = float(setting_value)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Camera setting must be numeric.", "code": ErrorCode.GENERIC, "popup": True}), 400
+        if not math.isfinite(numeric_value):
+            return jsonify({"error": "Camera setting must be finite.", "code": ErrorCode.GENERIC, "popup": True}), 400
+
         camera = globals.camera
         camera_properties = globals.camera_properties
+        applied_to_camera = bool(camera and camera.IsOpen())
+        updated_value = numeric_value
 
-        # Fallback: Refresh properties if missing
-        if not camera_properties or setting_name not in camera_properties:
-            app.logger.warning("camera_properties missing or incomplete; fetching fresh values...")
-            camera_properties = get_camera_properties(camera)
-            globals.camera_properties = camera_properties
+        if applied_to_camera:
+            if not camera_properties or setting_name not in camera_properties:
+                camera_properties = get_camera_properties(camera)
+                globals.camera_properties = camera_properties
+            updated_value = validate_and_set_camera_param(camera, setting_name, numeric_value, camera_properties)
 
-        # Apply the setting to the camera
-        updated_value = validate_and_set_camera_param(
-            camera,
-            setting_name,
-            setting_value,
-            camera_properties
-        )
-
-        # NOTE: Direct camera settings endpoint deprecated. Use /api/update-camera-settings-light instead.
-        # For now, log and return error.
-        app.logger.warning("Direct camera settings update called; this endpoint is deprecated. Use /api/update-camera-settings-light")
+        settings_data = get_settings()
+        settings_data.setdefault('camera_params', {})[setting_name] = updated_value
+        save_settings()
+        app.logger.info("Global camera setting %s updated (applied=%s)", setting_name, applied_to_camera)
         return jsonify({
-            "error": "This endpoint is deprecated. Use /api/update-camera-settings-light instead.",
-            "code": ErrorCode.GENERIC,
-            "popup": False
-        }), 400
+            "camera_params": settings_data['camera_params'],
+            "updated_value": updated_value,
+            "applied_to_camera": applied_to_camera
+        }), 200
 
     except Exception as e:
         app.logger.exception("Failed to update camera settings")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/update-camera-settings-light', methods=['POST'])
+# Retired in schema v2: camera exposure and gamma are global, not per-light.
+# @app.route('/api/update-camera-settings-light', methods=['POST'])
 def update_camera_settings_light():
-    """Update light-specific camera settings (Dome or Bar)"""
+    """Compatibility route: update the schema-v2 global camera settings."""
     try:
         data = request.json
         light = data.get('light')  # 'dome' or 'bar'
@@ -759,16 +796,15 @@ def update_camera_settings_light():
         else:
             app.logger.info(f"[CameraSettings] \u2713 {light} {setting_name} skipped camera hardware (only saved to settings.json)")
 
-        # Only persist to settings.json if persist=True (preset loads).
-        # Manual user edits (persist=False) are live-only and discarded on restart.
+        # Legacy callers still provide a light name, but schema v2 has only one
+        # camera setting set. Do not recreate camera_params_dome/bar here.
         if persist:
             settings_data = get_settings()
-            category = f'camera_params_{light}'
-            if category not in settings_data:
-                settings_data[category] = {}
-            settings_data[category][setting_name] = updated_value
+            if 'camera_params' not in settings_data:
+                settings_data['camera_params'] = {}
+            settings_data['camera_params'][setting_name] = updated_value
             save_settings()
-            app.logger.info(f"{light} camera setting {setting_name} updated and saved to settings.json")
+            app.logger.info(f"Global camera setting {setting_name} updated through legacy {light} route")
         else:
             app.logger.info(f"{light} camera setting {setting_name} applied live only (not persisted to settings.json)")
 
@@ -979,6 +1015,47 @@ def autofocus_coarse():
         }), 500
 
 
+@app.route('/api/lights/status', methods=['GET'])
+def get_lights_status():
+    try:
+        light_controller.check_timeouts()
+        return jsonify(light_controller.status()), 200
+    except Exception as error:
+        app.logger.exception('Failed to retrieve four-channel light status')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
+@app.route('/api/lights/activate', methods=['POST'])
+def activate_light():
+    try:
+        data = request.get_json(silent=True) or {}
+        status = light_controller.activate(data.get('channel'), data.get('mode'))
+        return jsonify(status), 200
+    except LampSettingsError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.LAMP_SETTINGS_MISSING, 'popup': True}), 400
+    except LightConfigurationError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except LightCommandError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'popup': True}), 503
+    except Exception as error:
+        app.logger.exception('Failed to activate four-channel light')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
+@app.route('/api/lights/off', methods=['POST'])
+def deactivate_light():
+    try:
+        data = request.get_json(silent=True) or {}
+        return jsonify(light_controller.off(data.get('channel'))), 200
+    except LightConfigurationError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except LightCommandError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'popup': True}), 503
+    except Exception as error:
+        app.logger.exception('Failed to deactivate four-channel light')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
 @app.route('/api/send_gcode', methods=['POST'])
 def send_gcode():
     try:
@@ -1162,7 +1239,13 @@ def _turn_on_uv_dome_light():
         globals.lamp_dome_on_time = None
 
 def _turn_off_all_lights():
-    """Turn off all lights (visible and UV). Silently ignores errors if serial port is disconnected."""
+    """Turn off legacy and configured four-channel illumination outputs."""
+    try:
+        light_controller.off()
+    except Exception as error:
+        # A legacy installation may not yet have the four-channel selectors.
+        # Its established shutdown commands below must remain available.
+        app.logger.debug('Four-channel all-off skipped: %s', error)
     ser = globals.motion_platform
     if ser and ser.is_open:
         try:
@@ -1179,7 +1262,11 @@ def _turn_off_all_lights():
     globals.lamp_uv_dome_high_power = False
 
 def _apply_camera_settings_for_light(light: str):
-    """Apply camera settings for specific light (dome or bar)."""
+    """Apply the global camera settings used by every illumination channel.
+
+    ``light`` is retained only for legacy callers and diagnostics.  Camera
+    exposure and gamma are no longer coupled to the active lamp.
+    """
     settings_data = get_settings()
     camera = globals.camera
     camera_properties = globals.camera_properties
@@ -1196,8 +1283,7 @@ def _apply_camera_settings_for_light(light: str):
             app.logger.warning(f"Could not get camera properties: {e}")
             return
     
-    category = f'camera_params_{light}'
-    light_settings = settings_data.get(category, {})
+    light_settings = settings_data.get('camera_params', {})
     
     for setting_name, setting_value in light_settings.items():
         try:
@@ -1205,7 +1291,8 @@ def _apply_camera_settings_for_light(light: str):
         except Exception as e:
             app.logger.warning(f"Could not apply {setting_name} for {light}: {e}")
 
-def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False, light_type: str = None) -> list:
+def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False,
+                            light_type: str = None, filter_position: int | None = None) -> list:
     """Capture image from camera and save to target folder.
     
     If background_subtraction is True, also saves a masked version.
@@ -1261,6 +1348,8 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
             'camera_settings_file': other.get('camera_settings_file'),
             'exposure_time': current_exposure,
             'gamma': current_gamma,
+            'wavelength': _canonical_light_channel(light_type),
+            'filter_position': filter_position,
         }
         meta_fields = {k: v for k, v in meta_fields.items() if v is not None}
         meta_json = json.dumps(meta_fields, ensure_ascii=False) if meta_fields else None
@@ -1279,11 +1368,7 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     
     saved_paths = [full_path]
     
-    # Cache latest image in globals for external viewing endpoints
-    if light_type == 'dome':
-        globals.latest_dome_image = img_cv.copy()
-    elif light_type == 'bar':
-        globals.latest_bar_image = img_cv.copy()
+    _cache_latest_capture(light_type, img_cv)
     
     # Background subtraction: save masked version alongside original
     if background_subtraction:
@@ -1299,11 +1384,7 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
                     dst_image_path=masked_path
                 )
                 saved_paths.append(masked_path)
-                # Cache masked image in globals
-                if light_type == 'dome':
-                    globals.latest_dome_masked_image = masked.copy()
-                elif light_type == 'bar':
-                    globals.latest_bar_masked_image = masked.copy()
+                _cache_latest_capture(light_type, masked, masked=True)
                 app.logger.info(f"Background-subtracted image saved: {masked_path} (kind={kind})")
             else:
                 app.logger.warning(f"Background subtraction found no object in {filename}")
@@ -1311,6 +1392,18 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
             app.logger.warning(f"Background subtraction failed for {filename}: {e}")
     
     return saved_paths
+
+
+def _canonical_light_channel(light_type):
+    """Translate temporary legacy names without inferring arbitrary UV wavelengths."""
+    return {'dome': 'vis', 'bar': 'uv365'}.get(light_type, light_type)
+
+
+def _cache_latest_capture(light_type, image_bgr, masked=False):
+    channel = _canonical_light_channel(light_type)
+    if channel not in globals.latest_images:
+        return
+    globals.latest_images[channel]['masked' if masked else 'original'] = image_bgr.copy()
 
 
 def _wait_for_motion_complete(ser, timeout=30.0):
@@ -1411,6 +1504,41 @@ def _capture_image_with_light(light_type: str, measurement_folder: str, measurem
     return _capture_and_save_image(measurement_folder, filename, background_subtraction=background_subtraction, light_type=light_type)
 
 
+def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_name: str,
+                              tablet_index: int, background_subtraction: bool = False) -> list:
+    """Capture one persisted wavelength/filter row with the Octopus controller.
+
+    The selected filter position is recorded in the filename and response. The
+    filter revolver itself has no board command defined yet, so no speculative
+    G-code is issued for it here.
+    """
+    wavelength = row['wavelength']
+    filter_position = row['filter_position']
+    mode = 'dimmed' if wavelength in ('uv255', 'uv310', 'uv365') else None
+    activated = False
+    try:
+        light_controller.activate(wavelength, mode)
+        activated = True
+        _apply_camera_settings_for_light(wavelength)
+        time.sleep(0.3)
+
+        timestamp = _format_capture_timestamp(datetime.now())
+        tablet_label = _tablet_index_to_label(tablet_index)
+        filename = f"{measurement_name}_{timestamp}_{tablet_label}_{wavelength}_filter{filter_position}"
+        return _capture_and_save_image(
+            measurement_folder, filename,
+            background_subtraction=background_subtraction,
+            light_type=wavelength,
+            filter_position=filter_position,
+        )
+    finally:
+        if activated:
+            try:
+                light_controller.off(wavelength)
+            except Exception as error:
+                app.logger.error('Could not switch off %s after capture: %s', wavelength, error)
+
+
 @app.route('/api/auto_measurement/step', methods=['POST'])
 def auto_measurement_step():
     """
@@ -1447,6 +1575,12 @@ def auto_measurement_step():
         autofocus_enabled = bool(data.get('autofocus', False))
         lamp_top = bool(data.get('lamp_top', False))
         lamp_side = bool(data.get('lamp_side', False))
+        capture_plan = None
+        if 'capture_plan' in data:
+            try:
+                capture_plan = validate_capture_plan(data['capture_plan'])
+            except ValueError as error:
+                return jsonify({'status': 'error', 'message': str(error)}), 400
         is_first_tablet = bool(data.get('is_first_tablet', False))
         background_subtraction = bool(data.get('background_subtraction', False))
         
@@ -1462,10 +1596,10 @@ def auto_measurement_step():
                 'message': 'Missing measurement_folder or measurement_name'
             }), 400
         
-        if not lamp_top and not lamp_side:
+        if capture_plan is None:
             return jsonify({
                 'status': 'error',
-                'message': 'At least one light must be selected'
+                'message': 'capture_plan is required. Legacy lamp_top/lamp_side requests are no longer supported.'
             }), 400
         
         # ---------- Check devices ----------
@@ -1483,6 +1617,7 @@ def auto_measurement_step():
             }), 400
         
         saved_images = []
+        captured_plan_rows = []
         
         # =====================================================
         # STEP 1: Move to tablet position
@@ -1548,8 +1683,12 @@ def auto_measurement_step():
         if should_autofocus:
             app.logger.info(f"Tablet {tablet_index}: Starting autofocus ({'coarse' if is_first_tablet else 'fine'})")
             
-            # Turn on dome light and apply dome camera settings for autofocus
-            _turn_on_dome_light()
+            # Capture-plan measurements use VIS as their autofocus reference.
+            # Legacy requests retain their existing dome-light behavior.
+            if capture_plan is not None:
+                light_controller.activate('vis')
+            else:
+                _turn_on_dome_light()
             _apply_camera_settings_for_light('dome')
             time.sleep(0.3)  # Let light and camera settings stabilize
             
@@ -1831,6 +1970,51 @@ def auto_measurement_step():
         # =====================================================
         # STEP 4: Capture images with selected lights
         # =====================================================
+        if capture_plan is not None:
+            for row in capture_plan:
+                wavelength = row['wavelength']
+                filter_position = row['filter_position']
+                try:
+                    app.logger.info(
+                        'Tablet %s: Capturing %s image with filter position %s',
+                        tablet_index, wavelength, filter_position,
+                    )
+                    saved_paths = _capture_capture_plan_row(
+                        row, measurement_folder, measurement_name, tablet_index,
+                        background_subtraction=background_subtraction,
+                    )
+                    saved_images.extend(saved_paths)
+                    captured_plan_rows.append({
+                        'wavelength': wavelength,
+                        'filter_position': filter_position,
+                        'saved_images': saved_paths,
+                    })
+                except (OSError, PermissionError) as error:
+                    return _handle_motion_usb_disconnect(
+                        motion_platform, f'{wavelength} capture tablet {tablet_index}'
+                    )
+                except Exception as error:
+                    app.logger.error(
+                        'Tablet %s: Failed to capture %s/filter %s: %s',
+                        tablet_index, wavelength, filter_position, error,
+                    )
+                    if _is_camera_disconnect(error):
+                        return _handle_camera_disconnect(f'{wavelength} capture tablet {tablet_index}')
+                    if _is_serial_disconnect(error):
+                        return _handle_motion_usb_disconnect(
+                            motion_platform, f'{wavelength} capture tablet {tablet_index}'
+                        )
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'Failed to capture {wavelength} with filter {filter_position} for tablet {tablet_index}: {error}'
+                    }), 500
+
+            # The request contained the new capture plan, so skip the legacy
+            # dome/bar capture path below even when old compatibility flags are
+            # also present.
+            lamp_top = False
+            lamp_side = False
+
         if lamp_top:
             try:
                 app.logger.info(f"Tablet {tablet_index}: Capturing dome image")
@@ -1922,12 +2106,18 @@ def auto_measurement_step():
         # STEP 5: Turn off lights after this tablet
         # =====================================================
         _turn_off_all_lights()
+        if capture_plan is not None:
+            try:
+                light_controller.off()
+            except Exception as error:
+                app.logger.warning('Four-channel all-off after capture plan failed: %s', error)
         
         app.logger.info(f"Tablet {tablet_index}: Measurement complete ({len(saved_images)} images)")
         response_data = {
             'status': 'success',
             'tablet_index': tablet_index,
-            'saved_images': saved_images
+            'saved_images': saved_images,
+            'captured_plan_rows': captured_plan_rows,
         }
         if af_error_code:
             response_data['af_error_code'] = af_error_code
@@ -2207,11 +2397,7 @@ def save_raw_image_endpoint():
             "popup": True
         }), 500
 
-    # Cache latest image in globals for external viewing endpoints
-    if light_type == 'dome':
-        globals.latest_dome_image = img_cv.copy()
-    elif light_type == 'bar':
-        globals.latest_bar_image = img_cv.copy()
+    _cache_latest_capture(light_type, img_cv)
 
     # Background subtraction: save masked version alongside original if enabled
     masked_path = None
@@ -2220,7 +2406,6 @@ def save_raw_image_endpoint():
     if bg_sub_enabled:
         try:
             af_contour = getattr(globals, "last_autofocus_contour", None)
-            print(af_contour)
             mask, kind, metrics = bgr_main.make_object_mask_from_bgr_rel(img_cv, autofocus_contour = af_contour)
             if mask is not None and np.any(mask):
                 masked = bgr_main.apply_mask_zero_background(img_cv, mask)
@@ -2231,11 +2416,7 @@ def save_raw_image_endpoint():
                     src_image_path=full_path,
                     dst_image_path=masked_path
                 )
-                # Cache masked image in globals
-                if light_type == 'dome':
-                    globals.latest_dome_masked_image = masked.copy()
-                elif light_type == 'bar':
-                    globals.latest_bar_masked_image = masked.copy()
+                _cache_latest_capture(light_type, masked, masked=True)
                 app.logger.info(f"Background-subtracted image saved: {masked_path} (kind={kind})")
             else:
                 app.logger.warning("Background subtraction found no object in saved image")
@@ -2381,6 +2562,49 @@ def get_other_settings():
 
     return jsonify({category: settings_data[category]}), 200
 
+
+@app.route('/api/settings/lamp', methods=['GET', 'PUT'])
+def lamp_settings():
+    if request.method == 'GET':
+        settings_data = get_settings()
+        return jsonify({'lamp_settings': settings_data.get('lamp_settings', {'channels': {}})}), 200
+
+    try:
+        normalized_settings = validate_lamp_settings(request.get_json(silent=True) or {})
+        settings_data = get_settings()
+        lamp_settings_data = settings_data.setdefault('lamp_settings', {})
+        lamp_settings_data['channels'] = normalized_settings['channels']
+        save_settings()
+        return jsonify({'lamp_settings': lamp_settings_data}), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to update lamp settings')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
+@app.route('/api/settings/lamp/advanced', methods=['GET', 'PUT'])
+def advanced_lamp_settings():
+    if request.method == 'GET':
+        settings_data = get_settings()
+        lamp_settings_data = settings_data.get('lamp_settings', {})
+        return jsonify({'advanced_lamp_settings': {
+            'output_selectors': lamp_settings_data.get('output_selectors', {})
+        }}), 200
+
+    try:
+        normalized_settings = validate_lamp_output_selectors(request.get_json(silent=True) or {})
+        settings_data = get_settings()
+        lamp_settings_data = settings_data.setdefault('lamp_settings', {'channels': {}})
+        lamp_settings_data['output_selectors'] = normalized_settings['output_selectors']
+        save_settings()
+        return jsonify({'advanced_lamp_settings': normalized_settings}), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to update advanced lamp settings')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
 @app.route('/api/update-other-settings', methods=['POST'])
 def update_other_settings():
     try:
@@ -2390,6 +2614,9 @@ def update_other_settings():
         setting_value = data.get('setting_value')   # e.g. 123
 
         app.logger.info(f"Updating {category}.{setting_name} = {setting_value}")
+
+        if category == 'auto_measurement_settings' and setting_name == 'capture_plan':
+            setting_value = validate_capture_plan(setting_value)
 
         # Normalize path-like settings to use forward slashes
         updated_value = setting_value
@@ -2414,6 +2641,8 @@ def update_other_settings():
             "updated_value": updated_value
         }), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e), "code": ErrorCode.GENERIC, "popup": True}), 400
     except Exception as e:
         app.logger.exception("Failed to update other settings")
         return jsonify({"error": str(e)}), 500
@@ -2774,6 +3003,11 @@ def initialize_serial_devices():
 def shutdown_devices():
     """Clean shutdown of all devices before exit."""
     app.logger.info("Shutting down devices...")
+
+    try:
+        light_controller.off()
+    except Exception as error:
+        app.logger.warning('Four-channel all-off during shutdown failed: %s', error)
     
     # Close camera stream and camera
     try:
@@ -2801,31 +3035,35 @@ def shutdown_devices():
 # These endpoints serve the most recently captured images as viewable JPEGs.
 # They are the ONLY endpoints exposed in the compiled (PyInstaller) build.
 
-_LATEST_IMAGE_TYPES = {
-    'dome': 'latest_dome_image',
-    'dome_masked': 'latest_dome_masked_image',
-    'bar': 'latest_bar_image',
-    'bar_masked': 'latest_bar_masked_image',
+_LATEST_IMAGE_ALIASES = {
+    # Temporary compatibility aliases for pre-v2 viewers only.
+    'dome': ('vis', 'original'),
+    'dome_masked': ('vis', 'masked'),
+    'bar': ('uv365', 'original'),
+    'bar_masked': ('uv365', 'masked'),
 }
 
 @app.route('/api/latest_image/<image_type>', methods=['GET'])
 def get_latest_image(image_type):
     """Serve the latest captured image as a viewable JPEG.
     
-    Valid image_type values:
-        - dome          : dome light image
-        - dome_masked   : dome light with background subtraction
-        - bar           : bar light image
-        - bar_masked    : bar light with background subtraction
+    Valid canonical types are ``uv255``, ``uv310``, ``uv365``, and ``vis``;
+    append ``_masked`` for their masked variants. ``dome`` and ``bar`` remain
+    temporary aliases for VIS and UV365 respectively.
     """
-    attr_name = _LATEST_IMAGE_TYPES.get(image_type)
-    if attr_name is None:
+    masked = image_type.endswith('_masked')
+    channel = image_type[:-7] if masked else image_type
+    if image_type in _LATEST_IMAGE_ALIASES:
+        channel, variant = _LATEST_IMAGE_ALIASES[image_type]
+    else:
+        variant = 'masked' if masked else 'original'
+    if channel not in globals.latest_images:
         return jsonify({
             'error': f'Unknown image type: {image_type}. '
-                     f'Valid types: {", ".join(_LATEST_IMAGE_TYPES.keys())}'
+                     'Valid canonical types: uv255, uv310, uv365, vis (optionally _masked).'
         }), 400
-    
-    img_bgr = getattr(globals, attr_name, None)
+
+    img_bgr = globals.latest_images[channel][variant]
     if img_bgr is None:
         return jsonify({
             'error': f'No {image_type} image available yet. Run a measurement first.'
@@ -2847,12 +3085,13 @@ def get_latest_image(image_type):
 def get_latest_images_status():
     """Return availability status of all latest image types."""
     status = {}
-    for image_type, attr_name in _LATEST_IMAGE_TYPES.items():
-        img = getattr(globals, attr_name, None)
-        status[image_type] = {
-            'available': img is not None,
-            'url': f'/api/latest_image/{image_type}' if img is not None else None
-        }
+    for channel, variants in globals.latest_images.items():
+        for variant, img in variants.items():
+            image_type = channel if variant == 'original' else f'{channel}_masked'
+            status[image_type] = {
+                'available': img is not None,
+                'url': f'/api/latest_image/{image_type}' if img is not None else None,
+            }
     return jsonify(status), 200
 
 
@@ -3737,6 +3976,14 @@ if __name__ == '__main__':
     lamp_monitor.start()
     globals.lamp_timeout_thread = lamp_monitor
     app.logger.info("Lamp timeout monitor thread started")
+
+    four_channel_monitor = threading.Thread(
+        target=four_channel_lamp_timeout_monitor,
+        daemon=True,
+        name="FourChannelLampTimeoutMonitor"
+    )
+    four_channel_monitor.start()
+    app.logger.info("Four-channel lamp timeout monitor thread started")
     
     try:
         app.run(debug=False, use_reloader=False)

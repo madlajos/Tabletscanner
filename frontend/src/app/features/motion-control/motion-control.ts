@@ -8,6 +8,7 @@ import { ErrorNotificationService } from '../../services/error-notification.serv
 import { SharedService } from '../../shared.service';
 import { firstValueFrom } from 'rxjs';
 import { BASE_URL } from '../../api-config';
+import { LightChannel, LightStatus } from '../../models/light.models';
 
 
 @Component({
@@ -47,6 +48,7 @@ export class MotionControl implements OnInit, OnDestroy {
   private lightsOffSub?: Subscription;
   private lampAutoOffPolling?: Subscription;
   private externalConnectionSub?: Subscription;
+  private fourChannelLightPolling?: Subscription;
   isConnected: boolean = false;
 
   // Flag to lock controls during auto-measurement
@@ -60,6 +62,19 @@ export class MotionControl implements OnInit, OnDestroy {
   uvDomeLightOn: boolean = false;
   private uvDomeClickTimer: any = null;
   lightBusy = false;
+  lightStatus: LightStatus = {
+    active_channel: null,
+    active_mode: null,
+    channels: { uv255: false, uv310: false, uv365: false, vis: false },
+    auto_turned_off: []
+  };
+  private lampClickTimers: Partial<Record<LightChannel, ReturnType<typeof setTimeout>>> = {};
+  readonly lampButtons: ReadonlyArray<{ channel: LightChannel; label: string; onAsset: string; offAsset: string }> = [
+    { channel: 'uv255', label: '255 nm', onAsset: '255nm_on.svg', offAsset: '255nm_off.svg' },
+    { channel: 'uv310', label: '310 nm', onAsset: '310nm_on.svg', offAsset: '310nm_off.svg' },
+    { channel: 'uv365', label: '365 nm', onAsset: '365nm_on.svg', offAsset: '365nm_off.svg' },
+    { channel: 'vis', label: 'VIS', onAsset: 'vis_on.svg', offAsset: 'vis_off.svg' }
+  ];
 
 
   isHoming = false;
@@ -120,6 +135,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
     // Start polling for lamp auto-off status (5-minute inactivity timeout)
     this.startLampAutoOffPolling();
+    this.startFourChannelLightPolling();
 
     // Listen for external reconnections (e.g., auto-measurement reconnects the platform).
     // Without this, the error popup can stay visible because only motion-control's
@@ -145,6 +161,8 @@ export class MotionControl implements OnInit, OnDestroy {
     this.stopReconnectionPolling();
     this.stopPositionPolling();
     this.stopLampAutoOffPolling();
+    this.fourChannelLightPolling?.unsubscribe();
+    Object.values(this.lampClickTimers).forEach(timer => timer && clearTimeout(timer));
     this.measurementActiveSub?.unsubscribe();
     this.motionPositionSub?.unsubscribe();
     this.lightsOffSub?.unsubscribe();
@@ -311,6 +329,58 @@ export class MotionControl implements OnInit, OnDestroy {
       this.lampAutoOffPolling.unsubscribe();
     }
     this.lampAutoOffPolling = undefined;
+  }
+
+  startFourChannelLightPolling(): void {
+    this.syncFourChannelLightStatus();
+    this.fourChannelLightPolling = interval(1000).subscribe(() => this.syncFourChannelLightStatus());
+  }
+
+  private syncFourChannelLightStatus(): void {
+    if (!this.isConnected || this.lightBusy) return;
+    this.http.get<LightStatus>(`${BASE_URL}/lights/status`).subscribe({
+      next: status => this.lightStatus = status,
+      error: () => undefined
+    });
+  }
+
+  isLampActive(channel: LightChannel): boolean {
+    return this.lightStatus.active_channel === channel;
+  }
+
+  lampAsset(button: { channel: LightChannel; onAsset: string; offAsset: string }): string {
+    return `assets/SVG/${this.isLampActive(button.channel) ? button.onAsset : button.offAsset}`;
+  }
+
+  onLampClick(channel: LightChannel): void {
+    if (channel === 'vis') {
+      this.toggleFourChannelLight(channel);
+      return;
+    }
+    this.lampClickTimers[channel] = setTimeout(() => {
+      delete this.lampClickTimers[channel];
+      this.toggleFourChannelLight(channel, 'dimmed');
+    }, 250);
+  }
+
+  onLampDoubleClick(channel: LightChannel): void {
+    if (channel === 'vis') return;
+    const timer = this.lampClickTimers[channel];
+    if (timer) clearTimeout(timer);
+    delete this.lampClickTimers[channel];
+    this.toggleFourChannelLight(channel, 'full', true);
+  }
+
+  private toggleFourChannelLight(channel: LightChannel, mode?: 'dimmed' | 'full', forceOn = false): void {
+    if (this.lightBusy || this.controlsDisabled) return;
+    this.lightBusy = true;
+    const request = this.isLampActive(channel) && !forceOn
+      ? this.http.post<LightStatus>(`${BASE_URL}/lights/off`, { channel })
+      : this.http.post<LightStatus>(`${BASE_URL}/lights/activate`, mode ? { channel, mode } : { channel });
+    request.subscribe({
+      next: status => { this.lightStatus = status; this.lightBusy = false; },
+      error: error => { console.error('Four-channel lamp command failed:', error); this.lightBusy = false; this.syncFourChannelLightStatus(); }
+    });
   }
 
   checkLampAutoOff(): void {

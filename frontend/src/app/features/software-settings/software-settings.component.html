@@ -1,0 +1,94 @@
+<div class="settings-backdrop" role="presentation" (click)="onBackdropClick($event)">
+  <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="software-settings-title">
+    <header class="dialog-header">
+      <h2 id="software-settings-title">Beállítások</h2>
+      <button type="button" class="icon-button" (click)="dismiss()" aria-label="Bezárás">
+        <mat-icon>close</mat-icon>
+      </button>
+    </header>
+
+    <div class="dialog-body">
+      <nav class="settings-navigation" aria-label="Beállítás típusok">
+        <button *ngFor="let type of settingsTypes" type="button" (click)="selectType(type.id)"
+          [class.selected]="selectedType === type.id">
+          <mat-icon>{{ type.icon }}</mat-icon>
+          <span>{{ type.label }}</span>
+        </button>
+      </nav>
+
+      <main class="settings-content">
+        <ng-container [ngSwitch]="selectedType">
+          <section *ngSwitchCase="'filter'">
+            <h3>Szűrőváltó</h3>
+            <p>A szűrőváltó beállításai egy későbbi fejlesztési fázisban lesznek elérhetők.</p>
+          </section>
+
+          <section *ngSwitchCase="'tray'">
+            <h3>Tálca</h3>
+            <p>A tálca beállításai egy későbbi fejlesztési fázisban lesznek elérhetők.</p>
+          </section>
+
+          <section *ngSwitchCase="'advanced'">
+            <h3>Haladó</h3>
+            <p class="settings-note">Adja meg az Octopus firmware által használt M106 kimenetválasztót. Csak a <code>P0</code>, <code>P1</code> formátum engedélyezett.</p>
+            <p *ngIf="loadingAdvancedSettings" class="settings-note">Betöltés…</p>
+            <table class="advanced-settings-table" *ngIf="!loadingAdvancedSettings">
+              <thead><tr><th>Hullámhossz</th><th>M106 kimenet</th></tr></thead>
+              <tbody>
+                <tr><td>255 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv255" placeholder="P0" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
+                <tr><td>310 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv310" placeholder="P1" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
+                <tr><td>365 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv365" placeholder="P2" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
+                <tr><td>VIS</td><td><input type="text" [(ngModel)]="advancedSelectors.vis" placeholder="P3" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
+              </tbody>
+            </table>
+            <p *ngIf="advancedError" class="settings-error">{{ advancedError }}</p>
+            <p *ngIf="advancedSaved" class="settings-success">A haladó lámpabeállítások mentve.</p>
+            <button type="button" class="save-button" (click)="saveAdvancedSettings()"
+              [disabled]="measurementActive || loadingAdvancedSettings || savingAdvancedSettings">
+              {{ savingAdvancedSettings ? 'Mentés…' : 'Mentés' }}
+            </button>
+          </section>
+
+          <section *ngSwitchCase="'lamp'">
+            <h3>Lámpa</h3>
+            <p class="settings-note">A UV csatornák fényereje és lekapcsolási ideje itt állítható. A VIS mindig teljes fényerőn működik.</p>
+            <p *ngIf="loadingLampSettings" class="settings-note">Betöltés…</p>
+
+            <table class="lamp-settings-table" *ngIf="!loadingLampSettings">
+              <thead>
+                <tr>
+                  <th>Hullámhossz</th>
+                  <th>Tompított fényerő</th>
+                  <th>Teljes Fényerő</th>
+                  <th>Tompított lekapcsolási idő</th>
+                  <th>Teljes fényerő lekapcsolási idő</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let row of lampRows">
+                  <td>{{ row.label }}</td>
+                  <ng-container *ngIf="row.channel !== 'vis'; else visibleRow">
+                    <td><input type="number" min="10" max="100" [(ngModel)]="row.settings.dim_percent" [disabled]="measurementActive || savingLampSettings"><span>%</span></td>
+                    <td><input type="number" min="10" max="100" [(ngModel)]="row.settings.full_percent" [disabled]="measurementActive || savingLampSettings"><span>%</span></td>
+                    <td><input type="number" min="0.001" step="any" [(ngModel)]="row.settings.dim_timeout_seconds" [disabled]="measurementActive || savingLampSettings"><span>s</span></td>
+                    <td><input type="number" min="0.001" step="any" [(ngModel)]="row.settings.full_timeout_seconds" [disabled]="measurementActive || savingLampSettings"><span>s</span></td>
+                  </ng-container>
+                  <ng-template #visibleRow>
+                    <td>N/A</td><td>100%</td><td>N/A</td><td>N/A</td>
+                  </ng-template>
+                </tr>
+              </tbody>
+            </table>
+
+            <p *ngIf="lampError" class="settings-error">{{ lampError }}</p>
+            <p *ngIf="lampSaved" class="settings-success">A lámpabeállítások mentve.</p>
+            <button type="button" class="save-button" (click)="saveLampSettings()"
+              [disabled]="measurementActive || loadingLampSettings || savingLampSettings">
+              {{ savingLampSettings ? 'Mentés…' : 'Mentés' }}
+            </button>
+          </section>
+        </ng-container>
+      </main>
+    </div>
+  </section>
+</div>

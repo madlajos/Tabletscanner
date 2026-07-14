@@ -1,5 +1,10 @@
 # Tabletscanner AI Coding Guidelines
 
+> **Canonical guide:** read [`../AGENTS.md`](../AGENTS.md) and
+> [`../README.md`](../README.md) first. This file contains historical detail and may lag the
+> current Electron, pipeline, concurrency, and API implementation. When it conflicts with those
+> documents or current source, current source and `AGENTS.md` take precedence.
+
 ## Project Architecture
 
 **Tabletscanner** is a full-stack application for tablet/document scanning with hardware motion control and camera autofocus. It consists of three distinct layers:
@@ -31,17 +36,20 @@ Device state is stored in module-level variables with threading locks:
 Pattern for serial device connection:
 ```python
 def connect_to_serial_device(device_name, identification_command, expected_response, vid, pid):
-    # 1. Scan available COM ports by VID/PID (e.g., vid=0x0483, pid=0x3748 for STM32)
+    # 1. Scan available COM ports by VID/PID (currently vid=0x0483, pid=0x5740)
     # 2. Send short command (e.g., "M115") with ~1s timeout (never block Flask thread)
     # 3. Check response for expected string (e.g., "Marlin")
     # 4. Return serial.Serial object or None
 ```
 
-**Timeouts are critical**: Always use 0.2s read/write timeouts. Flask is single-threaded by default; blocking calls hang the UI.
+**Timeouts are critical**: Keep serial operations bounded. Current discovery uses a 0.2s read
+timeout and 0.5s write timeout. Flask may handle concurrent requests, so locks and operation
+ownership are required as well as responsiveness.
 
 ### Flask API Error Handling
 
-All endpoints return JSON with a consistent error structure:
+New actionable failures should converge on this error structure, but existing endpoints are not
+fully consistent and must be checked individually:
 ```python
 {
     'error': 'Human-readable error message',
@@ -89,9 +97,9 @@ get_settings()   # Returns in-memory dict (read-only for safety)
 
 ### Service Architecture
 
-- **Services** in `src/app/services/`: Each service wraps HTTP calls to a specific backend subsystem
-  - Auto-measurement, camera control, motion control, etc.
-  - Use dependency injection; services are singletons
+- **Services** in `src/app/services/` hold shared state and some backend calls.
+- Several scanner components also call `HttpClient` directly. Prefer typed feature services for
+  new API work instead of expanding that coupling.
 - **Features** in `src/app/features/`: Standalone Angular components (Angular 20 no module-based architecture)
 
 ### HTTP Communication
@@ -152,7 +160,9 @@ All frames are BGR8 immediately after grabbing. **Warning**: This blocks the Fla
 
 ### Settings Updates
 
-When frontend modifies camera or motion settings, the backend validates via `validate_and_set_camera_param()` and immediately persists to `settings.json`. Frontend listens via polling or WebSocket (if implemented) to sync.
+Camera setting updates are validated by the backend and may be live-only or persisted depending
+on the endpoint payload. Other settings are persisted to `settings.json`; current UI state uses
+RxJS subjects and polling, not WebSockets.
 
 ## Project-Specific Conventions
 
@@ -160,11 +170,12 @@ When frontend modifies camera or motion settings, the backend validates via `val
 - **Logging**: Use `app.logger` in backend; avoid print() statements
 - **Constants**: Stored in `globals.py` (motion limits), `error_codes.py` (error codes), settings JSON (user-configurable)
 - **Firmware**: Marlin flavor (not Klipper or RepRap); G28, M84, M114 are standard commands
-- **No background threads**: Flask runs single-threaded by design; use locks for shared state, avoid threads unless explicitly needed
+- **Concurrency is present**: Flask may serve concurrent requests and the backend starts a lamp
+  timeout monitor thread. Use the existing locks and do not assume request serialization.
 
 ## Key Files Reference
 
-- **Backend entry**: [backend/app.py](../backend/app.py) (Flask app, 26 API routes)
+- **Backend entry**: [backend/app.py](../backend/app.py) (Flask app and current API routes)
 - **Camera control**: [backend/cameracontrol.py](../backend/cameracontrol.py) (Basler Pylon wrapper)
 - **Motion control**: [backend/motioncontrols.py](../backend/motioncontrols.py) (G-code commands), [backend/porthandler.py](../backend/porthandler.py) (serial comms)
 - **Autofocus algorithm**: [backend/autofocus_main.py](../backend/autofocus_main.py)

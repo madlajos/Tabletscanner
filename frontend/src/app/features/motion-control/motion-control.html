@@ -133,14 +133,12 @@
   </div>
 
   <div class="lamp-buttons">
-    <button class="lamp-button" [class.active]="ringLightOn" (click)="toggleDomeLight()" [disabled]="!isConnected || measurementActive || isAutofocusing">
-      <img [src]="ringLightOn ? 'assets/SVG/ringlight_on.svg' : 'assets/SVG/ringlight_off.svg'" alt="Ring light"
-        class="lamp-icon" />
-    </button>
-
-    <button class="lamp-button" [class.active]="uvDomeLightOn" (click)="onUVDomeClick()" [disabled]="!isConnected || measurementActive || isAutofocusing">
-      <img [src]="uvDomeLightOn ? 'assets/SVG/uv_ringlight_on.svg' : 'assets/SVG/uv_ringlight_off.svg'" alt="UV Dome light"
-        class="lamp-icon" />
+    <button *ngFor="let lamp of lampButtons" class="lamp-button" [class.active]="isLampActive(lamp.channel)"
+      [class.full-mode]="lightStatus.active_channel === lamp.channel && lightStatus.active_mode === 'full'"
+      (click)="onLampClick(lamp.channel)" (dblclick)="onLampDoubleClick(lamp.channel)"
+      [disabled]="!isConnected || measurementActive || isAutofocusing || lightBusy"
+      [attr.aria-label]="lamp.label + ' lámpa'">
+      <img [src]="lampAsset(lamp)" [alt]="lamp.label" class="lamp-icon" />
     </button>
   </div>
 </div>

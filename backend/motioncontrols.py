@@ -52,10 +52,12 @@ def disable_steppers(motion_platform, *axes):
         ok, reply = porthandler.write_and_wait(motion_platform, command, timeout=2.0)
         if not ok:
             log.warning(f"Disable steppers command '{command}' was not acknowledged")
+        return ok
     except (OSError, PermissionError):
         raise  # let caller handle USB disconnect
     except Exception as e:
         log.error(f"Error sending Disable Steppers command: {e}")
+        return False
 
 def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
     """

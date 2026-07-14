@@ -2,8 +2,12 @@
 
   <!-- User Settings -->
   <section class="user-settings">
-    <h3>Mentési Beállítások</h3>
-    <table class="user-settings-table">
+    <button type="button" class="section-toggle" (click)="toggleSaveSettings()"
+      [attr.aria-expanded]="saveSettingsExpanded" aria-controls="save-settings-content">
+      <span>Mentési Beállítások</span>
+      <mat-icon>{{ saveSettingsExpanded ? 'expand_less' : 'expand_more' }}</mat-icon>
+    </button>
+    <table id="save-settings-content" class="user-settings-table" [hidden]="!saveSettingsExpanded">
       <tbody>
         <!-- Top row: Objektív -->
         <tr>
@@ -78,31 +82,21 @@
 
   <!-- Developer Settings -->
   <section class="developer-settings">
-    <h3>Kamerabeállítások</h3>
+    <button type="button" class="section-toggle" (click)="toggleCameraSettings()"
+      [attr.aria-expanded]="cameraSettingsExpanded" aria-controls="camera-settings-content">
+      <span>Kamerabeállítások</span>
+      <mat-icon>{{ cameraSettingsExpanded ? 'expand_less' : 'expand_more' }}</mat-icon>
+    </button>
 
-    <table class="camera-settings-table">
+    <table id="camera-settings-content" class="camera-settings-table" [hidden]="!cameraSettingsExpanded">
       <tbody>
-        <!-- Icons row -->
-        <tr>
-          <td></td>
-          <td class="icon-cell"><img class="dome-lamp-icon" src="assets/SVG/ringlight_off.svg" alt="Dome light" /></td>
-          <td class="icon-cell"><img class="bar-lamp-icon" src="assets/SVG/barlight_off.svg" alt="Bar light" /></td>
-        </tr>
-
         <tr>
           <td>Záridő</td>
           <td>
             <input type="number" inputmode="numeric" step="1" min="0"
-              [(ngModel)]="cameraSettings.ExposureTime_Dome"
-              (focus)="handleNumericFocus('ExposureTime_Dome', 0)"
-              (blur)="handleNumericBlur('ExposureTime_Dome', 0)"
-              [disabled]="!isConnected || measurementActive || isAutofocusing">
-          </td>
-          <td>
-            <input type="number" inputmode="numeric" step="1" min="0"
-              [(ngModel)]="cameraSettings.ExposureTime_Bar"
-              (focus)="handleNumericFocus('ExposureTime_Bar', 0)"
-              (blur)="handleNumericBlur('ExposureTime_Bar', 0)"
+              [(ngModel)]="cameraSettings.ExposureTime"
+              (focus)="handleNumericFocus('ExposureTime', 0)"
+              (blur)="handleNumericBlur('ExposureTime', 0)"
               [disabled]="!isConnected || measurementActive || isAutofocusing">
           </td>
         </tr>
@@ -111,16 +105,9 @@
           <td>Gamma</td>
           <td>
             <input type="number" inputmode="decimal" step="0.0001" min="0"
-              [(ngModel)]="cameraSettings.Gamma_Dome"
-              (focus)="handleNumericFocus('Gamma_Dome', 4)"
-              (blur)="handleNumericBlur('Gamma_Dome', 4)"
-              [disabled]="!isConnected || measurementActive || isAutofocusing">
-          </td>
-          <td>
-            <input type="number" inputmode="decimal" step="0.0001" min="0"
-              [(ngModel)]="cameraSettings.Gamma_Bar"
-              (focus)="handleNumericFocus('Gamma_Bar', 4)"
-              (blur)="handleNumericBlur('Gamma_Bar', 4)"
+              [(ngModel)]="cameraSettings.Gamma"
+              (focus)="handleNumericFocus('Gamma', 4)"
+              (blur)="handleNumericBlur('Gamma', 4)"
               [disabled]="!isConnected || measurementActive || isAutofocusing">
           </td>
         </tr>
@@ -142,32 +129,6 @@
             </div>
           </td>
         </tr>
-
-        <tr>
-          <td>Beállítások</td>
-          <td colspan="2">
-            <div class="csv-input-wrapper wide-input-wrapper preset-wrapper">
-
-
-              <input type="text" class="styled-input dir-display" [(ngModel)]="settingsPresetName"
-                placeholder="Névtelen" readonly />
-
-              <input #presetFileInput type="file" accept=".tss"
-                (change)="onPresetFileSelected($event)" hidden />
-
-              <button class="browse-button" type="button" (click)="presetFileInput.click()" [disabled]="measurementActive || isAutofocusing">...
-              </button>
-
-              <button class="browse-button icon-button" type="button" (click)="saveSettingsPreset()" [disabled]="measurementActive || isAutofocusing">
-                <mat-icon class="mono-icon">save</mat-icon>
-              </button>
-
-            </div>
-          </td>
-        </tr>
-
-
-
 
         <!-- Controls row spanning the whole width -->
         <tr>

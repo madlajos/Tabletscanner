@@ -36,6 +36,11 @@
       </div>
       <app-camera-control></app-camera-control>
 
+      <button type="button" class="software-settings-button" (click)="openSoftwareSettings()">
+        <mat-icon>settings</mat-icon>
+        <span>Beállítások</span>
+      </button>
+
       <div class="side-panel-logo">
         <img src="assets/logo.png" alt="Logo" />
       </div>
@@ -72,4 +77,8 @@
   <main class="section-container">
     <app-recipe-applier></app-recipe-applier>
   </main>
+}
+
+@if (softwareSettingsOpen) {
+  <app-software-settings (close)="closeSoftwareSettings()"></app-software-settings>
 }
