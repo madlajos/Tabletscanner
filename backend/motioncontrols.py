@@ -26,16 +26,18 @@ def home_axes(motion_platform, *axes):
     command = f"G28 {axes_str}"
 
     try:
-        # Fire-and-forget: G28 can take 5-30 seconds and the board only
-        # responds with "ok" when homing completes.  write_and_wait()
-        # would always time out here, and its internal drain-then-read
-        # cycle can consume data the caller's polling loop expects.
-        # The caller (api_home_toolhead) handles the completion wait.
-        porthandler.write(motion_platform, command)
+        # Hold the shared serial lock until Marlin acknowledges completion so
+        # no status probe or second motion command can interleave with G28.
+        return porthandler.write_and_wait_motion(
+            motion_platform,
+            command,
+            timeout=30.0,
+        )
     except (OSError, PermissionError):
         raise  # let caller handle USB disconnect
     except Exception as e:
         log.error(f"Error sending homing command to Motion platform: {e}")
+        return False
 
 def disable_steppers(motion_platform, *axes):
     # If no axes are specified, disable all steppers
@@ -59,12 +61,12 @@ def disable_steppers(motion_platform, *axes):
         log.error(f"Error sending Disable Steppers command: {e}")
         return False
 
-def get_toolhead_position(ser, timeout: float = 0.3) -> Dict[str, float]:
+def get_toolhead_position(ser, timeout: float = 0.3, allow_busy: bool = False) -> Dict[str, float]:
     """
     Sends M114 and returns {"x":..., "y":..., "z":...} with a hard overall timeout.
     """
     # Quick status probe to drain/flush noisy buffers when NOT busy.
-    if not globals.motion_busy:
+    if not globals.motion_busy or allow_busy:
         try:
             # Clear any stale bytes first to avoid mixing with the M105 we send now.
             try:

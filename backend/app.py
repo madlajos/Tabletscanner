@@ -10,6 +10,7 @@ from cameracontrol import (apply_camera_settings,
                            load_camera_profile)
 import porthandler
 import motioncontrols
+import filter_revolver
 import os
 import sys
 import math
@@ -17,7 +18,20 @@ from datetime import datetime
 import subprocess
 import json
 from threading import Lock
-from settings_manager import load_settings, save_settings, get_settings, validate_capture_plan, validate_lamp_output_selectors, validate_lamp_settings
+from settings_manager import (
+    DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM,
+    DEFAULT_MAX_HEIGHT_OFFSET_UP_MM,
+    load_settings,
+    save_settings,
+    update_filter_settings,
+    get_settings,
+    validate_capture_plan,
+    default_filter_settings,
+    validate_filter_settings,
+    validate_lamp_output_selectors,
+    validate_lamp_settings,
+    validate_motion_simulation_settings,
+)
 from light_control import LampSettingsError, LightCommandError, LightConfigurationError, LightController
 import numpy as np
 from PIL import Image
@@ -137,11 +151,21 @@ def _handle_motion_usb_disconnect(ser, context: str = "operation"):
         pass
     globals.motion_platform = None
     porthandler.motion_platform = None
+    _reset_motion_reference_state()
     return jsonify({
         'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
         'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
         'popup': True
     }), 503
+
+
+def _reset_motion_reference_state():
+    """Invalidate cached homing/revolver state when the controller reference is lost."""
+    globals.homed_axes = set()
+    globals.toolhead_homed = False
+    globals.filter_revolver_homed = False
+    globals.filter_revolver_position = None
+    globals.last_toolhead_pos = {'x': None, 'y': None, 'z': None}
 
 
 def _is_serial_disconnect(exc):
@@ -270,20 +294,71 @@ def lamp_timeout_monitor():
 
 ### Serial Device Functions ###
 # Connect/Disconnect Serial devices
+def _use_virtual_motion_platform():
+    return bool(get_settings().get('advanced_settings', {}).get('use_virtual_com_port', False))
+
+
+def _height_offset_limits():
+    advanced_settings = get_settings().get('advanced_settings', {})
+    return (
+        advanced_settings.get(
+            'max_height_offset_up_mm',
+            DEFAULT_MAX_HEIGHT_OFFSET_UP_MM,
+        ),
+        advanced_settings.get(
+            'max_height_offset_down_mm',
+            DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM,
+        ),
+    )
+
+
+def _replace_motion_platform(use_virtual):
+    """Close the current adapter and connect the selected real/virtual device."""
+    with porthandler.motion_lock:
+        current = porthandler.motion_platform or globals.motion_platform
+        if current and getattr(current, 'is_open', False):
+            try:
+                light_controller.off()
+            except Exception as error:
+                app.logger.warning('All-off before changing motion adapter failed: %s', error)
+            current.close()
+        globals.motion_platform = None
+        porthandler.motion_platform = None
+        _reset_motion_reference_state()
+
+        device = porthandler.connect_to_motion_platform(use_virtual=use_virtual)
+        if device:
+            globals.motion_platform = device
+            porthandler.motion_platform = device
+        return device
+
+
 @app.route('/api/connect-to-motionplatform', methods=['POST'])
 def connect_motionplatform():
     try:
         app.logger.info("Attempting to connect to Motion platform")
-        if porthandler.motion_platform and porthandler.motion_platform.is_open:
+        use_virtual = _use_virtual_motion_platform()
+        current = porthandler.motion_platform or globals.motion_platform
+        if (
+            current
+            and current.is_open
+            and bool(getattr(current, 'is_virtual', False)) == use_virtual
+        ):
             app.logger.info("Motion platform already connected.")
-            return jsonify({'message': 'Motion platform already connected'}), 200
+            return jsonify({
+                'message': 'Motion platform already connected',
+                'port': current.port,
+                'virtual': bool(getattr(current, 'is_virtual', False)),
+            }), 200
     
-        device = porthandler.connect_to_motion_platform()
+        device = _replace_motion_platform(use_virtual)
         if device:
-            porthandler.motion_platform = device
-            globals.motion_platform = device
             app.logger.info("Successfully connected to Motion platform")
-            return jsonify({'message': 'Motion platform connected', 'port': device.port}), 200
+            return jsonify({
+                'message': 'Motion platform connected',
+                'port': device.port,
+                'virtual': bool(getattr(device, 'is_virtual', False)),
+            }), 200
         else:
             app.logger.error("Failed to connect to Motion platform: No response or incorrect ID")
             return jsonify({
@@ -304,6 +379,8 @@ def disconnect_serial_device(device_name):
     try:
         app.logger.info(f"Attempting to disconnect from {device_name}")
         porthandler.disconnect_serial_device(device_name)
+        if device_name.lower().replace('-', '_') in ('motionplatform', 'motion_platform', 'motion'):
+            _reset_motion_reference_state()
         app.logger.info(f"Successfully disconnected from {device_name}")
         return jsonify('ok')
     except Exception as e:
@@ -320,7 +397,12 @@ def get_serial_device_status(device_name):
 
         # If homing or other long op is in progress, don't touch the port.
         if getattr(globals, 'motion_busy', False):
-            return jsonify({'connected': True, 'busy': True, 'port': ser.port}), 200
+            return jsonify({
+                'connected': True,
+                'busy': True,
+                'port': ser.port,
+                'virtual': bool(getattr(ser, 'is_virtual', False)),
+            }), 200
 
         # Non-blocking quick probe under the lock so we don't corrupt
         # concurrent serial operations (e.g. homing, moves).
@@ -349,10 +431,15 @@ def get_serial_device_status(device_name):
                 pass
             globals.motion_platform = None
             porthandler.motion_platform = None
+            _reset_motion_reference_state()
             return jsonify({'connected': False}), 200
         except Exception as e:
             app.logger.debug(f"status probe error (ignored): {e}")
-        return jsonify({'connected': True, 'port': ser.port}), 200
+        return jsonify({
+            'connected': True,
+            'port': ser.port,
+            'virtual': bool(getattr(ser, 'is_virtual', False)),
+        }), 200
 
     return jsonify({'error':'Invalid device name','popup':True}), 400
 
@@ -383,20 +470,12 @@ def get_motion_platform_position():
 
 @app.route('/api/check_axes_homed', methods=['GET'])
 def check_axes_homed():
-    """Check if axes are already homed by attempting to query position."""
+    """Return backend-tracked homing state; an M114 reply alone does not prove homing."""
     ser = porthandler.motion_platform or globals.motion_platform
     if not ser or not getattr(ser, 'is_open', False):
         return jsonify({'x': False, 'y': False, 'z': False}), 200
-
-    try:
-        with porthandler.motion_lock:
-            pos = motioncontrols.get_toolhead_position(ser, timeout=0.3)
-        # If we can get a valid position, axes are homed
-        homed = all(k in pos and isinstance(pos[k], (int, float)) for k in ('x','y','z'))
-        return jsonify({'x': homed, 'y': homed, 'z': homed}), 200
-    except Exception as e:
-        app.logger.debug(f"Could not query homed status: {e}")
-        return jsonify({'x': False, 'y': False, 'z': False}), 200
+    homed_axes = getattr(globals, 'homed_axes', set())
+    return jsonify({axis: axis in homed_axes for axis in ('x', 'y', 'z')}), 200
 
     
 @app.route('/api/disable_steppers', methods=['POST'])
@@ -420,6 +499,9 @@ def api_home_toolhead():
 
     data = request.get_json(silent=True) or {}
     axes = [a.lower()[0] for a in (data.get('axes') or []) if a]
+    if any(axis not in ('x', 'y', 'z', 'a') for axis in axes):
+        return jsonify({'ok': False, 'error': 'Invalid homing axis.'}), 400
+    requested_axes = axes or ['z', 'y', 'x', 'a']
 
     ser = globals.motion_platform
     if not ser or not getattr(ser, 'is_open', False):
@@ -427,53 +509,24 @@ def api_home_toolhead():
 
     globals.motion_busy = True
     try:
-        # home all if no axes provided
-        if axes:
-            motioncontrols.home_axes(ser, *axes)
-        else:
-            motioncontrols.home_axes(ser)
-        
-        # Wait for homing to complete by draining any buffered responses.
-        # The board sends "echo:busy: processing" while working and "ok"
-        # when homing is finished.  motion_busy=True prevents other
-        # endpoints from touching the serial port, and Flask's single-
-        # threaded server prevents concurrent request handling.
-        try:
-            deadline = time.monotonic() + 30.0  # 30 second timeout for full homing
-            buf = bytearray()
-            while time.monotonic() < deadline:
-                iw = getattr(ser, 'in_waiting', 0) or 0
-                if iw:
-                    chunk = ser.read(min(iw, 256))
-                    if chunk:
-                        buf += chunk
-                        # Homing complete when we see "ok" (at end of response)
-                        if b"ok" in buf.lower() and (b"\n" in buf or len(buf) > 100):
-                            break
-                else:
-                    time.sleep(0.05)
-        except (OSError, PermissionError) as e:
-            app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
-            try:
-                ser.close()
-            except Exception:
-                pass
-            globals.motion_platform = None
-            porthandler.motion_platform = None
-            return jsonify({
-                'ok': False, 
-                'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
-                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
-                'popup': True
-            }), 503
-        except Exception as e:
-            app.logger.warning(f"Error waiting for homing completion: {e}")
-        
-        globals.toolhead_homed = True
+        # Home each requested axis separately to guarantee the supplied order.
+        # A is last in the default full-homing sequence.
+        for axis in requested_axes:
+            if not motioncontrols.home_axes(ser, axis):
+                raise TimeoutError(
+                    f'Motion platform {axis.upper()} homing was not acknowledged.'
+                )
+
+        homed_now = set(requested_axes)
+        globals.homed_axes.update(homed_now)
+        globals.toolhead_homed = all(axis in globals.homed_axes for axis in ('x', 'y', 'z'))
+        if 'a' in homed_now:
+            globals.filter_revolver_homed = True
+            globals.filter_revolver_position = 1
         
         # Query and cache the position after successful homing
         try:
-            pos = motioncontrols.get_toolhead_position(ser, timeout=2.0)
+            pos = motioncontrols.get_toolhead_position(ser, timeout=2.0, allow_busy=True)
             if pos and all(k in pos for k in ('x', 'y', 'z')):
                 globals.last_toolhead_pos = pos
                 app.logger.info(f"Position cached after homing: X={pos.get('x')}, Y={pos.get('y')}, Z={pos.get('z')}")
@@ -482,7 +535,7 @@ def api_home_toolhead():
         
         return jsonify({
             'ok': True, 
-            'homed_axes': axes or ['x','y','z'],
+            'homed_axes': requested_axes,
             'position': globals.last_toolhead_pos
         })
     except (OSError, PermissionError) as e:
@@ -493,6 +546,7 @@ def api_home_toolhead():
             pass
         globals.motion_platform = None
         porthandler.motion_platform = None
+        _reset_motion_reference_state()
         return jsonify({
             'ok': False, 
             'error': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
@@ -502,6 +556,153 @@ def api_home_toolhead():
     except Exception as e:
         app.logger.exception("Homing failed")
         return jsonify({'ok': False, 'error': str(e)}), 500
+    finally:
+        globals.motion_busy = False
+
+
+def _filter_revolver_status():
+    return {
+        'position': globals.filter_revolver_position,
+        'homed': bool(globals.filter_revolver_homed),
+        'motion_platform_homed': bool(globals.toolhead_homed),
+        'busy': bool(globals.motion_busy),
+    }
+
+
+@app.route('/api/filter-revolver/status', methods=['GET'])
+def filter_revolver_status():
+    """Return the acknowledged runtime position of the physical filter revolver."""
+    return jsonify(_filter_revolver_status()), 200
+
+
+@app.route('/api/filter-revolver/rotate', methods=['POST'])
+def rotate_filter_revolver():
+    """Rotate the A (Marlin internal I) axis by one 60-degree filter slot."""
+    data = request.get_json(silent=True) or {}
+    direction = data.get('direction')
+    if direction not in ('up', 'down'):
+        return jsonify({
+            'error': "Direction must be 'up' or 'down'.",
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 400
+
+    motion_platform = porthandler.motion_platform or globals.motion_platform
+    if not motion_platform or not getattr(motion_platform, 'is_open', False):
+        return jsonify({
+            'error': 'Motion platform not connected.',
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True,
+        }), 503
+
+    with porthandler.motion_lock:
+        if globals.motion_busy:
+            return jsonify({
+                'error': 'Motion platform is busy.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        if not globals.toolhead_homed or not globals.filter_revolver_homed:
+            return jsonify({
+                'error': 'Home the motion platform and filter revolver before rotating it.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        globals.motion_busy = True
+
+    try:
+        globals.filter_revolver_position = filter_revolver.rotate_one_slot(
+            motion_platform,
+            globals.filter_revolver_position,
+            direction,
+        )
+        globals.motion_busy = False
+        return jsonify(_filter_revolver_status()), 200
+    except (OSError, PermissionError):
+        return _handle_motion_usb_disconnect(motion_platform, 'filter revolver rotation')
+    except (TimeoutError, ValueError) as error:
+        app.logger.warning('Filter revolver rotation failed: %s', error)
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 504
+    finally:
+        globals.motion_busy = False
+
+
+@app.route('/api/filter-revolver/select', methods=['POST'])
+def select_filter_revolver_position():
+    """Move to a selected slot using the shortest sequence of acknowledged 60-degree steps."""
+    data = request.get_json(silent=True) or {}
+    target_position = data.get('position')
+    if (
+        isinstance(target_position, bool)
+        or not isinstance(target_position, int)
+        or target_position not in range(1, filter_revolver.SLOT_COUNT + 1)
+    ):
+        return jsonify({
+            'error': 'Filter position must be an integer between 1 and 6.',
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 400
+
+    motion_platform = porthandler.motion_platform or globals.motion_platform
+    if not motion_platform or not getattr(motion_platform, 'is_open', False):
+        return jsonify({
+            'error': 'Motion platform not connected.',
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True,
+        }), 503
+
+    with porthandler.motion_lock:
+        if globals.motion_busy:
+            return jsonify({
+                'error': 'Motion platform is busy.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        if not globals.toolhead_homed or not globals.filter_revolver_homed:
+            return jsonify({
+                'error': 'Home the motion platform and filter revolver before rotating it.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        try:
+            direction, steps = filter_revolver.shortest_path(
+                globals.filter_revolver_position,
+                target_position,
+            )
+        except ValueError as error:
+            return jsonify({
+                'error': str(error),
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        globals.motion_busy = True
+
+    try:
+        for _ in range(steps):
+            globals.filter_revolver_position = filter_revolver.rotate_one_slot(
+                motion_platform,
+                globals.filter_revolver_position,
+                direction,
+            )
+        globals.motion_busy = False
+        return jsonify({
+            **_filter_revolver_status(),
+            'direction': direction,
+            'steps': steps,
+        }), 200
+    except (OSError, PermissionError):
+        return _handle_motion_usb_disconnect(motion_platform, 'filter revolver selection')
+    except (TimeoutError, ValueError) as error:
+        app.logger.warning('Filter revolver selection failed: %s', error)
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 504
     finally:
         globals.motion_busy = False
 
@@ -1191,6 +1392,7 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
             pass
         globals.motion_platform = None
         porthandler.motion_platform = None
+        _reset_motion_reference_state()
         return {
             'status': 'error',
             'message': ERROR_MESSAGES.get(ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'Motion platform disconnected'),
@@ -1508,9 +1710,9 @@ def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_na
                               tablet_index: int, background_subtraction: bool = False) -> list:
     """Capture one persisted wavelength/filter row with the Octopus controller.
 
-    The selected filter position is recorded in the filename and response. The
-    filter revolver itself has no board command defined yet, so no speculative
-    G-code is issued for it here.
+    The selected filter position is recorded in the filename and response.
+    Automatic capture-plan positioning is intentionally not coupled to the
+    separately acknowledged manual revolver controller yet.
     """
     wavelength = row['wavelength']
     filter_position = row['filter_position']
@@ -2574,7 +2776,8 @@ def lamp_settings():
         settings_data = get_settings()
         lamp_settings_data = settings_data.setdefault('lamp_settings', {})
         lamp_settings_data['channels'] = normalized_settings['channels']
-        save_settings()
+        if not save_settings():
+            raise OSError('Failed to persist lamp settings.')
         return jsonify({'lamp_settings': lamp_settings_data}), 200
     except ValueError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
@@ -2597,12 +2800,106 @@ def advanced_lamp_settings():
         settings_data = get_settings()
         lamp_settings_data = settings_data.setdefault('lamp_settings', {'channels': {}})
         lamp_settings_data['output_selectors'] = normalized_settings['output_selectors']
-        save_settings()
+        if not save_settings():
+            raise OSError('Failed to persist advanced lamp settings.')
         return jsonify({'advanced_lamp_settings': normalized_settings}), 200
     except ValueError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
     except Exception as error:
         app.logger.exception('Failed to update advanced lamp settings')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
+@app.route('/api/settings/filter', methods=['GET', 'PUT'])
+def filter_settings():
+    max_up, max_down = _height_offset_limits()
+    if request.method == 'GET':
+        settings_data = get_settings()
+        try:
+            current_settings = validate_filter_settings(
+                settings_data.get('filter_settings', default_filter_settings()),
+                max_height_offset_up_mm=max_up,
+                max_height_offset_down_mm=max_down,
+            )
+            return jsonify({'filter_settings': current_settings}), 200
+        except ValueError as error:
+            app.logger.error('Stored filter settings are invalid: %s', error)
+            return jsonify({
+                'error': 'Stored filter settings are invalid.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 500
+
+    try:
+        normalized_settings = validate_filter_settings(
+            request.get_json(silent=True) or {},
+            max_height_offset_up_mm=max_up,
+            max_height_offset_down_mm=max_down,
+        )
+        if not update_filter_settings(normalized_settings):
+            raise OSError('Failed to persist filter settings.')
+        return jsonify({'filter_settings': normalized_settings}), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to update filter settings')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
+@app.route('/api/settings/motion/advanced', methods=['GET', 'PUT'])
+def advanced_motion_settings():
+    if request.method == 'GET':
+        max_up, max_down = _height_offset_limits()
+        return jsonify({
+            'advanced_motion_settings': {
+                'use_virtual_com_port': _use_virtual_motion_platform(),
+                'max_height_offset_up_mm': max_up,
+                'max_height_offset_down_mm': max_down,
+            }
+        }), 200
+
+    try:
+        if getattr(globals, 'motion_busy', False):
+            return jsonify({
+                'error': 'Motion platform is busy; try again after the operation finishes.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        normalized = validate_motion_simulation_settings(request.get_json(silent=True) or {})
+        existing_filter_settings = get_settings().get('filter_settings')
+        if existing_filter_settings is not None:
+            validate_filter_settings(
+                existing_filter_settings,
+                max_height_offset_up_mm=normalized['max_height_offset_up_mm'],
+                max_height_offset_down_mm=normalized['max_height_offset_down_mm'],
+            )
+        settings_data = get_settings()
+        settings_data.setdefault('advanced_settings', {}).update(normalized)
+        if not save_settings():
+            raise OSError('Failed to persist advanced motion settings.')
+
+        current = porthandler.motion_platform or globals.motion_platform
+        desired_virtual = normalized['use_virtual_com_port']
+        if (
+            current
+            and getattr(current, 'is_open', False)
+            and bool(getattr(current, 'is_virtual', False)) == desired_virtual
+        ):
+            device = current
+        else:
+            device = _replace_motion_platform(desired_virtual)
+        return jsonify({
+            'advanced_motion_settings': normalized,
+            'connection': {
+                'connected': bool(device and getattr(device, 'is_open', False)),
+                'port': getattr(device, 'port', None),
+                'virtual': bool(device and getattr(device, 'is_virtual', False)),
+            },
+        }), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to update advanced motion settings')
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
 
 @app.route('/api/update-other-settings', methods=['POST'])
@@ -2990,7 +3287,9 @@ def initialize_serial_devices():
 
     try:
         # Connect Motion Platform
-        device = porthandler.connect_to_motion_platform()
+        device = porthandler.connect_to_motion_platform(
+            use_virtual=_use_virtual_motion_platform()
+        )
         if device:
             porthandler.motion_platform = device
             globals.motion_platform = device
@@ -3026,6 +3325,8 @@ def shutdown_devices():
         if ser and getattr(ser, 'is_open', False):
             ser.close()
             globals.motion_platform = None
+            porthandler.motion_platform = None
+            _reset_motion_reference_state()
             app.logger.info("Motion platform disconnected successfully.")
     except Exception as e:
         app.logger.debug(f"Error closing motion platform: {e}")      

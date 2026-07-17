@@ -9,13 +9,22 @@ import { SharedService } from '../../shared.service';
 import { firstValueFrom } from 'rxjs';
 import { BASE_URL } from '../../api-config';
 import { LightChannel, LightStatus } from '../../models/light.models';
+import {
+  FilterDefinition,
+  FilterRevolverDirection,
+  FilterRevolverStatus,
+  FilterSettings
+} from '../../models/filter-settings.models';
+import { FilterSettingsService } from '../../services/filter-settings.service';
+import { FilterRevolverService } from '../../services/filter-revolver.service';
+import { FilterRevolverComponent } from '../../components/filter-revolver/filter-revolver.component';
 
 
 @Component({
   selector: 'app-motion-control',
   // Important for Angular 15+ when using `imports` here:
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FilterRevolverComponent],
   templateUrl: './motion-control.html',
   styleUrls: ['./motion-control.scss'], // fixed key (plural)
 })
@@ -49,6 +58,9 @@ export class MotionControl implements OnInit, OnDestroy {
   private lampAutoOffPolling?: Subscription;
   private externalConnectionSub?: Subscription;
   private fourChannelLightPolling?: Subscription;
+  private filterStatusPolling?: Subscription;
+  private filterSettingsSub?: Subscription;
+  private filterStatusGeneration = 0;
   isConnected: boolean = false;
 
   // Flag to lock controls during auto-measurement
@@ -78,10 +90,23 @@ export class MotionControl implements OnInit, OnDestroy {
 
 
   isHoming = false;
-  private readonly HOMING_TIMEOUT_MS = 10000;
+  private readonly HOMING_TIMEOUT_MS = 35000;
   xHomed: boolean = false;
   yHomed: boolean = false;
   zHomed: boolean = false;
+  filterRevolverBusy = false;
+  filterRevolverRotationDegrees = 0;
+  private filterRevolverRotationInitialized = false;
+  filterSettings: FilterSettings = {
+    filters: [],
+    slots: [null, null, null, null, null, null]
+  };
+  filterRevolverStatus: FilterRevolverStatus = {
+    position: null,
+    homed: false,
+    motion_platform_homed: false,
+    busy: false
+  };
 
   isAutofocusing = false;
   autofocusDone = false;
@@ -90,7 +115,9 @@ export class MotionControl implements OnInit, OnDestroy {
   constructor(
     private http: HttpClient,
     private errorNotificationService: ErrorNotificationService,
-    private sharedService: SharedService
+    private sharedService: SharedService,
+    private filterSettingsService: FilterSettingsService,
+    private filterRevolverService: FilterRevolverService
   ) { }
 
   ngOnInit(): void {
@@ -136,6 +163,13 @@ export class MotionControl implements OnInit, OnDestroy {
     // Start polling for lamp auto-off status (5-minute inactivity timeout)
     this.startLampAutoOffPolling();
     this.startFourChannelLightPolling();
+    this.filterSettingsSub = this.filterSettingsService.settings$.subscribe(settings => {
+      if (settings) this.filterSettings = settings;
+    });
+    this.filterSettingsService.get().subscribe({
+      error: error => console.error('Failed to load filter settings:', error)
+    });
+    this.startFilterRevolverStatusPolling();
 
     // Listen for external reconnections (e.g., auto-measurement reconnects the platform).
     // Without this, the error popup can stay visible because only motion-control's
@@ -162,6 +196,8 @@ export class MotionControl implements OnInit, OnDestroy {
     this.stopPositionPolling();
     this.stopLampAutoOffPolling();
     this.fourChannelLightPolling?.unsubscribe();
+    this.filterStatusPolling?.unsubscribe();
+    this.filterSettingsSub?.unsubscribe();
     Object.values(this.lampClickTimers).forEach(timer => timer && clearTimeout(timer));
     this.measurementActiveSub?.unsubscribe();
     this.motionPositionSub?.unsubscribe();
@@ -268,6 +304,12 @@ export class MotionControl implements OnInit, OnDestroy {
             console.warn('Motion platform disconnected – starting reconnection polling.');
             // Reset homed state on disconnect
             this.xHomed = this.yHomed = this.zHomed = false;
+            this.filterRevolverStatus = {
+              position: null,
+              homed: false,
+              motion_platform_homed: false,
+              busy: false
+            };
             this.updateSharedHomedState();
             this.errorNotificationService.addError({
               code: 'E1201',
@@ -287,6 +329,12 @@ export class MotionControl implements OnInit, OnDestroy {
         error: (error) => {
           console.error('Unexpected polling error!', error);
           this.isConnected = false;
+          this.filterRevolverStatus = {
+            position: null,
+            homed: false,
+            motion_platform_homed: false,
+            busy: false
+          };
           this.sharedService.setMotionPlatformConnectionStatus(false);
           this.stopPositionPolling();
         },
@@ -341,6 +389,94 @@ export class MotionControl implements OnInit, OnDestroy {
     this.http.get<LightStatus>(`${BASE_URL}/lights/status`).subscribe({
       next: status => this.lightStatus = status,
       error: () => undefined
+    });
+  }
+
+  private startFilterRevolverStatusPolling(): void {
+    this.syncFilterRevolverStatus();
+    this.filterStatusPolling = interval(1000).subscribe(() => this.syncFilterRevolverStatus());
+  }
+
+  private syncFilterRevolverStatus(): void {
+    if (!this.isConnected || this.filterRevolverBusy) return;
+    const requestGeneration = this.filterStatusGeneration;
+    this.filterRevolverService.getStatus().subscribe({
+      next: status => {
+        // Ignore a poll that started before a rotate/home command. Otherwise
+        // its older position can overwrite the acknowledged command response.
+        if (requestGeneration === this.filterStatusGeneration && !this.filterRevolverBusy) {
+          this.applyFilterRevolverStatus(status);
+        }
+      },
+      error: () => undefined
+    });
+  }
+
+  get activeFilter(): FilterDefinition | undefined {
+    const position = this.filterRevolverStatus.position;
+    if (!position) return undefined;
+    const filterId = this.filterSettings.slots[position - 1];
+    return this.filterSettings.filters.find(filter => filter.id === filterId);
+  }
+
+  get filterRevolverControlsDisabled(): boolean {
+    return this.controlsDisabled
+      || !(this.xHomed && this.yHomed && this.zHomed)
+      || !this.filterRevolverStatus.homed
+      || !this.filterRevolverStatus.motion_platform_homed
+      || this.filterRevolverBusy
+      || this.filterRevolverStatus.busy;
+  }
+
+  rotateFilterRevolver(direction: FilterRevolverDirection): void {
+    if (this.filterRevolverControlsDisabled) return;
+    this.filterStatusGeneration++;
+    this.filterRevolverBusy = true;
+    let commandSucceeded = false;
+    this.filterRevolverService.rotate(direction).pipe(
+      finalize(() => {
+        this.filterRevolverBusy = false;
+        if (!commandSucceeded) this.syncFilterRevolverStatus();
+      })
+    ).subscribe({
+      next: status => {
+        commandSucceeded = true;
+        this.filterRevolverRotationDegrees += direction === 'down' ? -60 : 60;
+        this.filterRevolverRotationInitialized = true;
+        this.filterRevolverStatus = status;
+      },
+      error: error => {
+        console.error('Filter revolver rotation failed:', error);
+      }
+    });
+  }
+
+  activateFilterPosition(position: number): void {
+    if (
+      this.filterRevolverControlsDisabled
+      || position === this.filterRevolverStatus.position
+    ) {
+      return;
+    }
+    this.filterStatusGeneration++;
+    this.filterRevolverBusy = true;
+    let commandSucceeded = false;
+    this.filterRevolverService.select(position).pipe(
+      finalize(() => {
+        this.filterRevolverBusy = false;
+        if (!commandSucceeded) this.syncFilterRevolverStatus();
+      })
+    ).subscribe({
+      next: response => {
+        commandSucceeded = true;
+        const visualDirection = response.direction === 'down' ? -1 : 1;
+        this.filterRevolverRotationDegrees += visualDirection * response.steps * 60;
+        this.filterRevolverRotationInitialized = true;
+        this.filterRevolverStatus = response;
+      },
+      error: error => {
+        console.error('Filter revolver position selection failed:', error);
+      }
     });
   }
 
@@ -703,7 +839,7 @@ export class MotionControl implements OnInit, OnDestroy {
   homeAxis(axis?: string): void {
     this.resetMotorOffState();
 
-    const ax = axis ? axis.toLowerCase() as 'x' | 'y' | 'z' : undefined;
+    const ax = axis ? axis.toLowerCase() as 'x' | 'y' | 'z' | 'a' : undefined;
     const payload = { axes: ax ? [ax] : [] };
 
     // Prevent position polling during homing to avoid serial contention
@@ -724,7 +860,14 @@ export class MotionControl implements OnInit, OnDestroy {
           console.log(`Motion platform ${ax ? ax.toUpperCase() : 'ALL'} homed successfully.`, response);
 
           // Preserve your original side effects
-          if (ax) {
+          if (ax === 'a') {
+            this.filterRevolverStatus = {
+              position: 1,
+              homed: true,
+              motion_platform_homed: this.xHomed && this.yHomed && this.zHomed,
+              busy: false
+            };
+          } else if (ax) {
             if (ax === 'x') { this.xPosition = 0; this.xHomed = true; }
             else if (ax === 'y') { this.yPosition = 0; this.yHomed = true; }
             else if (ax === 'z') { this.zPosition = 0; this.zHomed = true; }
@@ -750,27 +893,24 @@ export class MotionControl implements OnInit, OnDestroy {
     this.isHoming = true;
     this.stopPositionPolling();
 
-    const homeAxis = (axis: 'x' | 'y' | 'z') =>
-      firstValueFrom(this.http.post(`${BASE_URL}/home_toolhead`, { axes: [axis] }));
-
     try {
-      // ---------------- Z ----------------
-      await homeAxis('z');
-      this.zHomed = true;
-      this.zPosition = 0;
+      this.filterStatusGeneration++;
+      // The backend executes this exact order and acknowledges every axis.
+      await firstValueFrom(
+        this.http.post(`${BASE_URL}/home_toolhead`, { axes: ['z', 'y', 'x', 'a'] })
+      );
+      this.xHomed = this.yHomed = this.zHomed = true;
+      this.xPosition = this.yPosition = this.zPosition = 0;
       this.updateSharedHomedState();
-
-      // ---------------- Y ----------------
-      await homeAxis('y');
-      this.yHomed = true;
-      this.yPosition = 0;
-      this.updateSharedHomedState();
-
-      // ---------------- X ----------------
-      await homeAxis('x');
-      this.xHomed = true;
-      this.xPosition = 0;
-      this.updateSharedHomedState();
+      this.filterRevolverStatus = {
+        position: 1,
+        homed: true,
+        motion_platform_homed: true,
+        busy: false
+      };
+      this.filterRevolverRotationDegrees = 0;
+      this.filterRevolverRotationInitialized = true;
+      this.syncFilterRevolverStatus();
 
     } catch (err) {
       console.error("Homing error:", err);
@@ -784,6 +924,21 @@ export class MotionControl implements OnInit, OnDestroy {
         this.startPollingPosition();
       }, 500);
     }
+  }
+
+  private applyFilterRevolverStatus(status: FilterRevolverStatus): void {
+    const externallyChanged = this.filterRevolverStatus.position !== status.position;
+    if (
+      status.position !== null
+      && (!this.filterRevolverRotationInitialized || externallyChanged)
+    ) {
+      this.filterRevolverRotationDegrees = -(status.position - 1) * 60;
+      this.filterRevolverRotationInitialized = true;
+    } else if (status.position === null) {
+      this.filterRevolverRotationDegrees = 0;
+      this.filterRevolverRotationInitialized = false;
+    }
+    this.filterRevolverStatus = status;
   }
 
 

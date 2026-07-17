@@ -1,0 +1,38 @@
+<div
+  class="revolver-viewport"
+  [style.width.px]="size"
+  [style.height.px]="size"
+  [class.has-active-position]="activePosition !== null"
+  role="img"
+  [attr.aria-label]="activePosition ? 'Aktív szűrőpozíció: ' + activePosition : 'Hat pozíciós szűrőváltó'"
+>
+  <div class="active-station" *ngIf="activePosition !== null" aria-hidden="true"></div>
+  <div class="revolver-rotor" [style.transform]="'rotate(' + displayedRotationDegrees + 'deg)'">
+    <div
+      *ngFor="let slot of settings.slots; let i = index; trackBy: trackSlot"
+      [class]="'filter-slot slot-' + i"
+      [class.active]="activePosition === i + 1"
+      [class.interactive]="interactive"
+      [attr.tabindex]="interactive ? 0 : null"
+      [attr.role]="interactive ? 'button' : null"
+      [attr.aria-label]="interactive ? (i + 1) + '. szűrőpozíció aktiválása' : null"
+      (dblclick)="activatePosition(i)"
+      (keydown.enter)="activatePosition(i)"
+    >
+      <span
+        class="slot-color"
+        [style.background-color]="filterForSlot(slot)?.color || 'transparent'"
+        aria-hidden="true"
+      ></span>
+      <span class="slot-name" [style.transform]="'rotate(' + (-displayedRotationDegrees) + 'deg)'">
+        {{ filterForSlot(slot)?.name || 'Üres' }}
+      </span>
+    </div>
+    <span
+      *ngFor="let slot of settings.slots; let i = index; trackBy: trackSlot"
+      [class]="'position-number number-' + i"
+      [style.transform]="'rotate(' + (-displayedRotationDegrees) + 'deg)'"
+      aria-hidden="true"
+    >{{ i + 1 }}</span>
+  </div>
+</div>

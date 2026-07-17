@@ -73,6 +73,10 @@ body {
   flex-direction: column;
 }
 
+.scanner-panel-scroll {
+  overflow-y: auto;
+}
+
 /* Left/Right placeholder text */
 .panel .placeholder {
   color: #6b7280;

@@ -130,3 +130,39 @@ button:focus {
   color: #fff;
   transform: translateY(-1px);
 }
+
+/* Shared dark scrollbar treatment, matching the recipe toolbox. */
+.settings-content,
+.capture-plan-scroll,
+.scanner-panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #444 #1a1a1a;
+}
+
+.settings-content::-webkit-scrollbar,
+.capture-plan-scroll::-webkit-scrollbar,
+.scanner-panel-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.settings-content::-webkit-scrollbar-track,
+.capture-plan-scroll::-webkit-scrollbar-track,
+.scanner-panel-scroll::-webkit-scrollbar-track {
+  background: #1a1a1a;
+  border-radius: 8px;
+}
+
+.settings-content::-webkit-scrollbar-thumb,
+.capture-plan-scroll::-webkit-scrollbar-thumb,
+.scanner-panel-scroll::-webkit-scrollbar-thumb {
+  background: #444;
+  border: 2px solid #1a1a1a;
+  border-radius: 8px;
+}
+
+.settings-content::-webkit-scrollbar-thumb:hover,
+.capture-plan-scroll::-webkit-scrollbar-thumb:hover,
+.scanner-panel-scroll::-webkit-scrollbar-thumb:hover {
+  background: #5a5a5a;
+}

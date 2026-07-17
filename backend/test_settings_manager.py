@@ -124,6 +124,35 @@ class SettingsMigrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings_manager.validate_capture_plan([{'wavelength': 'vis', 'filter_position': 7}])
 
+    def test_filter_settings_validation_normalizes_and_checks_slot_references(self):
+        payload = {
+            'filters': [{'id': 'uv-310', 'name': 'UV 310', 'wavelength_range': '300–320', 'height_offset_mm': 1.5, 'color': '#12AB34'}],
+            'slots': ['uv-310', None, None, None, None, None],
+        }
+        self.assertEqual({
+            'filters': [{'id': 'uv-310', 'name': 'UV 310', 'wavelength_range': '300–320', 'height_offset_mm': 1.5, 'color': '#12ab34'}],
+            'slots': ['uv-310', None, None, None, None, None],
+        }, settings_manager.validate_filter_settings(payload))
+        with self.assertRaises(ValueError):
+            settings_manager.validate_filter_settings({**payload, 'slots': ['missing', None, None, None, None, None]})
+        duplicate_name = {
+            **payload,
+            'filters': [payload['filters'][0], {**payload['filters'][0], 'id': 'uv-310-copy', 'name': 'uv 310'}],
+        }
+        with self.assertRaises(ValueError):
+            settings_manager.validate_filter_settings(duplicate_name)
+
+    def test_filter_settings_update_persists_without_losing_other_categories(self):
+        settings_manager.set_settings({'camera_params': {'Gamma': 1.0}})
+        filter_settings = {
+            'filters': [{'id': 'vis', 'name': 'VIS', 'wavelength_range': '400–700', 'height_offset_mm': 0, 'color': '#ffffff'}],
+            'slots': ['vis', None, None, None, None, None],
+        }
+
+        self.assertTrue(settings_manager.update_filter_settings(filter_settings, self.settings_path))
+        self.assertEqual({'Gamma': 1.0}, settings_manager.get_settings()['camera_params'])
+        self.assertEqual(filter_settings, self.read_json()['filter_settings'])
+
     def test_lamp_output_selector_validation_normalizes_values(self):
         payload = {'output_selectors': {
             'uv255': 'p0', 'uv310': 'P1', 'uv365': 'P2', 'vis': 'P3'
@@ -135,6 +164,60 @@ class SettingsMigrationTests(unittest.TestCase):
     def test_lamp_output_selector_validation_rejects_commands_and_missing_channels(self):
         with self.assertRaises(ValueError):
             settings_manager.validate_lamp_output_selectors({'output_selectors': {'uv255': 'M106 P0'}})
+
+    def test_motion_simulation_setting_requires_boolean(self):
+        payload = {
+            'use_virtual_com_port': True,
+            'max_height_offset_up_mm': 5,
+            'max_height_offset_down_mm': -4,
+        }
+        self.assertEqual(
+            {
+                'use_virtual_com_port': True,
+                'max_height_offset_up_mm': 5.0,
+                'max_height_offset_down_mm': -4.0,
+            },
+            settings_manager.validate_motion_simulation_settings(payload),
+        )
+        with self.assertRaises(ValueError):
+            settings_manager.validate_motion_simulation_settings({
+                **payload,
+                'use_virtual_com_port': 'true',
+            })
+        with self.assertRaises(ValueError):
+            settings_manager.validate_motion_simulation_settings({
+                **payload,
+                'max_height_offset_down_mm': 4,
+            })
+
+    def test_filter_height_offset_uses_configured_limits(self):
+        payload = {
+            'filters': [{
+                'id': 'green',
+                'name': 'Zöld',
+                'wavelength_range': '500–570',
+                'height_offset_mm': 5,
+                'color': '#00ff00',
+            }],
+            'slots': ['green', None, None, None, None, None],
+        }
+        self.assertEqual(
+            5.0,
+            settings_manager.validate_filter_settings(
+                payload,
+                max_height_offset_up_mm=5,
+                max_height_offset_down_mm=-4,
+            )['filters'][0]['height_offset_mm'],
+        )
+        with self.assertRaises(ValueError):
+            settings_manager.validate_filter_settings(
+                {
+                    **payload,
+                    'filters': [{**payload['filters'][0], 'height_offset_mm': -4.1}],
+                },
+                max_height_offset_up_mm=5,
+                max_height_offset_down_mm=-4,
+            )
 
 
 if __name__ == '__main__':

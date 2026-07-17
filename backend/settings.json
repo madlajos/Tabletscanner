@@ -26,6 +26,14 @@
             {
                 "wavelength": "uv310",
                 "filter_position": 3
+            },
+            {
+                "wavelength": "uv310",
+                "filter_position": 3
+            },
+            {
+                "wavelength": "uv310",
+                "filter_position": 3
             }
         ]
     },
@@ -35,19 +43,19 @@
                 "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 100.0
+                "full_timeout_seconds": 5.0
             },
             "uv310": {
                 "dim_percent": 100.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 100.0
+                "full_timeout_seconds": 5.0
             },
             "uv365": {
                 "dim_percent": 100.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 100.0
+                "full_timeout_seconds": 5.0
             }
         },
         "output_selectors": {
@@ -56,5 +64,55 @@
             "uv365": "P3",
             "vis": "P0"
         }
+    },
+    "advanced_settings": {
+        "use_virtual_com_port": true
+    },
+    "filter_settings": {
+        "filters": [
+            {
+                "id": "244bd032-e932-4425-9e8c-1915d099cf0a",
+                "name": "Zöld",
+                "wavelength_range": "500-550",
+                "height_offset_mm": 1.0,
+                "color": "#000000"
+            },
+            {
+                "id": "7447fe07-3a99-4542-9d10-1e7082f0e9e7",
+                "name": "Piros",
+                "wavelength_range": "600-650",
+                "height_offset_mm": 2.0,
+                "color": "#000000"
+            },
+            {
+                "id": "9569ff7e-0e15-4ef3-b0a8-6994fb84b631",
+                "name": "Kék",
+                "wavelength_range": "450-500",
+                "height_offset_mm": 3.0,
+                "color": "#000000"
+            },
+            {
+                "id": "07641f64-d518-4657-9799-c699ee4c8f24",
+                "name": "UV1",
+                "wavelength_range": "300-350",
+                "height_offset_mm": 5.0,
+                "color": "#000000"
+            },
+            {
+                "id": "7f4c7a34-1660-4a66-99d5-c380c0c04c66",
+                "name": "UV2",
+                "wavelength_range": "350-400",
+                "height_offset_mm": 3.0,
+                "color": "#000000"
+            }
+        ],
+        "slots": [
+            null,
+            "244bd032-e932-4425-9e8c-1915d099cf0a",
+            "7447fe07-3a99-4542-9d10-1e7082f0e9e7",
+            "9569ff7e-0e15-4ef3-b0a8-6994fb84b631",
+            "07641f64-d518-4657-9799-c699ee4c8f24",
+            "7f4c7a34-1660-4a66-99d5-c380c0c04c66"
+        ]
     }
 }

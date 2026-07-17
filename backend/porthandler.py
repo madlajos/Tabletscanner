@@ -4,6 +4,7 @@ import logging
 import time
 import threading
 import globals
+from virtual_octopus import VirtualOctopusSerial
 
 log = logging.getLogger(__name__)
 
@@ -100,14 +101,23 @@ def connect_to_serial_device(device_name, identification_command, expected_respo
     return None
 
 
-def connect_to_motion_platform():
+def connect_to_motion_platform(use_virtual=False):
     """
     Connects to the motion platform using its known identification command and VID/PID.
     """
-    motion_platform = globals.motion_platform
-    if motion_platform and motion_platform.is_open:
-        logging.info("Motion platform is already connected.")
-        return motion_platform
+    current_platform = globals.motion_platform
+    if current_platform and current_platform.is_open:
+        if bool(getattr(current_platform, 'is_virtual', False)) == bool(use_virtual):
+            logging.info("Motion platform is already connected.")
+            return current_platform
+        current_platform.close()
+        globals.motion_platform = None
+
+    if use_virtual:
+        virtual_platform = VirtualOctopusSerial()
+        globals.motion_platform = virtual_platform
+        logging.info("Connected to virtual BTT Octopus motion platform.")
+        return virtual_platform
 
     ser = connect_to_serial_device(
         device_name="Motion Platform",
@@ -135,13 +145,16 @@ def disconnect_serial_device(device_name):
     """
     Forcefully disconnects the specified serial device ('motion_platform').
     """
+    global motion_platform
     logging.info(f"Attempting to disconnect {device_name}")
 
     try:
-        if device_name.lower() == 'motion_platform' and globals.motion_platform is not None:
+        normalized_name = device_name.lower().replace('-', '_')
+        if normalized_name in ('motionplatform', 'motion_platform', 'motion') and globals.motion_platform is not None:
             if globals.motion_platform.is_open:
                 globals.motion_platform.close()  # Close port safely
             globals.motion_platform = None  # Remove reference
+            motion_platform = None
             logging.info("Motion platform disconnected successfully.")
         else:
             logging.warning(f"{device_name} was not connected.")
@@ -254,9 +267,9 @@ def write(device, data):
     else:
         command = data + "\n"
 
-    if isinstance(device, serial.Serial):
+    if device is not None and getattr(device, 'is_open', False) and callable(getattr(device, 'write', None)):
         with motion_lock:
             device.write(command.encode())
             device.flush()
     else:
-        print("Invalid device type")
+        raise OSError("Serial port not open")

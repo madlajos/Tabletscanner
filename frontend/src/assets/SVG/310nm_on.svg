@@ -1,44 +1,66 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg id="Réteg_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24.6 24.6">
-  <!-- Generator: Adobe Illustrator 30.1.0, SVG Export Plug-In . SVG Version: 2.1.1 Build 136)  -->
+<svg id="Réteg_1" xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24.6 24.6">
+  <!-- Generator: Adobe Illustrator 29.6.1, SVG Export Plug-In . SVG Version: 2.1.1 Build 9)  -->
   <defs>
     <style>
       .st0 {
-        display: none;
+        fill: #394f62;
+      }
+
+      .st1 {
+        fill: url(#Névtelen_színátmenet);
+      }
+
+      .st2 {
+        fill: #ac00ff;
+      }
+
+      .st2, .st3, .st4 {
+        stroke-miterlimit: 10;
+      }
+
+      .st2, .st4 {
+        stroke: #1d1d1b;
+      }
+
+      .st3 {
+        fill: #fff;
         font-family: MicrosoftYaHeiUI-Bold, 'Microsoft YaHei UI';
         font-size: 8px;
         font-weight: 700;
+        isolation: isolate;
         stroke: #000;
         stroke-width: .5px;
       }
 
-      .st0, .st1 {
-        fill: #fff;
+      .st5, .st4 {
+        display: none;
       }
 
-      .st0, .st1, .st2 {
-        stroke-miterlimit: 10;
-      }
-
-      .st3 {
-        fill: none;
-      }
-
-      .st1, .st2 {
-        stroke: #1d1d1b;
-      }
-
-      .st2 {
-        fill: #ededed;
+      .st4 {
+        fill: url(#Névtelen_színátmenet_2);
       }
     </style>
+    <radialGradient id="Névtelen_színátmenet" data-name="Névtelen színátmenet" cx="12.3" cy="11.59" fx="12.3" fy="11.59" r="12.3" gradientTransform="translate(0 23.89) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".83" stop-color="#ac00ff"/>
+      <stop offset="1" stop-color="#ac00ff" stop-opacity=".1"/>
+    </radialGradient>
+    <radialGradient id="Névtelen_színátmenet_2" data-name="Névtelen színátmenet 2" cx="12.3" cy="11.59" fx="12.3" fy="11.59" r="8.7" gradientTransform="translate(0 23.89) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".71" stop-color="#ac00ff"/>
+      <stop offset="1" stop-color="#ac00ff" stop-opacity=".3"/>
+    </radialGradient>
   </defs>
-  <g id="Réteg_2">
-    <g id="Réteg_11" data-name="Réteg_1">
-      <path class="st3" d="M12.3,0C5.5,0,0,5.5,0,12.3s5.5,12.3,12.3,12.3,12.3-5.5,12.3-12.3c0,0,0,0,0,0C24.6,5.5,19.1,0,12.3,0s0,0,0,0ZM12.3,21.2c-4.9,0-8.9-4-8.9-8.9S7.4,3.4,12.3,3.4s8.9,4,8.9,8.9h0c0,4.9-4,8.9-8.9,8.9Z"/>
-      <path class="st2" d="M12.3,3.6C7.5,3.6,3.6,7.5,3.6,12.3s3.9,8.7,8.7,8.7,8.7-3.9,8.7-8.7c0-4.8-3.9-8.7-8.7-8.7ZM12.3,15.2c-1.6,0-2.9-1.3-2.9-2.9s1.3-2.9,2.9-2.9,2.9,1.3,2.9,2.9h0c0,1.6-1.3,2.9-2.9,2.9Z"/>
-      <path class="st1" d="M12.3,3.6C7.5,3.6,3.6,7.5,3.6,12.3s3.9,8.7,8.7,8.7,8.7-3.9,8.7-8.7c0-4.8-3.9-8.7-8.7-8.7ZM12.3,15.2c-1.6,0-2.9-1.3-2.9-2.9s1.3-2.9,2.9-2.9,2.9,1.3,2.9,2.9h0c0,1.6-1.3,2.9-2.9,2.9Z"/>
+  <g id="bckgr" class="st5">
+    <rect class="st0" width="24.6" height="24.6"/>
+  </g>
+  <g id="Réteg_11" data-name="Réteg_1">
+    <g id="Réteg_2">
+      <g id="uuid-f7896a06-8c5e-4aa8-af3f-2bca0dc89692" data-name="Réteg_11">
+        <path class="st1" d="M12.3,0C5.5,0,0,5.5,0,12.3s5.5,12.3,12.3,12.3,12.3-5.5,12.3-12.3h0C24.6,5.5,19.1,0,12.3,0s0,0,0,0ZM12.3,21.2c-4.9,0-8.9-4-8.9-8.9S7.4,3.4,12.3,3.4s8.9,4,8.9,8.9h0c0,4.9-4,8.9-8.9,8.9Z"/>
+        <path class="st2" d="M12.3,3.6C7.5,3.6,3.6,7.5,3.6,12.3s3.9,8.7,8.7,8.7,8.7-3.9,8.7-8.7S17.1,3.6,12.3,3.6ZM12.3,15.2c-1.6,0-2.9-1.3-2.9-2.9s1.3-2.9,2.9-2.9,2.9,1.3,2.9,2.9h0c0,1.6-1.3,2.9-2.9,2.9Z"/>
+        <path class="st4" d="M12.3,3.6C7.5,3.6,3.6,7.5,3.6,12.3s3.9,8.7,8.7,8.7,8.7-3.9,8.7-8.7S17.1,3.6,12.3,3.6ZM12.3,15.2c-1.6,0-2.9-1.3-2.9-2.9s1.3-2.9,2.9-2.9,2.9,1.3,2.9,2.9h0c0,1.6-1.3,2.9-2.9,2.9Z"/>
+      </g>
     </g>
   </g>
-  <text class="st0" transform="translate(10.6 7.9)"><tspan x="0" y="0">VIS</tspan></text>
+  <text class="st3" transform="translate(0 6.88)"><tspan x="0" y="0">310</tspan></text>
 </svg>

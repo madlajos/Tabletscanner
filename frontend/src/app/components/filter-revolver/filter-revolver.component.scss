@@ -1,0 +1,108 @@
+:host {
+  display: inline-block;
+  line-height: 1;
+}
+
+.revolver-viewport {
+  position: relative;
+  overflow: visible;
+  container-type: inline-size;
+}
+
+.revolver-rotor {
+  position: absolute;
+  inset: 0;
+  background: url('../../../assets/filter-revolver-holder.svg') center / contain no-repeat;
+  transition: transform 480ms cubic-bezier(.22, .61, .36, 1);
+}
+
+.filter-slot {
+  position: absolute;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 25.185%;
+  height: 25.185%;
+  overflow: hidden;
+  border: 2px solid #ddd;
+  border-radius: 50%;
+  color: #fff;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.filter-slot.active {
+  border-color: #58a8ff;
+  box-shadow: 0 0 0 3px rgba(88, 168, 255, .8), 0 0 14px rgba(88, 168, 255, .9);
+}
+
+.filter-slot.interactive {
+  cursor: pointer;
+}
+
+.filter-slot.interactive:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.slot-0 { top: 4.815%; left: 37.407%; }
+.slot-1 { top: 21.111%; left: 65.926%; }
+.slot-2 { top: 53.704%; left: 65.926%; }
+.slot-3 { top: 70%; left: 37.407%; }
+.slot-4 { top: 53.704%; left: 9.259%; }
+.slot-5 { top: 21.111%; left: 9.259%; }
+
+.position-number {
+  position: absolute;
+  z-index: 1;
+  width: 8%;
+  color: #ded9c8;
+  font-family: Arial, sans-serif;
+  font-size: clamp(9px, 6cqi, 18px);
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  text-shadow: 0 1px 1px #000;
+  transform-origin: center;
+  transition: transform 480ms cubic-bezier(.22, .61, .36, 1);
+}
+
+.number-0 { top: 30.5%; left: 46%; }
+.number-1 { top: 39%; left: 60.5%; }
+.number-2 { top: 57.5%; left: 60.5%; }
+.number-3 { top: 66%; left: 46%; }
+.number-4 { top: 57.5%; left: 31.5%; }
+.number-5 { top: 39%; left: 31.5%; }
+
+.slot-color {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  opacity: .6;
+}
+
+.slot-name {
+  z-index: 1;
+  max-width: 82%;
+  overflow: hidden;
+  color: #fff;
+  font-size: clamp(7px, 3.7cqi, 10px);
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px #000;
+  white-space: nowrap;
+  transition: transform 480ms cubic-bezier(.22, .61, .36, 1);
+}
+
+.active-station {
+  position: absolute;
+  z-index: 2;
+  top: -3px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-right: 7px solid transparent;
+  border-left: 7px solid transparent;
+  border-top: 10px solid #58a8ff;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 1px 2px #000);
+}

@@ -134,11 +134,63 @@
 
   <div class="lamp-buttons">
     <button *ngFor="let lamp of lampButtons" class="lamp-button" [class.active]="isLampActive(lamp.channel)"
-      [class.full-mode]="lightStatus.active_channel === lamp.channel && lightStatus.active_mode === 'full'"
       (click)="onLampClick(lamp.channel)" (dblclick)="onLampDoubleClick(lamp.channel)"
-      [disabled]="!isConnected || measurementActive || isAutofocusing || lightBusy"
+      [disabled]="!isConnected || measurementActive || isAutofocusing"
       [attr.aria-label]="lamp.label + ' lámpa'">
       <img [src]="lampAsset(lamp)" [alt]="lamp.label" class="lamp-icon" />
+      <span class="brightness-indicator" aria-hidden="true"
+        [class.vis-indicator]="lamp.channel === 'vis'"
+        [class.dimmed]="isLampActive(lamp.channel) && lightStatus.active_mode === 'dimmed'"
+        [class.full]="isLampActive(lamp.channel) && (lightStatus.active_mode === 'full' || lamp.channel === 'vis')">
+        <span class="brightness-segment upper"></span>
+        <span class="brightness-segment lower"></span>
+      </span>
     </button>
   </div>
+
+  <section class="filter-revolver-control" aria-labelledby="filter-revolver-control-title">
+    <h3 id="filter-revolver-control-title">Szűrőváltó</h3>
+    <div class="filter-revolver-control-content">
+      <app-filter-revolver
+        [settings]="filterSettings"
+        [activePosition]="filterRevolverStatus.position"
+        [rotationDegrees]="filterRevolverRotationDegrees"
+        [interactive]="!filterRevolverControlsDisabled"
+        (positionActivate)="activateFilterPosition($event)"
+        [size]="150"
+      ></app-filter-revolver>
+
+      <div class="filter-revolver-buttons" aria-label="Szűrőváltó forgatása">
+        <button
+          type="button"
+          class="direction-button rotate-up"
+          (click)="rotateFilterRevolver('down')"
+          [disabled]="filterRevolverControlsDisabled"
+          aria-label="Szűrőváltó a következő, nagyobb számú pozícióra"
+        >
+          <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
+        </button>
+        <button
+          type="button"
+          class="direction-button rotate-down"
+          (click)="rotateFilterRevolver('up')"
+          [disabled]="filterRevolverControlsDisabled"
+          aria-label="Szűrőváltó az előző, kisebb számú pozícióra"
+        >
+          <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
+        </button>
+      </div>
+
+      <table class="active-filter-details" aria-label="Aktív szűrő adatai">
+        <tbody>
+          <tr><th>Név:</th><td>{{ activeFilter?.name || 'Üres' }}</td></tr>
+          <tr><th>Hullámhossz:</th><td>{{ activeFilter ? activeFilter.wavelength_range + ' nm' : '—' }}</td></tr>
+          <tr><th>Magasság-eltolás:</th><td>{{ activeFilter ? activeFilter.height_offset_mm + ' mm' : '—' }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="filter-revolver-note" *ngIf="isConnected && (!filterRevolverStatus.homed || !filterRevolverStatus.motion_platform_homed)">
+      A szűrőváltó a mozgásplatform homingja után vezérelhető.
+    </p>
+  </section>
 </div>

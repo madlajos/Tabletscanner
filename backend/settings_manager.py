@@ -27,6 +27,11 @@ SETTINGS_SCHEMA_VERSION = 2
 UV_LAMP_CHANNELS = ('uv255', 'uv310', 'uv365')
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 FILTER_POSITIONS = (1, 2, 3, 4, 5, 6)
+FILTER_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
+FILTER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
+MAX_CONFIGURED_FILTERS = 100
+DEFAULT_MAX_HEIGHT_OFFSET_UP_MM = 5.0
+DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM = -5.0
 ADVANCED_LAMP_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 LAMP_SETTING_FIELDS = (
     'dim_percent',
@@ -97,6 +102,74 @@ def validate_capture_plan(value):
     return normalized_rows
 
 
+def default_filter_settings():
+    """Return the empty six-position filter-revolver configuration."""
+    return {'filters': [], 'slots': [None] * len(FILTER_POSITIONS)}
+
+
+def validate_filter_settings(
+    payload,
+    max_height_offset_up_mm=100.0,
+    max_height_offset_down_mm=-100.0,
+):
+    """Validate filter definitions and the six selected revolver slots."""
+    if not isinstance(payload, dict) or set(payload) != {'filters', 'slots'}:
+        raise ValueError('Filter settings must contain filters and slots.')
+    filters = payload['filters']
+    slots = payload['slots']
+    if not isinstance(filters, list) or not isinstance(slots, list) or len(slots) != len(FILTER_POSITIONS):
+        raise ValueError('Filter settings must contain six slots.')
+    if len(filters) > MAX_CONFIGURED_FILTERS:
+        raise ValueError(f'At most {MAX_CONFIGURED_FILTERS} filters can be configured.')
+
+    normalized_filters = []
+    ids = set()
+    normalized_names = set()
+    for definition in filters:
+        if not isinstance(definition, dict) or set(definition) != {
+            'id', 'name', 'wavelength_range', 'height_offset_mm', 'color'
+        }:
+            raise ValueError('Each filter must include id, name, wavelength_range, height_offset_mm, and color.')
+        filter_id = definition['id'].strip() if isinstance(definition['id'], str) else ''
+        name = definition['name'].strip() if isinstance(definition['name'], str) else ''
+        wavelength_range = definition['wavelength_range'].strip() if isinstance(definition['wavelength_range'], str) else ''
+        height_offset_mm = _finite_number(definition['height_offset_mm'], None)
+        color = definition['color'].strip() if isinstance(definition['color'], str) else ''
+        normalized_name = name.casefold()
+        if not FILTER_ID_PATTERN.fullmatch(filter_id) or filter_id in ids:
+            raise ValueError('Filter IDs must be unique identifiers.')
+        if not name or len(name) > 100 or normalized_name in normalized_names:
+            raise ValueError('Filter names must be unique and no longer than 100 characters.')
+        if not wavelength_range or len(wavelength_range) > 100:
+            raise ValueError('Filter wavelength range is required and must be no longer than 100 characters.')
+        if (
+            height_offset_mm is None
+            or not max_height_offset_down_mm <= height_offset_mm <= max_height_offset_up_mm
+        ):
+            raise ValueError(
+                'Filter height offset must be between '
+                f'{max_height_offset_down_mm:g} and {max_height_offset_up_mm:g} mm.'
+            )
+        if not FILTER_COLOR_PATTERN.fullmatch(color):
+            raise ValueError('Filter color must be a six-digit hexadecimal color.')
+        ids.add(filter_id)
+        normalized_names.add(normalized_name)
+        normalized_filters.append({
+            'id': filter_id,
+            'name': name,
+            'wavelength_range': wavelength_range,
+            'height_offset_mm': height_offset_mm,
+            'color': color.lower(),
+        })
+
+    normalized_slots = []
+    for slot in slots:
+        if slot is not None and (not isinstance(slot, str) or slot not in ids):
+            raise ValueError('Each selected slot must reference a configured filter.')
+        normalized_slots.append(slot)
+    return {'filters': normalized_filters, 'slots': normalized_slots}
+
+
 def validate_lamp_output_selectors(payload):
     """Validate the configurable M106 output selectors, e.g. P0 or P3."""
     if not isinstance(payload, dict) or not isinstance(payload.get('output_selectors'), dict):
@@ -113,6 +186,31 @@ def validate_lamp_output_selectors(payload):
             raise ValueError(f'{channel} selector must have the format P followed by a non-negative number.')
         normalized[channel] = value.strip().upper()
     return {'output_selectors': normalized}
+
+
+def validate_motion_simulation_settings(payload):
+    """Validate the advanced motion and filter-height preferences."""
+    required_fields = {
+        'use_virtual_com_port',
+        'max_height_offset_up_mm',
+        'max_height_offset_down_mm',
+    }
+    if not isinstance(payload, dict) or set(payload) != required_fields:
+        raise ValueError('Advanced motion settings contain missing or unknown fields.')
+    enabled = payload['use_virtual_com_port']
+    if not isinstance(enabled, bool):
+        raise ValueError('use_virtual_com_port must be a boolean.')
+    max_up = _finite_number(payload['max_height_offset_up_mm'], None)
+    max_down = _finite_number(payload['max_height_offset_down_mm'], None)
+    if max_up is None or max_up <= 0:
+        raise ValueError('Maximum upward height offset must be a positive number.')
+    if max_down is None or max_down >= 0:
+        raise ValueError('Maximum downward height offset must be a negative number.')
+    return {
+        'use_virtual_com_port': enabled,
+        'max_height_offset_up_mm': max_up,
+        'max_height_offset_down_mm': max_down,
+    }
 
 
 def migrate_settings(settings):
@@ -239,6 +337,27 @@ def save_settings(settings_path=DEFAULT_SETTINGS_PATH):
             error_message = f"Failed to save settings: {e}"
             logging.error(error_message)
             return False
+
+
+def update_filter_settings(filter_settings, settings_path=DEFAULT_SETTINGS_PATH):
+    """Persist validated filter settings while holding the settings lock."""
+    global _cached_settings
+    with _settings_lock:
+        missing = object()
+        previous_settings = _cached_settings.get('filter_settings', missing)
+        _cached_settings['filter_settings'] = copy.deepcopy(filter_settings)
+        try:
+            _write_settings_atomic(settings_path, _cached_settings)
+            logging.info("Filter settings saved successfully.")
+            return True
+        except Exception as error:
+            if previous_settings is missing:
+                _cached_settings.pop('filter_settings', None)
+            else:
+                _cached_settings['filter_settings'] = previous_settings
+            logging.error("Failed to save filter settings: %s", error)
+            return False
+
 
 def get_settings() -> dict:
     """Returns the current in-memory settings dict."""

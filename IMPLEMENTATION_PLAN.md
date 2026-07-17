@@ -44,9 +44,10 @@ Hardware implementation must stop at the affected phase if these decisions are u
 | D7 | **Confirmed:** `VIS` appears in the `Lámpa` table but has only a single-click, full-brightness control and no thermal auto-off requirement. | VIS must be visibly documented without incorrectly exposing UV dim/full or thermal-time controls. | Render a read-only VIS row with `N/A` for dimmed brightness and both cutoff-time columns; its full-brightness value is fixed at 100%. |
 | D8 | Which UV brightness mode should automatic measurement use? | Unattended full-power UV capture needs an explicit thermal and optical decision. | Until confirmed, automatic UV captures use dimmed mode; VIS captures use its normal full mode. |
 
-The filter changer is a **UI/data placeholder in this scope**. Positions 1–6 are selected,
-validated, persisted, sent to the backend, and included in capture metadata. No physical filter
-movement is claimed until a later filter-controller protocol is supplied.
+The filter changer was subsequently extended with manual physical control. Positions 1–6 are
+selected, validated, persisted, sent to the backend, and included in capture metadata. Manual
+control homes the firmware's external `A` axis (internal Marlin `I` axis) and performs acknowledged
+60° steps. Automatic capture-plan execution still treats its filter position as metadata only.
 
 ## 3. Target contracts
 
@@ -524,8 +525,8 @@ Tasks:
       silently labeling a capture as dome/VIS.
 - [ ] Ensure stop, autofocus abort, quality failure, camera loss, serial loss, and unexpected
       exceptions all reach the common all-off cleanup.
-- [ ] Do not pretend to move the filter revolver. Store/report the requested placeholder position
-      until a real filter-controller adapter is implemented.
+- [ ] Keep capture-plan filter selection as metadata until measurement orchestration explicitly
+      invokes the acknowledged manual filter-controller adapter and verifies each completed move.
 
 Acceptance:
 

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" role="img" aria-label="Hat pozíciós szűrőtartó">
+  <circle cx="150" cy="150" r="144" fill="#2d2c29" stroke="#111" stroke-width="3"/>
+  <g fill="#20201e" stroke="#0d0d0c" stroke-width="3">
+    <circle cx="150" cy="52" r="40"/>
+    <circle cx="235" cy="101" r="40"/>
+    <circle cx="235" cy="199" r="40"/>
+    <circle cx="150" cy="248" r="40"/>
+    <circle cx="65" cy="199" r="40"/>
+    <circle cx="65" cy="101" r="40"/>
+    <circle cx="150" cy="150" r="25"/>
+  </g>
+  <circle cx="150" cy="150" r="7" fill="#eee"/>
+</svg>

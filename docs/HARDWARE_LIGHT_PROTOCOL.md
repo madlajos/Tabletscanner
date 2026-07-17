@@ -73,5 +73,14 @@ disconnect, and shutdown attempts an all-off command.
 5. Test dimmed and full UV timeout behavior one channel at a time.
 6. Verify all-off on application exit and controller disconnect.
 
-The filter position stored in a capture plan is metadata only. No filter-revolver
-command is issued until its physical protocol is documented and implemented.
+## Filter revolver protocol
+
+Marlin exposes its internal fourth `I` axis as the operator-facing `A` axis. The configured
+Hall-sensor endstop homes with `G28 A`; the six positions are 60° apart in the configured
+0–360° range. Manual control uses acknowledged `G91`, `G1 A+/-60`, `M400`, and restores `G90`.
+At the wrap boundary, `G92 A360` or `G92 A0` keeps the move inside the configured soft range.
+The backend changes the active one-based slot only after `M400` and mode restoration are
+acknowledged. Disconnecting or changing the motion adapter invalidates the homed slot.
+
+The filter position stored in a capture plan remains metadata only; automatic measurement does
+not yet call the manual revolver controller.

@@ -20,7 +20,30 @@
         <ng-container [ngSwitch]="selectedType">
           <section *ngSwitchCase="'filter'">
             <h3>Szűrőváltó</h3>
-            <p>A szűrőváltó beállításai egy későbbi fejlesztési fázisban lesznek elérhetők.</p>
+            <p *ngIf="loadingFilterSettings" class="settings-note">Betöltés…</p>
+            <ng-container *ngIf="!loadingFilterSettings">
+              <div class="filter-layout">
+                <app-filter-revolver [settings]="filterSettings"></app-filter-revolver>
+                <table class="filter-slot-table"><thead><tr><th>Pozíció</th><th>Szűrő</th></tr></thead><tbody><tr *ngFor="let slot of filterSettings.slots; let i = index; trackBy: trackSlotIndex">
+                  <td>{{ i + 1 }}</td><td><select (change)="assignFilterToSlotFromEvent(i, $event)" [disabled]="measurementActive" [attr.aria-label]="(i + 1) + '. pozíció szűrője'"><option value="" [selected]="slot === null">Üres</option><option *ngFor="let filter of selectableFilters" [value]="filter.id" [selected]="slot === filter.id">{{ filter.name }}</option></select></td>
+                </tr></tbody></table>
+              </div>
+              <h4>Szűrők konfigurálása</h4>
+              <div style="max-height: 310px; overflow-y: auto;">
+                <table class="filter-definition-table"><thead><tr><th>Név</th><th>Hullámhossz tartomány</th><th>Magasság-eltolás</th><th>Szín</th><th aria-label="Műveletek"></th></tr></thead><tbody><tr *ngFor="let filter of filterSettings.filters; let i = index">
+                  <td><input type="text" maxlength="100" [(ngModel)]="filter.name" (ngModelChange)="onFilterChanged()" [disabled]="measurementActive" aria-label="Szűrő neve"></td>
+                  <td><input type="text" maxlength="100" [(ngModel)]="filter.wavelength_range" (ngModelChange)="onFilterChanged()" placeholder="pl. 300–320" [disabled]="measurementActive" aria-label="Hullámhossz tartomány nm-ben"><span>nm</span></td>
+                  <td><input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any" [(ngModel)]="filter.height_offset_mm" (ngModelChange)="onFilterChanged()" [disabled]="measurementActive" aria-label="Magasság-eltolás mm-ben"><span>mm</span></td>
+                  <td><input class="color-picker" type="color" [(ngModel)]="filter.color" (ngModelChange)="onFilterChanged()" [disabled]="measurementActive" aria-label="Szűrő színe" style="opacity:.6"></td>
+                  <td><button type="button" class="delete-filter" (click)="removeFilter(i)" [disabled]="measurementActive" aria-label="Szűrő törlése"><mat-icon>delete</mat-icon></button></td>
+                </tr></tbody></table>
+              </div>
+              <button type="button" (click)="addFilter()" [disabled]="measurementActive" aria-label="Szűrő hozzáadása"
+                style="display:block;width:32px;height:32px;margin:8px auto;border:0;border-radius:50%;background:#224477;color:#fff;font-size:22px;cursor:pointer">+</button>
+              <p *ngIf="filterError" class="settings-error">{{ filterError }}</p>
+              <p *ngIf="savingFilterSettings" class="settings-note">Automatikus mentés…</p>
+              <p *ngIf="filterSaved && !savingFilterSettings" class="settings-success">Automatikusan mentve.</p>
+            </ng-container>
           </section>
 
           <section *ngSwitchCase="'tray'">
@@ -35,18 +58,39 @@
             <table class="advanced-settings-table" *ngIf="!loadingAdvancedSettings">
               <thead><tr><th>Hullámhossz</th><th>M106 kimenet</th></tr></thead>
               <tbody>
-                <tr><td>255 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv255" placeholder="P0" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
-                <tr><td>310 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv310" placeholder="P1" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
-                <tr><td>365 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv365" placeholder="P2" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
-                <tr><td>VIS</td><td><input type="text" [(ngModel)]="advancedSelectors.vis" placeholder="P3" [disabled]="measurementActive || savingAdvancedSettings"></td></tr>
+                <tr><td>255 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv255" (ngModelChange)="onAdvancedChanged()" placeholder="P0" [disabled]="measurementActive"></td></tr>
+                <tr><td>310 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv310" (ngModelChange)="onAdvancedChanged()" placeholder="P1" [disabled]="measurementActive"></td></tr>
+                <tr><td>365 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv365" (ngModelChange)="onAdvancedChanged()" placeholder="P2" [disabled]="measurementActive"></td></tr>
+                <tr><td>VIS</td><td><input type="text" [(ngModel)]="advancedSelectors.vis" (ngModelChange)="onAdvancedChanged()" placeholder="P3" [disabled]="measurementActive"></td></tr>
               </tbody>
             </table>
+            <label class="virtual-com-setting" *ngIf="!loadingAdvancedSettings">
+              <input type="checkbox" [(ngModel)]="useVirtualComPort" (ngModelChange)="onAdvancedChanged()"
+                [disabled]="measurementActive">
+              <span>Virtuális COM-port használata</span>
+            </label>
+            <div *ngIf="!loadingAdvancedSettings" style="display:grid;gap:8px;max-width:430px;margin:18px 0">
+              <label style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+                <span>Max. Magasság eltolás felfelé</span>
+                <span><input type="number" min="0.001" step="any" [(ngModel)]="maxHeightOffsetUpMm"
+                  (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"
+                  style="width:72px;padding:5px;color:#fff;background:#333;border:1px solid #666;border-radius:3px"> mm</span>
+              </label>
+              <label style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+                <span>Max. Magasság eltolás lefelé</span>
+                <span><input type="number" max="-0.001" step="any" [(ngModel)]="maxHeightOffsetDownMm"
+                  (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"
+                  style="width:72px;padding:5px;color:#fff;background:#333;border:1px solid #666;border-radius:3px"> mm</span>
+              </label>
+            </div>
+            <p class="settings-note" *ngIf="!loadingAdvancedSettings">
+              Bekapcsolva a program egy alkalmazáson belüli BTT Octopus/Marlin szimulátorhoz
+              csatlakozik. A mozgás és a pozíciók tesztelhetők, fizikai motor nem mozdul.
+            </p>
+            <p class="settings-note" *ngIf="virtualConnectionLabel">{{ virtualConnectionLabel }}</p>
             <p *ngIf="advancedError" class="settings-error">{{ advancedError }}</p>
-            <p *ngIf="advancedSaved" class="settings-success">A haladó lámpabeállítások mentve.</p>
-            <button type="button" class="save-button" (click)="saveAdvancedSettings()"
-              [disabled]="measurementActive || loadingAdvancedSettings || savingAdvancedSettings">
-              {{ savingAdvancedSettings ? 'Mentés…' : 'Mentés' }}
-            </button>
+            <p *ngIf="savingAdvancedSettings" class="settings-note">Automatikus mentés…</p>
+            <p *ngIf="advancedSaved && !savingAdvancedSettings" class="settings-success">Automatikusan mentve.</p>
           </section>
 
           <section *ngSwitchCase="'lamp'">
@@ -68,10 +112,10 @@
                 <tr *ngFor="let row of lampRows">
                   <td>{{ row.label }}</td>
                   <ng-container *ngIf="row.channel !== 'vis'; else visibleRow">
-                    <td><input type="number" min="10" max="100" [(ngModel)]="row.settings.dim_percent" [disabled]="measurementActive || savingLampSettings"><span>%</span></td>
-                    <td><input type="number" min="10" max="100" [(ngModel)]="row.settings.full_percent" [disabled]="measurementActive || savingLampSettings"><span>%</span></td>
-                    <td><input type="number" min="0.001" step="any" [(ngModel)]="row.settings.dim_timeout_seconds" [disabled]="measurementActive || savingLampSettings"><span>s</span></td>
-                    <td><input type="number" min="0.001" step="any" [(ngModel)]="row.settings.full_timeout_seconds" [disabled]="measurementActive || savingLampSettings"><span>s</span></td>
+                    <td><input type="number" min="10" max="100" [(ngModel)]="row.settings.dim_percent" (ngModelChange)="onLampChanged()" [disabled]="measurementActive"><span>%</span></td>
+                    <td><input type="number" min="10" max="100" [(ngModel)]="row.settings.full_percent" (ngModelChange)="onLampChanged()" [disabled]="measurementActive"><span>%</span></td>
+                    <td><input type="number" min="0.001" step="any" [(ngModel)]="row.settings.dim_timeout_seconds" (ngModelChange)="onLampChanged()" [disabled]="measurementActive"><span>s</span></td>
+                    <td><input type="number" min="0.001" step="any" [(ngModel)]="row.settings.full_timeout_seconds" (ngModelChange)="onLampChanged()" [disabled]="measurementActive"><span>s</span></td>
                   </ng-container>
                   <ng-template #visibleRow>
                     <td>N/A</td><td>100%</td><td>N/A</td><td>N/A</td>
@@ -81,11 +125,8 @@
             </table>
 
             <p *ngIf="lampError" class="settings-error">{{ lampError }}</p>
-            <p *ngIf="lampSaved" class="settings-success">A lámpabeállítások mentve.</p>
-            <button type="button" class="save-button" (click)="saveLampSettings()"
-              [disabled]="measurementActive || loadingLampSettings || savingLampSettings">
-              {{ savingLampSettings ? 'Mentés…' : 'Mentés' }}
-            </button>
+            <p *ngIf="savingLampSettings" class="settings-note">Automatikus mentés…</p>
+            <p *ngIf="lampSaved && !savingLampSettings" class="settings-success">Automatikusan mentve.</p>
           </section>
         </ng-container>
       </main>

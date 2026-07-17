@@ -122,6 +122,13 @@ camera, starts its stream, attempts to identify the Marlin controller, starts th
 and then serves Flask on port 5000. Missing hardware is logged and can be reconnected from the
 UI; it does not prevent the health endpoint from becoming available.
 
+For hardware-free motion testing, enable **Beállítások → Haladó → Virtuális COM-port
+használata**. On save and on subsequent startups, the backend connects to an in-process BTT
+Octopus/Marlin simulator exposed as `VIRTUAL_BTT_OCTOPUS`. It supports the motion, homing,
+position, stepper, status, and lamp G-code used by the application. This is an application-level
+serial adapter, not a Windows driver or a system-wide COM-port pair, so external serial tools
+cannot connect to it.
+
 The packaged Electron shell starts `resources/backend/app.exe` with
 `TABLETSCANNER_FULL=1`. That environment variable enables the complete API in a frozen build.
 Without it, the standalone frozen backend intentionally exposes only health and latest-image
@@ -149,8 +156,12 @@ VIS is a single-click 100% channel without a thermal timeout.
 
 Automatic measurement requires a non-empty `capture_plan`; legacy `lamp_top`/`lamp_side` payloads
 are rejected. Each plan row records a wavelength and filter position. Filter positions are stored
-in output metadata only until a filter-revolver command protocol is defined—no physical filter
-movement is performed by the current software.
+in output metadata; automatic capture-plan execution does not yet move the revolver.
+
+The six revolver positions and reusable filter definitions (name, wavelength range, height offset,
+and display color) can be configured under **Beállítások → Szűrőváltó**. After X/Y/Z/A
+homing, the Vezérlőpult can move the physical A-axis revolver one 60° slot at a time. The UI
+updates its active filter only after the controller acknowledges the completed move.
 
 The required board mapping, command contract, and hardware bring-up checks are in
 [docs/HARDWARE_LIGHT_PROTOCOL.md](docs/HARDWARE_LIGHT_PROTOCOL.md).
