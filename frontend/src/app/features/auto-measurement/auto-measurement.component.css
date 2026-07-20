@@ -168,7 +168,7 @@
   border: 1px solid #4a4a4a;
   border-radius: 5px;
   padding: 6px;
-  background: #252525;
+  background: #2f2f2f;
 }
 
 .capture-plan-header h4 {
@@ -178,7 +178,7 @@
 }
 
 .capture-plan-scroll {
-  max-height: 112px;
+  height: 94px;
   overflow-y: auto;
   overflow-x: hidden;
 }

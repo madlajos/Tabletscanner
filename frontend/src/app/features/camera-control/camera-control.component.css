@@ -13,10 +13,6 @@
   order: 1;
 }
 
-.divider {
-  order: 2;
-}
-
 .user-settings {
   order: 3;
 }
@@ -138,7 +134,7 @@ td button:not(.browse-button):disabled {
 /* ─────────────────────────────────── */
 
 .user-settings {
-  margin-bottom: 15px;
+  margin-bottom: 0;
 }
 
 /* Table for User Settings */
@@ -192,29 +188,36 @@ td button:not(.browse-button):disabled {
 /* ─────────────────────────────────── */
 
 .section-toggle {
+  position: relative;
   width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 14px;
-  color: #ddd;
-  margin: 0 0 8px;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #b8b8b8;
+  margin: 0;
   text-transform: uppercase;
-  text-align: left;
-  padding: 6px;
-  background-color: #222;
+  text-align: center;
+  padding: 8px 6px;
+  background-color: transparent;
   border: 0;
-  border-radius: 4px;
+  border-bottom: 1px solid #454545;
+  border-radius: 0;
+  letter-spacing: 0.04em;
   cursor: pointer;
 }
 
 .section-toggle:hover:not(:disabled),
 .section-toggle:focus-visible {
-  background-color: #333;
+  color: #ddd;
+  background-color: rgba(255, 255, 255, 0.035);
   outline: 1px solid #2a628c;
 }
 
 .section-toggle mat-icon {
+  position: absolute;
+  right: 6px;
   font-size: 18px;
   width: 18px;
   height: 18px;
@@ -222,21 +225,15 @@ td button:not(.browse-button):disabled {
 
 
 /* ─────────────────────────────────── */
-/* Divider between User & Developer Settings */
-/* ─────────────────────────────────── */
-.divider {
-  border: none;
-  height: 2px;
-  background-color: #555;
-  margin: 15px 0;
-}
-
-/* ─────────────────────────────────── */
 /* Developer Settings Section */
 /* ─────────────────────────────────── */
 
 .developer-settings {
-  margin-bottom: 10px;
+  margin-bottom: 0;
+}
+
+.section-toggle + table:not([hidden]) {
+  margin-top: 8px;
 }
 
 .user-settings-table input.dir-display {

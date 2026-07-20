@@ -16,3 +16,4 @@ electron
 backend/build
 backend/dist
 backend/proc_elements/__pycache__
+node_modules

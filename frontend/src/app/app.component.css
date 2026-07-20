@@ -49,7 +49,7 @@ body {
   box-sizing: border-box;
   padding: 12px;
   display: grid;
-  grid-template-columns: 1fr 3fr 1fr;
+  grid-template-columns: 1.15fr 3fr 1.15fr;
   gap: 12px;
 }
 
@@ -73,8 +73,26 @@ body {
   flex-direction: column;
 }
 
-.scanner-panel-scroll {
+.scanner-panel {
+  overflow: hidden;
+}
+
+.scanner-panel > app-motion-control,
+.scanner-panel > .side-section-header,
+.scanner-panel > .software-settings-button,
+.scanner-panel > .side-panel-logo {
+  flex-shrink: 0;
+}
+
+.settings-scroll-region {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.settings-scroll-region app-camera-control {
+  display: block;
 }
 
 /* Left/Right placeholder text */
@@ -114,6 +132,23 @@ body {
   color: #ffffff;
 }
 
+.side-section-header-subtle {
+  padding: 8px 6px;
+  background-color: transparent;
+  border-bottom: 1px solid #454545;
+}
+
+.side-section-header-subtle .side-section-title {
+  color: #b8b8b8;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.settings-section-header {
+  border-bottom: 0;
+}
+
 
 /* Right panel already flex via .controls-panel rule above,
    now make its inner .side-panel fill and be a column */
@@ -126,7 +161,7 @@ body {
 
 /* Logo sits at the bottom of side-panel */
 .side-panel-logo {
-  margin-top: auto;          /* this pushes it to the bottom */
+  margin-top: 0;
   padding-top: 8px;
   border-top: 1px solid #444;
   text-align: center;
@@ -156,6 +191,7 @@ body {
   gap: 7px;
   width: 100%;
   margin-top: auto;
+  margin-bottom: 6px;
   padding: 9px;
   color: #eee;
   background: #333;

@@ -1,5 +1,6 @@
 <div class="control-panel" [class.locked]="measurementActive || isAutofocusing">
-  <div class="position-display">
+  <h3 class="control-subsection-title control-subsection-title-first" id="table-control-title">Asztalvezérlés</h3>
+  <div class="position-display" aria-labelledby="table-control-title">
     <div class="position">
       <div class="position-container">
         <div class="coord-input-wrapper">
@@ -94,6 +95,15 @@
         <img src="assets/SVG/home.svg" alt="Home" class="home-icon" />
       </button>
 
+      <!-- Autofocus (click again while running to abort) -->
+      <button class="home-button" 
+        (click)="autoFocusCoarse()" 
+        [class.autofocusing]="isAutofocusing"
+        [class.autofocused]="autofocusDone"
+        [disabled]="!isConnected || measurementActive || !(xHomed && yHomed && zHomed)">
+        <img src="assets/SVG/auto_focus.svg" alt="Autofocus" class="home-icon" />
+      </button>
+
       <!-- First tablet position -->
       <button class="home-button" 
         (click)="moveToolHeadAbsolute(2.9, 10.6, 20)"
@@ -106,15 +116,6 @@
         (click)="moveToolHeadAbsolute(86, 20, 0)"
         [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">
         <img src="assets/SVG/service_pos.svg" alt="Service position" class="home-icon" />
-      </button>
-
-      <!-- Autofocus (click again while running to abort) -->
-      <button class="home-button" 
-        (click)="autoFocusCoarse()" 
-        [class.autofocusing]="isAutofocusing"
-        [class.autofocused]="autofocusDone"
-        [disabled]="!isConnected || measurementActive || !(xHomed && yHomed && zHomed)">
-        <img src="assets/SVG/auto_focus.svg" alt="Autofocus" class="home-icon" />
       </button>
     </div>
   </div>
@@ -132,7 +133,8 @@
     <button [class.active]="movementAmount === 100" (click)="setMovementAmount(100)" [disabled]="controlsDisabled || !(xHomed && yHomed && zHomed)">100</button>
   </div>
 
-  <div class="lamp-buttons">
+  <h3 class="control-subsection-title" id="lamp-control-title">Lámpavezérlés</h3>
+  <div class="lamp-buttons" aria-labelledby="lamp-control-title">
     <button *ngFor="let lamp of lampButtons" class="lamp-button" [class.active]="isLampActive(lamp.channel)"
       (click)="onLampClick(lamp.channel)" (dblclick)="onLampDoubleClick(lamp.channel)"
       [disabled]="!isConnected || measurementActive || isAutofocusing"
@@ -149,7 +151,7 @@
   </div>
 
   <section class="filter-revolver-control" aria-labelledby="filter-revolver-control-title">
-    <h3 id="filter-revolver-control-title">Szűrőváltó</h3>
+    <h3 class="control-subsection-title" id="filter-revolver-control-title">Szűrőváltó</h3>
     <div class="filter-revolver-control-content">
       <app-filter-revolver
         [settings]="filterSettings"
@@ -160,34 +162,36 @@
         [size]="150"
       ></app-filter-revolver>
 
-      <div class="filter-revolver-buttons" aria-label="Szűrőváltó forgatása">
-        <button
-          type="button"
-          class="direction-button rotate-up"
-          (click)="rotateFilterRevolver('down')"
-          [disabled]="filterRevolverControlsDisabled"
-          aria-label="Szűrőváltó a következő, nagyobb számú pozícióra"
-        >
-          <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
-        </button>
-        <button
-          type="button"
-          class="direction-button rotate-down"
-          (click)="rotateFilterRevolver('up')"
-          [disabled]="filterRevolverControlsDisabled"
-          aria-label="Szűrőváltó az előző, kisebb számú pozícióra"
-        >
-          <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
-        </button>
-      </div>
+      <div class="filter-revolver-info">
+        <table class="active-filter-details" aria-label="Aktív szűrő adatai">
+          <tbody>
+            <tr><th>Név:</th><td>{{ activeFilter?.name || 'Üres' }}</td></tr>
+            <tr><th>λ:</th><td>{{ activeFilter ? activeFilter.wavelength_range + ' nm' : '—' }}</td></tr>
+            <tr><th>ΔZ:</th><td>{{ activeFilter ? activeFilter.height_offset_mm + ' mm' : '—' }}</td></tr>
+          </tbody>
+        </table>
 
-      <table class="active-filter-details" aria-label="Aktív szűrő adatai">
-        <tbody>
-          <tr><th>Név:</th><td>{{ activeFilter?.name || 'Üres' }}</td></tr>
-          <tr><th>Hullámhossz:</th><td>{{ activeFilter ? activeFilter.wavelength_range + ' nm' : '—' }}</td></tr>
-          <tr><th>Magasság-eltolás:</th><td>{{ activeFilter ? activeFilter.height_offset_mm + ' mm' : '—' }}</td></tr>
-        </tbody>
-      </table>
+        <div class="filter-revolver-buttons" aria-label="Szűrőváltó forgatása">
+          <button
+            type="button"
+            class="direction-button rotate-down"
+            (click)="rotateFilterRevolver('down')"
+            [disabled]="filterRevolverControlsDisabled"
+            aria-label="Szűrőváltó a következő, nagyobb számú pozícióra"
+          >
+            <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
+          </button>
+          <button
+            type="button"
+            class="direction-button rotate-up"
+            (click)="rotateFilterRevolver('up')"
+            [disabled]="filterRevolverControlsDisabled"
+            aria-label="Szűrőváltó az előző, kisebb számú pozícióra"
+          >
+            <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
+          </button>
+        </div>
+      </div>
     </div>
     <p class="filter-revolver-note" *ngIf="isConnected && (!filterRevolverStatus.homed || !filterRevolverStatus.motion_platform_homed)">
       A szűrőváltó a mozgásplatform homingja után vezérelhető.

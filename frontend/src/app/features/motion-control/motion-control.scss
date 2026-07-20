@@ -26,7 +26,8 @@
 
 .position-display {
   display: flex;
-  justify-content: space-around;
+  justify-content: center;
+  gap: 12px;
   margin-bottom: 12px;
 }
 
@@ -62,13 +63,14 @@
   top: 50%;
   transform: translateY(-50%);
   font-size: 16px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
   pointer-events: none; /* don’t block clicks/focus */
 }
 
 .coord-input {
-  width: 70px;
+  box-sizing: border-box;
+  width: 78px;
   height: 30px;
   padding: 4px 6px;
   padding-left: 20px; /* space for X/Y/Z prefix */
@@ -151,12 +153,16 @@
   display: flex;
   align-items: flex-start; // align top edges of arrows and 2x2 grid
   justify-content: space-between;
+  gap: 0;
+  width: calc(100% - 14px);
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .movement-buttons {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .direction-button {
@@ -169,15 +175,25 @@
   }
 }
 
+.movement-buttons .direction-button,
+.home-button {
+  width: 42px;
+}
+
+.movement-buttons .direction-button .direction-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .movement-buttons .movement-column {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 0;
 }
 
 .gap {
-  height: 6px;
+  height: 16px;
 }
 
 /* Arrow rotations – arrow.svg assumed to point right by default */
@@ -205,9 +221,9 @@
 .home-buttons-grid {
   display: grid;
   grid-template-columns: repeat(2, auto);
-  column-gap: 16px;
-  row-gap: 22px;
-  margin-left: 16px;
+  column-gap: 12px;
+  row-gap: 16px;
+  margin-left: 0;
   justify-content: center;
 }
 
@@ -219,8 +235,8 @@
   text-align: center;
 
   .home-icon {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     display: block;
   }
 
@@ -291,11 +307,11 @@
 // =======================
 
 .movement-amount-buttons {
-  margin-top: 20px;
+  margin: 20px auto 0;
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 0;              // no gaps between buttons – they touch
-  width: 100%;
+  width: calc(100% - 14px);
 }
 
 .movement-amount-buttons button {
@@ -331,7 +347,8 @@
 }
 
 .lamp-buttons {
-  margin-top: 12px;
+  width: calc(100% - 14px);
+  margin: 8px auto 0;
   display: flex;
   justify-content: center;
   gap: 8px;
@@ -346,6 +363,7 @@
   height: 48px;
   flex: 1 1 0;
   width: auto;
+  max-width: none;
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -409,25 +427,76 @@
   border-radius: 3px 0 0 3px;
 }
 
+.control-panel h3.control-subsection-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  max-width: none;
+  margin: 14px 0 0;
+  padding: 8px 0;
+  color: #a9a9a9;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+
+.control-panel h3.control-subsection-title-first {
+  margin-top: 0;
+}
+
+.control-panel h3.control-subsection-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #454545;
+}
+
 .filter-revolver-control {
   margin-top: 16px;
 }
 
-.filter-revolver-control h3 {
-  margin: 0 0 10px;
+.filter-revolver-control .control-subsection-title {
+  margin-top: 0;
+  margin-bottom: 6px;
 }
 
 .filter-revolver-control-content {
   display: grid;
-  grid-template-columns: 150px 48px minmax(105px, 1fr);
-  gap: 10px;
+  grid-template-columns: 150px minmax(0, 1fr);
+  column-gap: 10px;
   align-items: center;
+  padding-top: 6px;
+}
+
+.filter-revolver-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .filter-revolver-buttons {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-direction: row;
+  justify-content: center;
+  gap: 8px;
+}
+
+.filter-revolver-buttons .direction-button {
+  width: 44px;
+  max-width: 44px;
+  height: 28px;
+  aspect-ratio: auto;
+  border-radius: 4px;
+}
+
+.filter-revolver-buttons .direction-icon {
+  width: 14px;
+  height: 14px;
 }
 
 /* arrow.svg points up by default. Override the generic movement-button
@@ -440,31 +509,45 @@
   transform: rotate(180deg);
 }
 
+.filter-revolver-buttons button:first-child .direction-icon {
+  transform: rotate(-90deg);
+}
+
+.filter-revolver-buttons button:last-child .direction-icon {
+  transform: rotate(90deg);
+}
+
 .active-filter-details {
-  width: 100%;
+  width: calc(100% - 120px);
+  margin: 0 auto;
+  transform: translateX(-10px);
+  table-layout: fixed;
   border: 0;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .active-filter-details th,
 .active-filter-details td {
-  padding: 4px 0;
+  padding: 3px 0;
   border: 0;
   text-align: left;
   vertical-align: top;
 }
 
 .active-filter-details th {
-  padding-right: 7px;
+  width: 50%;
+  padding-right: 8px;
   color: #bbb;
   font-weight: 600;
+  text-align: left;
   white-space: nowrap;
 }
 
 .active-filter-details td {
-  overflow-wrap: anywhere;
+  padding-left: 8px;
   color: #fff;
+  white-space: nowrap;
 }
 
 .filter-revolver-note {
@@ -474,13 +557,3 @@
   text-align: center;
 }
 
-@media (max-width: 1500px) {
-  .filter-revolver-control-content {
-    grid-template-columns: 150px 48px;
-    justify-content: center;
-  }
-
-  .active-filter-details {
-    grid-column: 1 / -1;
-  }
-}

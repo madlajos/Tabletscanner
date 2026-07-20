@@ -16,24 +16,8 @@
         "save_location": "C:/Users/madlajos/Downloads",
         "capture_plan": [
             {
-                "wavelength": "uv310",
+                "wavelength": "uv255",
                 "filter_position": 1
-            },
-            {
-                "wavelength": "uv310",
-                "filter_position": 2
-            },
-            {
-                "wavelength": "uv310",
-                "filter_position": 3
-            },
-            {
-                "wavelength": "uv310",
-                "filter_position": 3
-            },
-            {
-                "wavelength": "uv310",
-                "filter_position": 3
             }
         ]
     },
@@ -66,7 +50,9 @@
         }
     },
     "advanced_settings": {
-        "use_virtual_com_port": true
+        "use_virtual_com_port": true,
+        "max_height_offset_up_mm": 5.0,
+        "max_height_offset_down_mm": -5.0
     },
     "filter_settings": {
         "filters": [
@@ -75,7 +61,7 @@
                 "name": "Zöld",
                 "wavelength_range": "500-550",
                 "height_offset_mm": 1.0,
-                "color": "#000000"
+                "color": "#005205"
             },
             {
                 "id": "7447fe07-3a99-4542-9d10-1e7082f0e9e7",

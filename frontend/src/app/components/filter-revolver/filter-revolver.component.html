@@ -25,7 +25,7 @@
         aria-hidden="true"
       ></span>
       <span class="slot-name" [style.transform]="'rotate(' + (-displayedRotationDegrees) + 'deg)'">
-        {{ filterForSlot(slot)?.name || 'Üres' }}
+        {{ displayNameForSlot(slot) }}
       </span>
     </div>
     <span

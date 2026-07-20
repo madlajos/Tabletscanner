@@ -28,6 +28,10 @@ export class FilterRevolverComponent {
     return this.settings.filters.find(filter => filter.id === filterId);
   }
 
+  displayNameForSlot(filterId: string | null): string {
+    return (this.filterForSlot(filterId)?.name || 'Üres').slice(0, 6);
+  }
+
   trackSlot(index: number): number {
     return index;
   }

@@ -25,16 +25,18 @@
 @if (activeSection === 'scanner') {
   <main class="app-grid">
     <!-- Left column (1/5): Camera Settings -->
-    <section class="panel scanner-panel-scroll">
-      <div class="side-section-header">
+    <section class="panel scanner-panel">
+      <div class="side-section-header side-section-header-subtle">
         <span class="side-section-title">Vezérlőpult</span>
       </div>
       <app-motion-control></app-motion-control>
 
-      <div class="side-section-header">
+      <div class="side-section-header side-section-header-subtle settings-section-header">
         <span class="side-section-title">Beállítások</span>
       </div>
-      <app-camera-control></app-camera-control>
+      <div class="settings-scroll-region">
+        <app-camera-control></app-camera-control>
+      </div>
 
       <button type="button" class="software-settings-button" (click)="openSoftwareSettings()">
         <mat-icon>settings</mat-icon>
@@ -56,7 +58,7 @@
       <div class="side-panel">
 
         <div class="side-panel-content">
-          <div class="side-section-header">
+          <div class="side-section-header side-section-header-subtle">
             <span class="side-section-title">Automata mérés</span>
           </div>
           <app-auto-measurement></app-auto-measurement>
