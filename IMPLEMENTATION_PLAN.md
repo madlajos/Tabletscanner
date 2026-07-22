@@ -18,7 +18,7 @@ V3 to four independently addressable channels on a BTT Octopus V1.1:
 | --- | --- | --- | --- |
 | `uv255` | `255 nm` | `HE0` | UV |
 | `uv310` | `310 nm` | `HE1` | UV |
-| `uv365` | `365 nm` | `HE2` | UV |
+| `uv365` | `365 nm` | `FAN1` | UV |
 | `vis` | `VIS` | `FAN0` | Visible |
 
 The UI will provide four manual lamp buttons. Camera exposure and gamma become global camera
@@ -36,8 +36,8 @@ Hardware implementation must stop at the affected phase if these decisions are u
 | ID | Required decision | Why it matters | Provisional plan |
 | --- | --- | --- | --- |
 | D1 | **Confirmed:** the first wavelength is **255 nm**, never 240 nm. | A mislabeled UV channel is a safety and data-integrity defect. | Use canonical `uv255` and display/persist `255 nm` everywhere. |
-| D2 | Exact custom-firmware G-code channel selectors for `HE0`, `HE1`, `HE2`, and `FAN0`, plus OFF commands and acknowledgement text. | The current board uses `M106 P0 S255` and `M106 P3 S255`, but those selectors must not be assumed to map to Octopus headers. | Operators configure selector-only values such as `P0` in `Haladó`; the backend will form `M106 P<selector-number> S<pwm>` only after physical mapping and OFF/acknowledgement behavior are verified. PWM is `round(255 * percent / 100)`; 10% is `S26`, 100% is `S255`. |
-| D3 | **Confirmed:** USB identity is `0483:5740`; `M115` reports `FIRMWARE_NAME:Marlin bugfix-2.0.x`, machine type `Tablet Scanner`, and acknowledges with `ok`. | `porthandler.py` currently detects `0483:5740` and expects Marlin. | Keep the existing 115200/Marlin discovery rule. The successful USB-only check is recorded in `docs/HARDWARE_LIGHT_PROTOCOL.md`; repeat it with the final powered installation before release. |
+| D2 | **Confirmed:** `P0=FAN0/VIS`, `P1=FAN1/365 nm`, `P2=HE0/255 nm`, and `P3=HE1/310 nm`; OFF uses the same selector with `S0` and commands acknowledge with `ok`. | The selectors must match both the flashed firmware and application settings. | Schema v3 installs this fixed mapping. The backend sends all four OFF commands before every ON, and the `-LOCK` firmware also clears the other three outputs on every nonzero `M106`. PWM is `round(255 * percent / 100)`; 10% is `S26`, 100% is `S255`. |
+| D3 | **Confirmed:** USB identity is `0483:5740`; approved firmware reports the mapping/interlock marker `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK` through `M115` and acknowledges with `ok`. | A generic Marlin identity cannot prove compatible lamp routing or firmware-level mutual exclusion. | Keep 115200/USB discovery and reject real controllers whose `M115` response lacks the exact marker. |
 | D4 | **Confirmed design:** each UV channel has operator-configured dimmed/full brightness percentages and separate dimmed/full auto-off times. The initial numeric values are still required. | UV timeout is a thermal-safety requirement and must match the active power mode. | Persist validated values in the `Lámpa` settings page; reject UV activation if its configuration is absent/invalid. |
 | D5 | **Confirmed:** channels are mutually exclusive. | Simultaneous channels affect power, optical results, heat, and safety. | Enforce mutual exclusion in firmware/backend/UI. Auto measurement always captures sequentially. |
 | D6 | **Confirmed:** assets use `255nm_on.svg`/`255nm_off.svg` and the matching `310nm`, `365nm`, and `vis` basename pattern. | The manual controls need a stable asset contract. | Centralize the names in the frontend light definition and verify the supplied files, including filename case, during Phase 4. |
@@ -79,7 +79,7 @@ The backend should define the equivalent Python enum/dataclass or validated cons
 channel definition must own:
 
 - canonical ID and Hungarian/operator label;
-- physical output (`HE0`, `HE1`, `HE2`, `FAN0`);
+- physical output (`HE0`, `HE1`, `FAN1`, `FAN0`);
 - approved ON/OFF G-code;
 - UV flag and timeout;
 - optional settle time;
@@ -124,7 +124,7 @@ Replace the two persisted camera sections with one schema:
 
 ```json
 {
-  "settings_schema_version": 2,
+  "settings_schema_version": 3,
   "camera_params": {
     "ExposureTime": 100000.0,
     "Gamma": 1.0
@@ -230,7 +230,7 @@ Tasks:
       `filterPosition` and `masked` where relevant.
 - [ ] Keep active-light state for lamp/gallery behavior, but remove `lightSettingsSubject` and
       `applyCameraSettingsForLight`; lamp changes no longer trigger camera changes.
-- [ ] Add `settings_schema_version: 2` and a tested migration in `settings_manager.py`.
+- [x] Add `settings_schema_version: 3` and tested v1/v2 migrations in `settings_manager.py`.
 - [ ] For existing files, initialize global `camera_params` from `camera_params_dome` because VIS
       replaces the old dome/reference illumination; fall back to `camera_params_bar` only if the
       dome section is absent. This migration rule must be confirmed before implementation.
@@ -250,7 +250,7 @@ Acceptance:
 
 - Old settings load without losing save path, objective, spacer-ring, background-subtraction, or
   camera-profile path.
-- Restart produces the same schema-v2 values and does not repeatedly migrate.
+- Restart produces the same schema-v3 values and does not repeatedly migrate.
 - No runtime path reads `camera_params_dome` or `camera_params_bar` after migration.
 
 ### Phase 2 — build the Octopus light-control backend
@@ -270,8 +270,8 @@ Tasks:
       and the fail-safe all-off sequence. Keep physical logic out of Flask routes.
 - [ ] Use `porthandler.motion_lock` and acknowledged, bounded writes for every command.
 - [ ] Update controller discovery for the approved Octopus USB identity and firmware response.
-- [ ] Remove old connect-time `M106 P0/P3` commands from `porthandler`; invoke the controller's
-      all-off sequence after a successful serial connection.
+- [x] Replace old two-channel connect-time cleanup with explicit `M106 P0` through `P3` all-off
+      commands so every configured physical lamp output is cleared after connection.
 - [ ] Implement the typed light API from section 3.2.
 - [ ] Replace the single dome/UV timestamps and high-power flag with per-channel active mode and
       deadlines. Select the deadline from the active UV channel's dimmed/full settings.
@@ -330,7 +330,7 @@ Tasks:
       search confirms no caller remains, remove `save-tss-file` IPC from Electron and
       `settings_preset_name` from settings.
 - [ ] If preset support is needed later, reintroduce it as an explicit page in the new software
-      settings modal with a schema-v2 design; do not retain hidden legacy code.
+      settings modal with a schema-v3 design; do not retain hidden legacy code.
 
 Acceptance:
 
@@ -604,7 +604,7 @@ Tasks:
 
 Perform initial tests without UV emitters connected, using a meter or safe dummy loads:
 
-1. Confirm board identity and safe boot with HE0/HE1/HE2/FAN0 OFF.
+1. Confirm board identity and safe boot with HE0/HE1/FAN1/FAN0 OFF.
 2. Verify each approved G-code affects only its mapped output.
 3. Verify mutual exclusion and all-off after failed/aborted operations.
 4. Verify dimmed and full PWM output plus the corresponding approved timeout independently on

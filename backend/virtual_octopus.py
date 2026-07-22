@@ -91,7 +91,7 @@ class VirtualOctopusSerial:
 
         if code == 'M115':
             return (
-                b'FIRMWARE_NAME:Marlin bugfix-2.0.x '
+                b'FIRMWARE_NAME:Marlin TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK '
                 b'MACHINE_TYPE:Tablet Scanner BTT Octopus V1.1\nok\n'
             )
         if code == 'M105':
@@ -120,7 +120,12 @@ class VirtualOctopusSerial:
             selector = re.search(r'(?:^|\s)P(\d+)', upper)
             pwm = re.search(r'(?:^|\s)S(\d+)', upper)
             if selector and pwm:
-                self._light_pwm[int(selector.group(1))] = max(0, min(255, int(pwm.group(1))))
+                selector_number = int(selector.group(1))
+                pwm_value = max(0, min(255, int(pwm.group(1))))
+                if pwm_value:
+                    for output in range(4):
+                        self._light_pwm[output] = 0
+                self._light_pwm[selector_number] = pwm_value
 
         # Marlin acknowledges supported control commands and benign unknown
         # commands alike. This mirrors firmware behaviour needed by raw G-code

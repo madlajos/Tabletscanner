@@ -64,7 +64,8 @@ Python backend from its resources directory.
   are converted from `BayerGR10p` to copied OpenCV BGR8 arrays.
 - Motion access is implemented by `porthandler.py` and `motioncontrols.py`. The controller is
   detected as USB `0483:5740`, identified with `M115`, and driven with Marlin G-code at 115200
-  baud.
+  baud. Real hardware must report the mapping-specific marker
+  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK`; generic or older Marlin builds are rejected.
 - Autofocus and measurement helpers live in `autofocus_main.py`, `manual_bgr_with_check.py`,
   `check_only.py`, and related image-analysis modules.
 - The backend starts a daemon lamp-timeout monitor and Flask may serve concurrent requests.
@@ -149,8 +150,9 @@ safety constraints.
 ### Four-channel illumination configuration
 
 The Octopus illumination controller has four logical channels: `uv255`, `uv310`, `uv365`, and
-`vis`. Configure each channel's `M106 P...` selector in **Beállítások → Haladó** before operating
-the lamps. Configure dimmed/full percentages and their UV safety timeouts in
+`vis`. The approved firmware and schema-v3 settings lock these to `P2/HE0`, `P3/HE1`, `P1/FAN1`,
+and `P0/FAN0` respectively; **Beállítások → Haladó** displays the mapping for verification.
+Configure dimmed/full percentages and their UV safety timeouts in
 **Beállítások → Lámpa**. UV channels use one click for dimmed and double click for full output;
 VIS is a single-click 100% channel without a thermal timeout.
 

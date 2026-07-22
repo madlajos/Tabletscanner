@@ -88,7 +88,8 @@ carefully because normal application use can modify the tracked JSON files.
   `porthandler.write_and_wait()` or `write_and_wait_motion()`; use raw `write()` only where the
   existing protocol deliberately waits elsewhere.
 - Keep finite serial timeouts. Current discovery uses 115200 baud, 0.2 s read timeout, 0.5 s
-  write timeout, USB `0483:5740`, `M115`, and expected `FIRMWARE_NAME:Marlin`.
+  write timeout, USB `0483:5740`, `M115`, and the mapping marker
+  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK`.
 - Preserve backend clamping and cached position updates. Current limits are X/Y 0–175 mm and Z
   0–30 mm. UI limits are not an adequate safety boundary.
 - Respect `globals.motion_busy`; status polling must not interleave commands with homing,

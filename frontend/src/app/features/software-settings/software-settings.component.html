@@ -53,15 +53,15 @@
 
           <section *ngSwitchCase="'advanced'">
             <h3>Haladó</h3>
-            <p class="settings-note">Adja meg az Octopus firmware által használt M106 kimenetválasztót. Csak a <code>P0</code>, <code>P1</code> formátum engedélyezett.</p>
+            <p class="settings-note">A lámpakimeneteket a jóváhagyott Octopus firmware rögzíti; itt csak ellenőrzésként jelennek meg.</p>
             <p *ngIf="loadingAdvancedSettings" class="settings-note">Betöltés…</p>
             <table class="advanced-settings-table" *ngIf="!loadingAdvancedSettings">
               <thead><tr><th>Hullámhossz</th><th>M106 kimenet</th></tr></thead>
               <tbody>
-                <tr><td>255 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv255" (ngModelChange)="onAdvancedChanged()" placeholder="P0" [disabled]="measurementActive"></td></tr>
-                <tr><td>310 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv310" (ngModelChange)="onAdvancedChanged()" placeholder="P1" [disabled]="measurementActive"></td></tr>
-                <tr><td>365 nm</td><td><input type="text" [(ngModel)]="advancedSelectors.uv365" (ngModelChange)="onAdvancedChanged()" placeholder="P2" [disabled]="measurementActive"></td></tr>
-                <tr><td>VIS</td><td><input type="text" [(ngModel)]="advancedSelectors.vis" (ngModelChange)="onAdvancedChanged()" placeholder="P3" [disabled]="measurementActive"></td></tr>
+                <tr><td>255 nm (HE0)</td><td><code>{{ advancedSelectors.uv255 }}</code></td></tr>
+                <tr><td>310 nm (HE1)</td><td><code>{{ advancedSelectors.uv310 }}</code></td></tr>
+                <tr><td>365 nm (FAN1)</td><td><code>{{ advancedSelectors.uv365 }}</code></td></tr>
+                <tr><td>VIS (FAN0)</td><td><code>{{ advancedSelectors.vis }}</code></td></tr>
               </tbody>
             </table>
             <label class="virtual-com-setting" *ngIf="!loadingAdvancedSettings">

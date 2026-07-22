@@ -1,5 +1,5 @@
 {
-    "settings_schema_version": 2,
+    "settings_schema_version": 3,
     "camera_params": {
         "ExposureTime": 100000.0,
         "Gamma": 1.0
@@ -30,27 +30,27 @@
                 "full_timeout_seconds": 5.0
             },
             "uv310": {
-                "dim_percent": 100.0,
+                "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
                 "full_timeout_seconds": 5.0
             },
             "uv365": {
-                "dim_percent": 100.0,
+                "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
                 "full_timeout_seconds": 5.0
             }
         },
         "output_selectors": {
-            "uv255": "P1",
-            "uv310": "P2",
-            "uv365": "P3",
+            "uv255": "P2",
+            "uv310": "P3",
+            "uv365": "P1",
             "vis": "P0"
         }
     },
     "advanced_settings": {
-        "use_virtual_com_port": true,
+        "use_virtual_com_port": false,
         "max_height_offset_up_mm": 5.0,
         "max_height_offset_down_mm": -5.0
     },

@@ -87,9 +87,10 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     { channel: 'uv365', label: '365 nm', settings: {} },
     { channel: 'vis', label: 'VIS', settings: {} }
   ];
-  advancedSelectors: Record<UvChannel | 'vis', string> = {
-    uv255: 'P1', uv310: 'P2', uv365: 'P3', vis: 'P0'
+  readonly fixedAdvancedSelectors: Record<UvChannel | 'vis', string> = {
+    uv255: 'P2', uv310: 'P3', uv365: 'P1', vis: 'P0'
   };
+  advancedSelectors: Record<UvChannel | 'vis', string> = { ...this.fixedAdvancedSelectors };
   filterSettings: FilterSettings = { filters: [], slots: [null, null, null, null, null, null] };
 
   constructor(
@@ -329,9 +330,13 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   }
 
   private persistAdvancedSettings(): Observable<boolean> {
-    const output_selectors = { ...this.advancedSelectors };
-    if (Object.values(output_selectors).some(value => !/^P\d+$/i.test(value.trim()))) {
-      this.advancedError = 'Minden kimenethez P után egy nem negatív számot adjon meg, például P0.';
+    const output_selectors = Object.fromEntries(
+      Object.entries(this.advancedSelectors).map(([channel, value]) => [channel, value.trim().toUpperCase()])
+    ) as AdvancedLampSettings['output_selectors'];
+    if (Object.entries(this.fixedAdvancedSelectors).some(
+      ([channel, selector]) => output_selectors[channel as UvChannel | 'vis'] !== selector
+    )) {
+      this.advancedError = 'A lámpakimeneteket a jóváhagyott firmware rögzített kiosztása határozza meg.';
       return of(false);
     }
 

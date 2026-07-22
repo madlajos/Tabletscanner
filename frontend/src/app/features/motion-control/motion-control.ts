@@ -55,7 +55,6 @@ export class MotionControl implements OnInit, OnDestroy {
   private measurementActiveSub?: Subscription;
   private motionPositionSub?: Subscription;
   private lightsOffSub?: Subscription;
-  private lampAutoOffPolling?: Subscription;
   private externalConnectionSub?: Subscription;
   private fourChannelLightPolling?: Subscription;
   private filterStatusPolling?: Subscription;
@@ -70,9 +69,6 @@ export class MotionControl implements OnInit, OnDestroy {
   isEditingY: boolean = false;
   isEditingZ: boolean = false;
 
-  ringLightOn: boolean = false;
-  uvDomeLightOn: boolean = false;
-  private uvDomeClickTimer: any = null;
   lightBusy = false;
   lightStatus: LightStatus = {
     active_channel: null,
@@ -151,8 +147,12 @@ export class MotionControl implements OnInit, OnDestroy {
     // Subscribe to lights-off event (when auto-measurement is stopped)
     this.lightsOffSub = this.sharedService.lightsOff$.subscribe(() => {
       console.log('Lights off event received; updating UI state');
-      this.ringLightOn = false;
-      this.uvDomeLightOn = false;
+      this.lightStatus = {
+        ...this.lightStatus,
+        active_channel: null,
+        active_mode: null,
+        channels: { uv255: false, uv310: false, uv365: false, vis: false }
+      };
     });
 
     // Subscribe to autofocus invalidation (e.g., when auto-measurement moves the platform)
@@ -160,8 +160,6 @@ export class MotionControl implements OnInit, OnDestroy {
       this.autofocusDone = false;
     });
 
-    // Start polling for lamp auto-off status (5-minute inactivity timeout)
-    this.startLampAutoOffPolling();
     this.startFourChannelLightPolling();
     this.filterSettingsSub = this.filterSettingsService.settings$.subscribe(settings => {
       if (settings) this.filterSettings = settings;
@@ -194,7 +192,6 @@ export class MotionControl implements OnInit, OnDestroy {
     this.stopConnectionPolling();
     this.stopReconnectionPolling();
     this.stopPositionPolling();
-    this.stopLampAutoOffPolling();
     this.fourChannelLightPolling?.unsubscribe();
     this.filterStatusPolling?.unsubscribe();
     this.filterSettingsSub?.unsubscribe();
@@ -362,23 +359,6 @@ export class MotionControl implements OnInit, OnDestroy {
     }
   }
 
-  startLampAutoOffPolling(): void {
-    if (this.lampAutoOffPolling && !this.lampAutoOffPolling.closed) {
-      return;
-    }
-    // Poll every 10 seconds to check if backend auto-turned off lamps
-    this.lampAutoOffPolling = interval(10000).subscribe(() => {
-      this.checkLampAutoOff();
-    });
-  }
-
-  stopLampAutoOffPolling(): void {
-    if (this.lampAutoOffPolling && !this.lampAutoOffPolling.closed) {
-      this.lampAutoOffPolling.unsubscribe();
-    }
-    this.lampAutoOffPolling = undefined;
-  }
-
   startFourChannelLightPolling(): void {
     this.syncFourChannelLightStatus();
     this.fourChannelLightPolling = interval(1000).subscribe(() => this.syncFourChannelLightStatus());
@@ -489,21 +469,24 @@ export class MotionControl implements OnInit, OnDestroy {
   }
 
   onLampClick(channel: LightChannel): void {
-    if (channel === 'vis') {
-      this.toggleFourChannelLight(channel);
-      return;
-    }
+    const existingTimer = this.lampClickTimers[channel];
+    if (existingTimer) clearTimeout(existingTimer);
     this.lampClickTimers[channel] = setTimeout(() => {
       delete this.lampClickTimers[channel];
-      this.toggleFourChannelLight(channel, 'dimmed');
+      this.toggleFourChannelLight(channel, channel === 'vis' ? undefined : 'dimmed');
     }, 250);
   }
 
   onLampDoubleClick(channel: LightChannel): void {
-    if (channel === 'vis') return;
     const timer = this.lampClickTimers[channel];
     if (timer) clearTimeout(timer);
     delete this.lampClickTimers[channel];
+    if (channel === 'vis') {
+      // Browsers emit two click events before dblclick. Coalesce those events
+      // into one normal VIS toggle; VIS has no separate full-power action.
+      this.toggleFourChannelLight(channel);
+      return;
+    }
     this.toggleFourChannelLight(channel, 'full', true);
   }
 
@@ -517,27 +500,6 @@ export class MotionControl implements OnInit, OnDestroy {
       next: status => { this.lightStatus = status; this.lightBusy = false; },
       error: error => { console.error('Four-channel lamp command failed:', error); this.lightBusy = false; this.syncFourChannelLightStatus(); }
     });
-  }
-
-  checkLampAutoOff(): void {
-    this.http
-      .get<{ auto_turned_off: boolean; dome_on: boolean; uv_dome_on: boolean }>(`${BASE_URL}/check-lamp-auto-off`)
-      .subscribe({
-        next: (response) => {
-          if (response.auto_turned_off) {
-            console.log('Lamps were auto-turned off by backend (5-minute timeout)');
-            // Update UI state to reflect that lamps are now off
-            this.ringLightOn = false;
-            this.uvDomeLightOn = false;
-            // Notify shared service
-            this.sharedService.setActiveLight(null);
-          }
-        },
-        error: (error) => {
-          // Silently ignore errors (backend might not be ready)
-          console.debug('Failed to check lamp auto-off status:', error);
-        },
-      });
   }
 
   tryReconnectMotionPlatform(): void {
@@ -569,106 +531,6 @@ export class MotionControl implements OnInit, OnDestroy {
       });
   }
 
-  // ---------- UV Dome Light (single click = S50, double click = S255) ----------
-
-  onUVDomeClick(): void {
-    if (this.uvDomeClickTimer) {
-      // Double click detected
-      clearTimeout(this.uvDomeClickTimer);
-      this.uvDomeClickTimer = null;
-      this.toggleUVDomeLightHighPower();
-    } else {
-      this.uvDomeClickTimer = setTimeout(() => {
-        this.uvDomeClickTimer = null;
-        this.toggleUVDomeLightNormal();
-      }, 300);
-    }
-  }
-
-  async toggleUVDomeLightNormal(): Promise<void> {
-    if (this.lightBusy) return;
-    this.lightBusy = true;
-    try {
-      if (!this.uvDomeLightOn) {
-        // Turning UV dome on (normal power): ensure visible light is off first
-        if (this.ringLightOn) {
-          await this.sendGcode('M106 P0 S0');
-          this.ringLightOn = false;
-        }
-        await this.sendGcode('M106 P3 S50');
-        this.uvDomeLightOn = true;
-        this.ringLightOn = false;
-        console.log('[MotionControl] UV Dome light turned ON (normal power S50) - setting active light to bar');
-        this.sharedService.setActiveLight('bar');
-        this.applyCameraSettingsForLight('bar');
-      } else {
-        // Turning UV dome off
-        await this.sendGcode('M106 P3 S0');
-        this.uvDomeLightOn = false;
-        console.log('[MotionControl] UV Dome light turned OFF - setting active light to null');
-        this.sharedService.setActiveLight(null);
-      }
-    } catch (err) {
-      console.error('Failed to toggle UV Dome light', err);
-    } finally {
-      this.lightBusy = false;
-    }
-  }
-
-  async toggleUVDomeLightHighPower(): Promise<void> {
-    if (this.lightBusy) return;
-    this.lightBusy = true;
-    try {
-      // Turn off visible light first if it's on
-      if (this.ringLightOn) {
-        await this.sendGcode('M106 P0 S0');
-        this.ringLightOn = false;
-      }
-      // Always send high-power command (even if already on at normal power)
-      await this.sendGcode('M106 P3 S255');
-      this.uvDomeLightOn = true;
-      this.ringLightOn = false;
-      console.log('[MotionControl] UV Dome light turned ON (high power S255) - setting active light to bar');
-      this.sharedService.setActiveLight('bar');
-      this.applyCameraSettingsForLight('bar');
-    } catch (err) {
-      console.error('Failed to toggle UV Dome light (high power)', err);
-    } finally {
-      this.lightBusy = false;
-    }
-  }
-
-
-  async toggleDomeLight(): Promise<void> {
-    if (this.lightBusy) return;
-    this.lightBusy = true;
-    try {
-      if (!this.ringLightOn) {
-        // Turning visible light on: ensure UV dome is off first
-        if (this.uvDomeLightOn) {
-          await this.sendGcode('M106 P3 S0');
-          this.uvDomeLightOn = false;
-        }
-        await this.sendGcode('M106 P0 S255');
-        this.ringLightOn = true;
-        this.uvDomeLightOn = false;
-        console.log('[MotionControl] Visible light turned ON - setting active light to dome');
-        this.sharedService.setActiveLight('dome');
-        this.applyCameraSettingsForLight('dome');
-      } else {
-        // Turning visible light off
-        await this.sendGcode('M106 P0 S0');
-        this.ringLightOn = false;
-        console.log('[MotionControl] Visible light turned OFF - setting active light to null');
-        this.sharedService.setActiveLight(null);
-      }
-    } catch (err) {
-      console.error('Failed to toggle dome light', err);
-    } finally {
-      this.lightBusy = false;
-    }
-  }
-
   resetMotorOffState(): void {
     // Many firmwares auto-enable steppers on the first move; we clear the UI flag.
     this.motorOffState = false;
@@ -683,13 +545,6 @@ export class MotionControl implements OnInit, OnDestroy {
     if (v === undefined || v === '?') return undefined;
     const n = typeof v === 'number' ? v : Number(v);
     return Number.isFinite(n) ? n : undefined;
-  }
-
-  /**
-   * Small helper to send a single G-code command sequentially.
-   */
-  private async sendGcode(command: string): Promise<void> {
-    await firstValueFrom(this.http.post(`${BASE_URL}/send_gcode`, { command }));
   }
 
   submitOnEnter(axis: 'x' | 'y' | 'z') {
@@ -980,17 +835,21 @@ export class MotionControl implements OnInit, OnDestroy {
     this.autofocusAbortedByUser = false;
     this.sharedService.setAutofocusActive(true);
 
-    // If neither light is on, turn on the dome light before autofocus
-    if (!this.ringLightOn && !this.uvDomeLightOn) {
+    // Autofocus requires VIS. Route it through the four-channel controller so
+    // its physical all-other-outputs-off interlock is always applied.
+    if (this.lightStatus.active_channel !== 'vis') {
       try {
-        await this.sendGcode('M106 P0 S255');   // visible light on
-        this.ringLightOn = true;
-        this.uvDomeLightOn = false;
+        this.lightStatus = await firstValueFrom(
+          this.http.post<LightStatus>(`${BASE_URL}/lights/activate`, { channel: 'vis' })
+        );
         console.log('[MotionControl] Dome light auto-enabled for autofocus');
         this.sharedService.setActiveLight('dome');
         this.applyCameraSettingsForLight('dome');
       } catch (err) {
         console.error('Failed to turn on dome light before autofocus', err);
+        this.isAutofocusing = false;
+        this.sharedService.setAutofocusActive(false);
+        return;
       }
     }
 

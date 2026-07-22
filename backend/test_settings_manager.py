@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused hardware-free checks for schema-v2 settings migration."""
+"""Focused hardware-free checks for settings migration and validation."""
 
 import json
 import os
@@ -37,7 +37,7 @@ class SettingsMigrationTests(unittest.TestCase):
 
         settings = settings_manager.load_settings(self.settings_path)
 
-        self.assertEqual(2, settings['settings_schema_version'])
+        self.assertEqual(3, settings['settings_schema_version'])
         self.assertEqual({'ExposureTime': 123456.0, 'Gamma': 1.2}, settings['camera_params'])
         self.assertNotIn('camera_params_dome', settings)
         self.assertNotIn('camera_params_bar', settings)
@@ -46,6 +46,10 @@ class SettingsMigrationTests(unittest.TestCase):
             settings['auto_measurement_settings']['capture_plan'],
         )
         self.assertEqual({}, settings['lamp_settings']['channels'])
+        self.assertEqual(
+            settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS,
+            settings['lamp_settings']['output_selectors'],
+        )
         with open(f'{self.settings_path}.v1.bak', 'r', encoding='utf-8') as backup_file:
             self.assertEqual(legacy, json.load(backup_file))
         self.assertEqual(settings, self.read_json())
@@ -60,25 +64,69 @@ class SettingsMigrationTests(unittest.TestCase):
 
         self.assertEqual({'ExposureTime': 456.0, 'Gamma': 1.5}, settings['camera_params'])
 
-    def test_schema_v2_round_trips_without_backup(self):
+    def test_schema_v2_migrates_verified_light_selectors_and_creates_backup(self):
         v2 = {
             'settings_schema_version': 2,
             'camera_params': {'ExposureTime': 50000.0, 'Gamma': 1.0},
-            'lamp_settings': {'channels': {}},
+            'lamp_settings': {
+                'channels': {'uv255': {'dim_percent': 50}},
+                'output_selectors': {'uv255': 'P1', 'uv310': 'P2', 'uv365': 'P3', 'vis': 'P0'},
+            },
             'auto_measurement_settings': {'capture_plan': [{'wavelength': 'vis', 'filter_position': 1}]},
         }
         self.write_json(v2)
 
-        self.assertEqual(v2, settings_manager.load_settings(self.settings_path))
-        self.assertFalse(os.path.exists(f'{self.settings_path}.v1.bak'))
+        migrated = settings_manager.load_settings(self.settings_path)
 
-    def test_schema_v2_removes_obsolete_preset_name_without_backup(self):
-        v2 = {
-            'settings_schema_version': 2,
+        self.assertEqual(3, migrated['settings_schema_version'])
+        self.assertEqual(
+            settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS,
+            migrated['lamp_settings']['output_selectors'],
+        )
+        self.assertEqual(v2['lamp_settings']['channels'], migrated['lamp_settings']['channels'])
+        with open(f'{self.settings_path}.v2.bak', 'r', encoding='utf-8') as backup_file:
+            self.assertEqual(v2, json.load(backup_file))
+
+    def test_schema_v3_round_trips_without_backup(self):
+        v3 = {
+            'settings_schema_version': 3,
+            'camera_params': {'ExposureTime': 50000.0, 'Gamma': 1.0},
+            'lamp_settings': {
+                'channels': {},
+                'output_selectors': settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS,
+            },
+        }
+        self.write_json(v3)
+
+        self.assertEqual(v3, settings_manager.load_settings(self.settings_path))
+        self.assertFalse(os.path.exists(f'{self.settings_path}.v2.bak'))
+
+    def test_schema_v3_repairs_rotated_light_selectors(self):
+        v3 = {
+            'settings_schema_version': 3,
+            'lamp_settings': {
+                'channels': {'uv255': {'dim_percent': 50}},
+                'output_selectors': {'uv255': 'P3', 'uv310': 'P1', 'uv365': 'P2', 'vis': 'P0'},
+            },
+        }
+        self.write_json(v3)
+
+        repaired = settings_manager.load_settings(self.settings_path)
+
+        self.assertEqual(
+            settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS,
+            repaired['lamp_settings']['output_selectors'],
+        )
+        self.assertEqual(v3['lamp_settings']['channels'], repaired['lamp_settings']['channels'])
+        self.assertEqual(repaired, self.read_json())
+
+    def test_schema_v3_removes_obsolete_preset_name_without_backup(self):
+        v3 = {
+            'settings_schema_version': 3,
             'camera_params': {'ExposureTime': 50000.0, 'Gamma': 1.0},
             'other_settings': {'settings_preset_name': 'legacy'},
         }
-        self.write_json(v2)
+        self.write_json(v3)
 
         settings = settings_manager.load_settings(self.settings_path)
 
@@ -155,15 +203,27 @@ class SettingsMigrationTests(unittest.TestCase):
 
     def test_lamp_output_selector_validation_normalizes_values(self):
         payload = {'output_selectors': {
-            'uv255': 'p0', 'uv310': 'P1', 'uv365': 'P2', 'vis': 'P3'
+            'uv255': 'p2', 'uv310': 'P3', 'uv365': 'P1', 'vis': 'P0'
         }}
         self.assertEqual({
-            'output_selectors': {'uv255': 'P0', 'uv310': 'P1', 'uv365': 'P2', 'vis': 'P3'}
+            'output_selectors': settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS
         }, settings_manager.validate_lamp_output_selectors(payload))
 
     def test_lamp_output_selector_validation_rejects_commands_and_missing_channels(self):
         with self.assertRaises(ValueError):
             settings_manager.validate_lamp_output_selectors({'output_selectors': {'uv255': 'M106 P0'}})
+
+    def test_lamp_output_selector_validation_rejects_duplicate_outputs(self):
+        with self.assertRaises(ValueError):
+            settings_manager.validate_lamp_output_selectors({'output_selectors': {
+                'uv255': 'P1', 'uv310': 'P1', 'uv365': 'P2', 'vis': 'P0'
+            }})
+
+    def test_lamp_output_selector_validation_rejects_rotated_mapping(self):
+        with self.assertRaises(ValueError):
+            settings_manager.validate_lamp_output_selectors({'output_selectors': {
+                'uv255': 'P3', 'uv310': 'P1', 'uv365': 'P2', 'vis': 'P0'
+            }})
 
     def test_motion_simulation_setting_requires_boolean(self):
         payload = {

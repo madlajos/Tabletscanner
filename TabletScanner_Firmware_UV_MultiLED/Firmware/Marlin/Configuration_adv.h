@@ -564,9 +564,9 @@
  *   PWM on pin OC2A. Only use this option if you don't need PWM on 0C2A. (Check your schematic.)
  *   USE_OCR2A_AS_TOP sacrifices duty cycle control resolution to achieve this broader range of frequencies.
  */
-// Do not enable FAST_PWM_FAN: PA2 (HE0) and PB10 (HE2) share a STM32 timer
-// channel, so hardware PWM would mirror their output. FAN_SOFT_PWM is enabled
-// in Configuration.h to drive each lamp MOSFET independently.
+// Do not enable FAST_PWM_FAN without revalidating all custom lamp outputs.
+// FAN_SOFT_PWM is enabled in Configuration.h to keep their PWM behavior
+// consistent and independent.
 //#define FAST_PWM_FAN
 #if ENABLED(FAST_PWM_FAN)
   #define FAST_PWM_FAN_FREQUENCY 1000  // Proven UV firmware setting; suitable for the lamp drivers
@@ -837,10 +837,10 @@
 
 //#define SENSORLESS_BACKOFF_MM  { 2, 2, 0 }  // (linear=mm, rotational=°) Backoff from endstops before sensorless homing
 
-#define HOMING_BUMP_MM      { 5, 5, 2, 2 }    // (linear=mm, rotational=°) Backoff from endstops after first bump
-#define HOMING_BUMP_DIVISOR { 2, 2, 4, 4 }    // Re-Bump Speed Divisor (Divides the Homing Feedrate)
+#define HOMING_BUMP_MM      { 5, 5, 2, 2 }    // I: back off 2° after the fast sensor seek
+#define HOMING_BUMP_DIVISOR { 2, 2, 4, 4 }    // I: fine re-seek at 30 / 4 = 7.5°/s
 
-#define HOMING_BACKOFF_POST_MM { 2, 2, 2, 100 }  // (linear=mm, rotational=°) Backoff from endstops after homing. I-axis moves 100° off the hall sensor.
+#define HOMING_BACKOFF_POST_MM { 2, 2, 2, 30 }   // After the fine trigger, move I/A 30° away from the hall sensor.
 
 //#define QUICK_HOME                          // If G28 contains XY do a diagonal move first
 #define HOME_Y_BEFORE_X                     // If G28 contains XY home Y before X

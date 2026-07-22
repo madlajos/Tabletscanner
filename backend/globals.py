@@ -40,9 +40,3 @@ motion_limits = {
     "z": (0.0, 30.0),
 }
 
-# Lamp tracking for auto-off (visible: 5 min, UV: 30 s normal / 5 s high-power)
-lamp_dome_on_time = None  # Timestamp when visible (dome) light was turned on (None if off)
-lamp_uv_dome_on_time = None       # Timestamp when UV light was turned on
-lamp_uv_dome_high_power = False   # True if UV was turned on with S255 (5 s timeout)
-lamp_auto_turned_off = False  # Flag to signal frontend that lamps were auto-turned off
-lamp_timeout_thread = None  # Background thread for monitoring lamp timeouts

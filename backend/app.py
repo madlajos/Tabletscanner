@@ -23,6 +23,7 @@ from settings_manager import (
     DEFAULT_MAX_HEIGHT_OFFSET_UP_MM,
     load_settings,
     save_settings,
+    update_lamp_output_selectors,
     update_filter_settings,
     get_settings,
     validate_capture_plan,
@@ -31,8 +32,15 @@ from settings_manager import (
     validate_lamp_output_selectors,
     validate_lamp_settings,
     validate_motion_simulation_settings,
+    UV_LAMP_CHANNELS,
 )
-from light_control import LampSettingsError, LightCommandError, LightConfigurationError, LightController
+from light_control import (
+    LampSettingsError,
+    LightCommandError,
+    LightConfigurationError,
+    LightController,
+    contains_lamp_gcode,
+)
 import numpy as np
 from PIL import Image
 
@@ -69,6 +77,7 @@ light_controller = LightController(
     get_settings,
     lambda: porthandler.motion_platform or globals.motion_platform,
     porthandler.write_and_wait,
+    operation_lock=porthandler.motion_lock,
 )
 
 
@@ -228,68 +237,6 @@ def retry_operation(operation, max_retries=3, wait=1, exceptions=(Exception,)):
             app.logger.warning("Attempt %d/%d failed: %s", attempt + 1, max_retries, e)
             time.sleep(wait)
     raise Exception("Operation failed after %d attempts" % max_retries)
-
-
-### Lamp Timeout Monitor ###
-def lamp_timeout_monitor():
-    """
-    Background thread that checks every second if lamps have exceeded their timeout.
-    - Visible (dome) light: 300 s (5 min)
-    - UV light normal (S50): 30 s
-    - UV light high-power (S255): 5 s
-    Automatically turns them off and sets a flag for the frontend to detect.
-    """
-    DOME_TIMEOUT_SECONDS = 300
-    UV_DOME_NORMAL_TIMEOUT = 30   # S50
-    UV_DOME_HIGH_TIMEOUT = 5      # S255
-    CHECK_INTERVAL_SECONDS = 1    # Check every second (needed for 5 s high-power timeout)
-    
-    app.logger.info("Lamp timeout monitor thread started")
-    
-    while True:
-        try:
-            time.sleep(CHECK_INTERVAL_SECONDS)
-            
-            current_time = time.time()
-            turned_off_any = False
-            
-            # Check visible (dome) light
-            if globals.lamp_dome_on_time is not None:
-                elapsed = current_time - globals.lamp_dome_on_time
-                if elapsed >= DOME_TIMEOUT_SECONDS:
-                    app.logger.info(f"Visible light auto-off after {elapsed:.0f}s of inactivity")
-                    try:
-                        ser = globals.motion_platform
-                        if ser and ser.is_open:
-                            porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)  # visible off
-                            globals.lamp_dome_on_time = None
-                            turned_off_any = True
-                    except Exception as e:
-                        app.logger.warning(f"Failed to auto-turn off visible light: {e}")
-            
-            # Check UV light
-            if globals.lamp_uv_dome_on_time is not None:
-                elapsed = current_time - globals.lamp_uv_dome_on_time
-                timeout = UV_DOME_HIGH_TIMEOUT if globals.lamp_uv_dome_high_power else UV_DOME_NORMAL_TIMEOUT
-                if elapsed >= timeout:
-                    mode = "high-power" if globals.lamp_uv_dome_high_power else "normal"
-                    app.logger.info(f"UV light auto-off after {elapsed:.0f}s ({mode} mode)")
-                    try:
-                        ser = globals.motion_platform
-                        if ser and ser.is_open:
-                            porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)  # UV off
-                            globals.lamp_uv_dome_on_time = None
-                            globals.lamp_uv_dome_high_power = False
-                            turned_off_any = True
-                    except Exception as e:
-                        app.logger.warning(f"Failed to auto-turn off UV light: {e}")
-            
-            # Set flag if any lamp was turned off
-            if turned_off_any:
-                globals.lamp_auto_turned_off = True
-                        
-        except Exception as e:
-            app.logger.error(f"Lamp timeout monitor error: {e}")
 
 
 ### Serial Device Functions ###
@@ -1177,7 +1124,7 @@ def autofocus_coarse():
         # --- UV-light exposure safeguard ---
         # When the UV light is active, run an under/over-exposure gate
         # before starting the (blocking) autofocus sweep.
-        if globals.lamp_uv_dome_on_time is not None:
+        if light_controller.status()['active_channel'] in UV_LAMP_CHANNELS:
             cam = globals.camera
             if cam and cam.IsOpen():
                 from cameracontrol import grab_and_convert_frame
@@ -1219,7 +1166,6 @@ def autofocus_coarse():
 @app.route('/api/lights/status', methods=['GET'])
 def get_lights_status():
     try:
-        light_controller.check_timeouts()
         return jsonify(light_controller.status()), 200
     except Exception as error:
         app.logger.exception('Failed to retrieve four-channel light status')
@@ -1260,43 +1206,25 @@ def deactivate_light():
 @app.route('/api/send_gcode', methods=['POST'])
 def send_gcode():
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         command = data.get('command')
-        if not command:
+        if not isinstance(command, str) or not command.strip():
             return jsonify({'error': 'No command provided'}), 400
+        if '\r' in command or '\n' in command:
+            return jsonify({'error': 'Exactly one G-code line is allowed per request.'}), 400
+        if contains_lamp_gcode(command):
+            return jsonify({
+                'error': 'Lamp commands must use the /api/lights endpoints so the interlock is enforced.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 400
 
         ser = globals.motion_platform
         if not ser or not ser.is_open:
             return jsonify({'error': 'Motion platform not connected'}), 503
 
         porthandler.write(ser, command)
-        
-        # Track lamp on/off state for auto-off feature
-        cmd_upper = command.strip().upper()
-        if 'M106 P0 S255' in cmd_upper:
-            # Visible (dome) light ON
-            globals.lamp_dome_on_time = time.time()
-            app.logger.debug("Visible light turned ON, timestamp tracked")
-        elif 'M106 P0 S0' in cmd_upper:
-            # Visible (dome) light OFF
-            globals.lamp_dome_on_time = None
-            app.logger.debug("Visible light turned OFF, timestamp cleared")
-        elif 'M106 P3 S50' in cmd_upper:
-            # UV light ON (normal power, 30 s auto-off)
-            globals.lamp_uv_dome_on_time = time.time()
-            globals.lamp_uv_dome_high_power = False
-            app.logger.debug("UV light turned ON (S50), 30 s auto-off tracked")
-        elif 'M106 P3 S255' in cmd_upper:
-            # UV light ON (high power, 5 s auto-off)
-            globals.lamp_uv_dome_on_time = time.time()
-            globals.lamp_uv_dome_high_power = True
-            app.logger.debug("UV light turned ON (S255), 5 s auto-off tracked")
-        elif 'M106 P3 S0' in cmd_upper:
-            # UV light OFF
-            globals.lamp_uv_dome_on_time = None
-            globals.lamp_uv_dome_high_power = False
-            app.logger.debug("UV light turned OFF, timestamp cleared")
-        
+
         return jsonify({'message': 'Command sent'}), 200
     except Exception as e:
         app.logger.exception("send_gcode failed")
@@ -1419,49 +1347,44 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
 
 
 def _turn_on_dome_light():
-    """Turn on visible (dome) light (M106 P0 S255) and turn off UV light."""
-    ser = globals.motion_platform
-    if ser and ser.is_open:
-        porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)     # UV off
-        porthandler.write_and_wait(ser, "M106 P0 S255", timeout=2.0)   # visible on
-        # Track visible light on time for 5-minute auto-off
-        globals.lamp_dome_on_time = time.time()
-        globals.lamp_uv_dome_on_time = None
-        globals.lamp_uv_dome_high_power = False
+    """Turn on VIS through the authoritative four-channel interlock."""
+    light_controller.activate('vis')
 
 def _turn_on_uv_dome_light():
-    """Turn on UV light (M106 P3 S50) and turn off visible light (M106 P0 S0)."""
-    ser = globals.motion_platform
-    if ser and ser.is_open:
-        porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)    # visible off
-        porthandler.write_and_wait(ser, "M106 P3 S50", timeout=2.0)   # UV on (normal power)
-        # Track UV light on time for auto-off (30 s normal)
-        globals.lamp_uv_dome_on_time = time.time()
-        globals.lamp_uv_dome_high_power = False
-        globals.lamp_dome_on_time = None
+    """Turn on dimmed 365 nm UV through the four-channel interlock."""
+    light_controller.activate('uv365', 'dimmed')
 
 def _turn_off_all_lights():
-    """Turn off legacy and configured four-channel illumination outputs."""
+    """Turn off every physical illumination output, including error paths."""
     try:
         light_controller.off()
+        return True
     except Exception as error:
-        # A legacy installation may not yet have the four-channel selectors.
-        # Its established shutdown commands below must remain available.
-        app.logger.debug('Four-channel all-off skipped: %s', error)
-    ser = globals.motion_platform
-    if ser and ser.is_open:
-        try:
-            porthandler.write_and_wait(ser, "M106 P0 S0", timeout=2.0)    # visible off
-        except Exception:
-            pass
-        try:
-            porthandler.write_and_wait(ser, "M106 P3 S0", timeout=2.0)    # UV off
-        except Exception:
-            pass
-    # Clear lamp on times
-    globals.lamp_dome_on_time = None
-    globals.lamp_uv_dome_on_time = None
-    globals.lamp_uv_dome_high_power = False
+        # Fall back to fixed physical selectors if settings/controller state is
+        # unavailable. This is deliberately best-effort shutdown behavior.
+        app.logger.warning('Controller all-off failed; retrying physical outputs: %s', error)
+    ser = porthandler.motion_platform or globals.motion_platform
+    if not ser or not getattr(ser, 'is_open', False):
+        app.logger.error('Physical all-off retry unavailable: motion platform is disconnected.')
+        return False
+
+    failures = []
+    with porthandler.motion_lock:
+        for selector in range(4):
+            try:
+                acknowledged, _ = porthandler.write_and_wait(
+                    ser, f"M106 P{selector} S0", timeout=2.0
+                )
+                if not acknowledged:
+                    failures.append(f'P{selector}: no acknowledgement')
+            except Exception as fallback_error:
+                failures.append(f'P{selector}: {fallback_error}')
+        if failures:
+            app.logger.error('Physical all-off retry failed: %s', '; '.join(failures))
+            return False
+
+        light_controller.confirm_all_off()
+        return True
 
 def _apply_camera_settings_for_light(light: str):
     """Apply the global camera settings used by every illumination channel.
@@ -2797,14 +2720,19 @@ def advanced_lamp_settings():
 
     try:
         normalized_settings = validate_lamp_output_selectors(request.get_json(silent=True) or {})
-        settings_data = get_settings()
-        lamp_settings_data = settings_data.setdefault('lamp_settings', {'channels': {}})
-        lamp_settings_data['output_selectors'] = normalized_settings['output_selectors']
-        if not save_settings():
-            raise OSError('Failed to persist advanced lamp settings.')
+        with porthandler.motion_lock:
+            serial_port = porthandler.motion_platform or globals.motion_platform
+            if serial_port and getattr(serial_port, 'is_open', False):
+                # Keep the physical all-off and the settings commit atomic with
+                # respect to every activation and disconnect operation.
+                light_controller.off()
+            if not update_lamp_output_selectors(normalized_settings['output_selectors']):
+                raise OSError('Failed to persist advanced lamp settings.')
         return jsonify({'advanced_lamp_settings': normalized_settings}), 200
     except ValueError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except LightCommandError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'popup': True}), 503
     except Exception as error:
         app.logger.exception('Failed to update advanced lamp settings')
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
@@ -2994,7 +2922,12 @@ def abort_autofocus():
 def turn_off_all_lights_endpoint():
     """Turn off all lights (visible and UV) immediately. Used when measurement is stopped."""
     try:
-        _turn_off_all_lights()
+        if not _turn_off_all_lights():
+            return jsonify({
+                'error': 'Not every light output acknowledged OFF.',
+                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+                'popup': True,
+            }), 503
         app.logger.info("All lights turned off via endpoint")
         return jsonify({"status": "lights_off"}), 200
     except Exception as e:
@@ -3003,18 +2936,14 @@ def turn_off_all_lights_endpoint():
 
 @app.route('/api/check-lamp-auto-off', methods=['GET'])
 def check_lamp_auto_off():
-    """
-    Check if lamps were automatically turned off by the timeout monitor.
-    Returns the flag state and clears it.
-    """
+    """Compatibility view backed by the authoritative four-channel state."""
     try:
-        auto_off = globals.lamp_auto_turned_off
-        if auto_off:
-            globals.lamp_auto_turned_off = False  # Clear the flag after reading
+        status = light_controller.status()
+        active_channel = status['active_channel']
         return jsonify({
-            "auto_turned_off": auto_off,
-            "dome_on": globals.lamp_dome_on_time is not None,
-            "uv_dome_on": globals.lamp_uv_dome_on_time is not None
+            "auto_turned_off": light_controller.consume_auto_off_event(),
+            "dome_on": active_channel == 'vis',
+            "uv_dome_on": active_channel in UV_LAMP_CHANNELS,
         }), 200
     except Exception as e:
         app.logger.exception("Error checking lamp auto-off status")
@@ -4271,13 +4200,7 @@ if __name__ == '__main__':
     initialize_cameras()
     initialize_serial_devices()
     
-    # Start lamp timeout monitor thread
     import threading
-    lamp_monitor = threading.Thread(target=lamp_timeout_monitor, daemon=True, name="LampTimeoutMonitor")
-    lamp_monitor.start()
-    globals.lamp_timeout_thread = lamp_monitor
-    app.logger.info("Lamp timeout monitor thread started")
-
     four_channel_monitor = threading.Thread(
         target=four_channel_lamp_timeout_monitor,
         daemon=True,

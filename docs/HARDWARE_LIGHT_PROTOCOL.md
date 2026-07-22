@@ -5,17 +5,21 @@
 ### Confirmed USB/firmware identity (2026-07-14)
 
 The connected USB-only Octopus board was identified as `VID_0483:PID_5740` on
-`COM11`. Its acknowledged `M115` reply reports `FIRMWARE_NAME:Marlin
+`COM11`. Its acknowledged `M115` reply reported `FIRMWARE_NAME:Marlin
 bugfix-2.0.x`, `MACHINE_TYPE:Tablet Scanner`, and `PROTOCOL_VERSION:1.0`.
-The existing discovery rule is therefore compatible. No `M106` command was
+That historical generic identity is no longer accepted. No `M106` command was
 sent during this identification check. A later USB-only check, with DTR/RTS
 enabled, confirmed acknowledged explicit-off commands for `M106 P0 S0` through
 `M106 P3 S0`. This proves parser/selector acceptance only; it does not prove
 the physical header mapping until the revised firmware is compiled and flashed.
 
+The release firmware now embeds the mapping-specific `M115` marker
+`TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK`. Real-device discovery rejects firmware
+without this exact marker so an older selector order cannot drive the lamps.
+
 The software controls four logical channels: `uv255`, `uv310`, `uv365`, and
-`vis`. The actual `M106` output selectors are deliberately not hard-coded.
-An operator configures them in **Beállítások → Haladó** as values such as `P0`.
+`vis`. Their selectors are locked to the mapping-specific firmware contract;
+**Beállítások → Haladó** displays them for verification but cannot rotate them.
 
 The intended electrical connections are:
 
@@ -23,16 +27,16 @@ The intended electrical connections are:
 | --- | --- |
 | 255 nm | HE0 |
 | 310 nm | HE1 |
-| 365 nm | HE2 |
+| 365 nm | FAN1 |
 | VIS | FAN0 |
 
-The configured Marlin selector contract is `P0=FAN0/VIS`, `P1=HE0/255 nm`,
-`P2=HE1/310 nm`, and `P3=HE2/365 nm`. This requires the `FAN1_PIN`,
-`FAN2_PIN`, and `FAN3_PIN` reassignment in
+The fixed selector contract is `P0=FAN0/VIS`, `P1=FAN1/365 nm`,
+`P2=HE0/255 nm`, and `P3=HE1/310 nm`. The firmware therefore uses
+`FAN1_PIN` / `FAN2_PIN` / `FAN3_PIN` for FAN1 / HE0 / HE1 respectively in
 `TabletScanner_Firmware_UV_MultiLED/Firmware/Marlin/src/pins/stm32f4/pins_BTT_OCTOPUS_V1_common.h`,
 and `NUM_M106_FANS 4` in `Configuration.h`.
 
-The firmware was compile-validated on 2026-07-14 with:
+The firmware was compile-validated on 2026-07-22 with:
 
 ```text
 cd TabletScanner_Firmware_UV_MultiLED/Firmware
@@ -40,11 +44,13 @@ python -m platformio run -e STM32F446ZE_btt
 ```
 
 The generated, unflashed binary is
-`.pio/build/STM32F446ZE_btt/firmware.bin`. The successful build does not prove
+`.pio/build/STM32F446ZE_btt/firmware.bin` (SHA-256
+`D08B34100092CCD2E64F1A54DBC60072C57C40C0CDC35434CE388475F3637819`).
+The successful build does not prove
 physical output routing; verify it with a multimeter before connecting lamps.
 
-The custom firmware must map those headers to the configured `M106 P...`
-outputs. This mapping must be verified with a current-limited dummy load before
+The custom firmware maps those headers to the fixed `M106 P...` outputs. This
+mapping must be verified with a current-limited dummy load before
 any UV lamp is connected.
 
 ## Commands and safety
@@ -61,14 +67,16 @@ the backend as `round(255 * percentage / 100)`; therefore 10% is `S26` and
 output. Each mode has its own configured automatic shutoff time. VIS is always
 100%, uses single-click control, and has no thermal timer.
 
-Only one logical channel may be active. Every timeout, failed capture, abort,
+Only one logical channel may be active. The backend sends P0–P3 OFF before one
+ON, and the `-LOCK` firmware independently clears the other three fan speeds
+whenever it receives a nonzero `M106`. Every timeout, failed capture, abort,
 disconnect, and shutdown attempts an all-off command.
 
 ## Bring-up checklist
 
 1. Confirm the Octopus firmware reports its approved identity through `M115`.
 2. Confirm all four configured outputs are OFF at firmware boot.
-3. Configure selectors and verify each `M106` command with a dummy load.
+3. Verify each fixed `M106` selector with a dummy load.
 4. Configure UV brightness and timeout values before enabling UV lamps.
 5. Test dimmed and full UV timeout behavior one channel at a time.
 6. Verify all-off on application exit and controller disconnect.

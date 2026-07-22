@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 motion_platform = None
 motion_platform_waiting_for_done = False
 motion_lock = threading.RLock()
+EXPECTED_FIRMWARE_MARKER = "TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK"
 
 def connect_to_serial_device(device_name, identification_command, expected_response, vid, pid):
     ports = list(serial.tools.list_ports.comports())
@@ -105,39 +106,55 @@ def connect_to_motion_platform(use_virtual=False):
     """
     Connects to the motion platform using its known identification command and VID/PID.
     """
+    global motion_platform
     current_platform = globals.motion_platform
     if current_platform and current_platform.is_open:
         if bool(getattr(current_platform, 'is_virtual', False)) == bool(use_virtual):
+            motion_platform = current_platform
             logging.info("Motion platform is already connected.")
             return current_platform
-        current_platform.close()
-        globals.motion_platform = None
+        disconnect_serial_device('motion_platform')
 
     if use_virtual:
         virtual_platform = VirtualOctopusSerial()
-        globals.motion_platform = virtual_platform
+        with motion_lock:
+            globals.motion_platform = virtual_platform
+            motion_platform = virtual_platform
         logging.info("Connected to virtual BTT Octopus motion platform.")
         return virtual_platform
 
     ser = connect_to_serial_device(
         device_name="Motion Platform",
         identification_command="M115",
-        expected_response="FIRMWARE_NAME:Marlin",
+        expected_response=EXPECTED_FIRMWARE_MARKER,
         vid=0x0483, pid=0x5740
     )
     if ser is None:
         logging.error("Motion platform device not found or did not respond correctly.")
         return None
 
-    # Assign global (already initialized above)
-    globals.motion_platform = ser
-
-    # Turn off lights on connect
-    try:
-        write(ser, "M106 P0 S0")    # Visible light off
-        write(ser, "M106 P3 S0")    # UV light off
-    except Exception as e:
-        logging.warning(f"Failed to turn off lights on connect: {e}")
+    # Turn off every M106 lamp output on connect. The selector order is
+    # P0=FAN0/VIS, P1=FAN1/365, P2=HE0/255, P3=HE1/310.
+    off_failures = []
+    with motion_lock:
+        for selector in range(4):
+            try:
+                acknowledged, _ = write_and_wait(ser, f"M106 P{selector} S0", timeout=2.0)
+                if not acknowledged:
+                    off_failures.append(f'P{selector}: no acknowledgement')
+            except Exception as error:
+                off_failures.append(f'P{selector}: {error}')
+        if off_failures:
+            logging.error('Refusing motion connection because lamp all-off failed: %s', '; '.join(off_failures))
+            try:
+                ser.close()
+            finally:
+                globals.motion_platform = None
+                motion_platform = None
+            return None
+        # Publish the port only after every physical output acknowledged OFF.
+        globals.motion_platform = ser
+        motion_platform = ser
 
     return ser
 
@@ -150,11 +167,29 @@ def disconnect_serial_device(device_name):
 
     try:
         normalized_name = device_name.lower().replace('-', '_')
-        if normalized_name in ('motionplatform', 'motion_platform', 'motion') and globals.motion_platform is not None:
-            if globals.motion_platform.is_open:
-                globals.motion_platform.close()  # Close port safely
-            globals.motion_platform = None  # Remove reference
-            motion_platform = None
+        platform = globals.motion_platform or motion_platform
+        if normalized_name in ('motionplatform', 'motion_platform', 'motion') and platform is not None:
+            # Prevent an activation from interleaving after an OFF but before
+            # close. write_and_wait safely reacquires this RLock.
+            with motion_lock:
+                try:
+                    if platform.is_open:
+                        for selector in range(4):
+                            try:
+                                acknowledged, _ = write_and_wait(
+                                    platform, f"M106 P{selector} S0", timeout=2.0
+                                )
+                                if not acknowledged:
+                                    logging.warning('P%s did not acknowledge OFF before disconnect.', selector)
+                            except Exception as error:
+                                logging.warning('Failed to turn off P%s before disconnect: %s', selector, error)
+                finally:
+                    try:
+                        if getattr(platform, 'is_open', False):
+                            platform.close()
+                    finally:
+                        globals.motion_platform = None
+                        motion_platform = None
             logging.info("Motion platform disconnected successfully.")
         else:
             logging.warning(f"{device_name} was not connected.")

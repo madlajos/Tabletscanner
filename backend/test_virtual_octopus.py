@@ -25,6 +25,7 @@ class VirtualOctopusTests(unittest.TestCase):
 
         self.assertTrue(acknowledged)
         self.assertIn(b'FIRMWARE_NAME:Marlin', reply)
+        self.assertIn(porthandler.EXPECTED_FIRMWARE_MARKER.encode('ascii'), reply)
         self.assertEqual('VIRTUAL_BTT_OCTOPUS', device.port)
         self.assertTrue(device.is_virtual)
 
@@ -65,6 +66,25 @@ class VirtualOctopusTests(unittest.TestCase):
 
         with self.assertRaises(OSError):
             porthandler.write_and_wait(device, 'M105')
+
+    def test_firmware_interlock_clears_other_outputs_before_nonzero_m106(self):
+        device = VirtualOctopusSerial()
+        porthandler.write_and_wait(device, 'M106 P2 S255')
+        porthandler.write_and_wait(device, 'M106 P3 S128')
+
+        self.assertEqual({0: 0, 1: 0, 2: 0, 3: 128}, device._light_pwm)
+
+    def test_disconnect_clears_every_light_before_closing(self):
+        device = porthandler.connect_to_motion_platform(use_virtual=True)
+        for selector in range(4):
+            porthandler.write_and_wait(device, f'M106 P{selector} S255')
+
+        porthandler.disconnect_serial_device('motion_platform')
+
+        self.assertEqual({0: 0, 1: 0, 2: 0, 3: 0}, device._light_pwm)
+        self.assertFalse(device.is_open)
+        self.assertIsNone(globals.motion_platform)
+        self.assertIsNone(porthandler.motion_platform)
 
 
 if __name__ == '__main__':

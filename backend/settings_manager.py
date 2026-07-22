@@ -23,7 +23,7 @@ def get_base_path():
     return os.path.dirname(__file__)
 
 DEFAULT_SETTINGS_PATH = os.path.join(get_base_path(), 'settings.json')
-SETTINGS_SCHEMA_VERSION = 2
+SETTINGS_SCHEMA_VERSION = 3
 UV_LAMP_CHANNELS = ('uv255', 'uv310', 'uv365')
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 FILTER_POSITIONS = (1, 2, 3, 4, 5, 6)
@@ -33,6 +33,12 @@ MAX_CONFIGURED_FILTERS = 100
 DEFAULT_MAX_HEIGHT_OFFSET_UP_MM = 5.0
 DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM = -5.0
 ADVANCED_LAMP_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
+OCTOPUS_LIGHT_OUTPUT_SELECTORS = {
+    'uv255': 'P2',
+    'uv310': 'P3',
+    'uv365': 'P1',
+    'vis': 'P0',
+}
 LAMP_SETTING_FIELDS = (
     'dim_percent',
     'full_percent',
@@ -171,7 +177,7 @@ def validate_filter_settings(
 
 
 def validate_lamp_output_selectors(payload):
-    """Validate the configurable M106 output selectors, e.g. P0 or P3."""
+    """Validate the mapping fixed by the approved firmware identity marker."""
     if not isinstance(payload, dict) or not isinstance(payload.get('output_selectors'), dict):
         raise ValueError('Advanced lamp settings must contain an output_selectors object.')
 
@@ -185,6 +191,11 @@ def validate_lamp_output_selectors(payload):
         if not isinstance(value, str) or not re.fullmatch(r'P\d+', value.strip(), flags=re.IGNORECASE):
             raise ValueError(f'{channel} selector must have the format P followed by a non-negative number.')
         normalized[channel] = value.strip().upper()
+    if normalized != OCTOPUS_LIGHT_OUTPUT_SELECTORS:
+        raise ValueError(
+            'Output selectors must match the approved firmware mapping: '
+            'uv255=P2, uv310=P3, uv365=P1, vis=P0.'
+        )
     return {'output_selectors': normalized}
 
 
@@ -214,11 +225,11 @@ def validate_motion_simulation_settings(payload):
 
 
 def migrate_settings(settings):
-    """Migrate a settings dictionary to schema v2 without mutating the input.
+    """Migrate settings without mutating the input.
 
-    Schema v2 makes camera exposure and gamma global and adds placeholders for the
-    four-channel capture plan and UV lamp configuration. UV configuration remains
-    empty until an operator supplies safe values through the future settings UI.
+    Schema v2 made camera settings global and introduced the four-channel lamp
+    model. Schema v3 installs the selector order verified on the physical
+    Octopus controller so stale packaged settings cannot rotate wavelengths.
     """
     if not isinstance(settings, dict):
         raise ValueError('Settings root must be a JSON object.')
@@ -226,42 +237,61 @@ def migrate_settings(settings):
     migrated = copy.deepcopy(settings)
     current_version = migrated.get('settings_schema_version', 1)
     if current_version == SETTINGS_SCHEMA_VERSION:
+        changed = False
         other_settings = migrated.get('other_settings')
         if isinstance(other_settings, dict) and 'settings_preset_name' in other_settings:
             other_settings.pop('settings_preset_name')
-            return migrated, True
-        return migrated, False
+            changed = True
+
+        # Schema-v3 builds all share one mapping-specific firmware marker. A
+        # rotated v3 file may have been written by an earlier development build;
+        # repair it on every load instead of trusting the version number alone.
+        lamp_settings = migrated.get('lamp_settings')
+        if not isinstance(lamp_settings, dict):
+            lamp_settings = {}
+            migrated['lamp_settings'] = lamp_settings
+            changed = True
+        channels = lamp_settings.get('channels')
+        if not isinstance(channels, dict):
+            lamp_settings['channels'] = {}
+            changed = True
+        if lamp_settings.get('output_selectors') != OCTOPUS_LIGHT_OUTPUT_SELECTORS:
+            lamp_settings['output_selectors'] = copy.deepcopy(OCTOPUS_LIGHT_OUTPUT_SELECTORS)
+            changed = True
+        return migrated, changed
     if not isinstance(current_version, int) or current_version < 1 or current_version > SETTINGS_SCHEMA_VERSION:
         raise ValueError(f'Unsupported settings schema version: {current_version!r}')
 
-    # Old dome settings are the intended source for the new VIS/global camera
-    # behaviour. Bar settings are only a fallback for installations without dome.
-    camera_source = migrated.get('camera_params')
-    if not isinstance(camera_source, dict):
-        camera_source = migrated.get('camera_params_dome')
-    if not isinstance(camera_source, dict):
-        camera_source = migrated.get('camera_params_bar')
-    if not isinstance(camera_source, dict):
-        camera_source = {}
+    if current_version < 2:
+        # Old dome settings are the intended source for the new VIS/global camera
+        # behaviour. Bar settings are only a fallback when dome is unavailable.
+        camera_source = migrated.get('camera_params')
+        if not isinstance(camera_source, dict):
+            camera_source = migrated.get('camera_params_dome')
+        if not isinstance(camera_source, dict):
+            camera_source = migrated.get('camera_params_bar')
+        if not isinstance(camera_source, dict):
+            camera_source = {}
 
-    migrated['camera_params'] = {
-        'ExposureTime': _finite_number(camera_source.get('ExposureTime'), 100000.0),
-        'Gamma': _finite_number(camera_source.get('Gamma'), 1.0),
-    }
-    migrated.pop('camera_params_dome', None)
-    migrated.pop('camera_params_bar', None)
+        migrated['camera_params'] = {
+            'ExposureTime': _finite_number(camera_source.get('ExposureTime'), 100000.0),
+            'Gamma': _finite_number(camera_source.get('Gamma'), 1.0),
+        }
+        migrated.pop('camera_params_dome', None)
+        migrated.pop('camera_params_bar', None)
 
     other_settings = migrated.get('other_settings')
     if isinstance(other_settings, dict):
         other_settings.pop('settings_preset_name', None)
 
-    auto_measurement = migrated.get('auto_measurement_settings')
-    if not isinstance(auto_measurement, dict):
-        auto_measurement = {}
-    auto_measurement.setdefault('capture_plan', [
-        {'wavelength': 'vis', 'filter_position': 1}
-    ])
-    migrated['auto_measurement_settings'] = auto_measurement
+    if current_version < 2:
+        auto_measurement = migrated.get('auto_measurement_settings')
+        if not isinstance(auto_measurement, dict):
+            auto_measurement = {}
+        auto_measurement.setdefault('capture_plan', [
+            {'wavelength': 'vis', 'filter_position': 1}
+        ])
+        migrated['auto_measurement_settings'] = auto_measurement
 
     lamp_settings = migrated.get('lamp_settings')
     if not isinstance(lamp_settings, dict):
@@ -270,13 +300,15 @@ def migrate_settings(settings):
     if not isinstance(channels, dict):
         channels = {}
     lamp_settings['channels'] = channels
+    if current_version < 3:
+        lamp_settings['output_selectors'] = copy.deepcopy(OCTOPUS_LIGHT_OUTPUT_SELECTORS)
     migrated['lamp_settings'] = lamp_settings
     migrated['settings_schema_version'] = SETTINGS_SCHEMA_VERSION
     return migrated, True
 
 
-def _backup_path(settings_path):
-    return f'{settings_path}.v1.bak'
+def _backup_path(settings_path, schema_version):
+    return f'{settings_path}.v{schema_version}.bak'
 
 
 def _write_settings_atomic(settings_path, settings):
@@ -305,8 +337,9 @@ def load_settings(settings_path=DEFAULT_SETTINGS_PATH):
                 loaded_settings = json.load(file)
             _cached_settings, migrated = migrate_settings(loaded_settings)
             if migrated:
-                backup_path = _backup_path(settings_path)
-                if loaded_settings.get('settings_schema_version', 1) < SETTINGS_SCHEMA_VERSION and not os.path.exists(backup_path):
+                source_version = loaded_settings.get('settings_schema_version', 1)
+                backup_path = _backup_path(settings_path, source_version)
+                if source_version < SETTINGS_SCHEMA_VERSION and not os.path.exists(backup_path):
                     shutil.copy2(settings_path, backup_path)
                 _write_settings_atomic(settings_path, _cached_settings)
                 logging.info('Settings migrated to schema v%s.', SETTINGS_SCHEMA_VERSION)
@@ -336,6 +369,30 @@ def save_settings(settings_path=DEFAULT_SETTINGS_PATH):
         except Exception as e:
             error_message = f"Failed to save settings: {e}"
             logging.error(error_message)
+            return False
+
+
+def update_lamp_output_selectors(output_selectors, settings_path=DEFAULT_SETTINGS_PATH):
+    """Atomically persist the validated, firmware-locked selector mapping."""
+    global _cached_settings
+    normalized_selectors = validate_lamp_output_selectors({
+        'output_selectors': output_selectors
+    })['output_selectors']
+    with _settings_lock:
+        lamp_settings = _cached_settings.setdefault('lamp_settings', {'channels': {}})
+        missing = object()
+        previous_selectors = lamp_settings.get('output_selectors', missing)
+        lamp_settings['output_selectors'] = copy.deepcopy(normalized_selectors)
+        try:
+            _write_settings_atomic(settings_path, _cached_settings)
+            logging.info('Lamp output selectors saved successfully.')
+            return True
+        except Exception as error:
+            if previous_selectors is missing:
+                lamp_settings.pop('output_selectors', None)
+            else:
+                lamp_settings['output_selectors'] = previous_selectors
+            logging.error('Failed to save lamp output selectors: %s', error)
             return False
 
 

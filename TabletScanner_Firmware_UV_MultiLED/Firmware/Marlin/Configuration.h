@@ -70,7 +70,7 @@
 
 // Author info of this build printed to the host during boot and M115
 #define STRING_CONFIG_H_AUTHOR "(BigTreeTech, Octopus)" // Who made the changes.
-//#define CUSTOM_VERSION_FILE Version.h // Path from the root directory (no quotes)
+#define CUSTOM_VERSION_FILE TabletScannerVersion.h // Mapping-specific M115 identity
 
 /**
  * *** VENDORS PLEASE READ ***
@@ -252,7 +252,7 @@
 
 // This defines the number of extruders
 // :[0, 1, 2, 3, 4, 5, 6, 7, 8]
-#define EXTRUDERS 0  // Scanner: HE0/HE1/HE2 are M106 lamp outputs, not extruders
+#define EXTRUDERS 0  // Scanner: HE0/HE1 are M106 lamp outputs, not extruders
 
 // Generally expected filament diameter (1.75, 2.85, 3.0, ...). Used for Volumetric, Filament Width Sensor, etc.
 #define DEFAULT_NOMINAL_FILAMENT_DIA 1.75
@@ -556,9 +556,9 @@
  *   999 : Dummy Table that ALWAYS reads 100°C or the temperature defined below.
  *
  */
-#define TEMP_SENSOR_0 0     // HE0 reassigned to FAN1 / 255 nm
-#define TEMP_SENSOR_1 0     // HE1 reassigned to FAN2 / 310 nm
-#define TEMP_SENSOR_2 0     // HE2 reassigned to FAN3 / 365 nm
+#define TEMP_SENSOR_0 0     // HE0 used as M106 P2 / 255 nm
+#define TEMP_SENSOR_1 0     // HE1 used as M106 P3 / 310 nm
+#define TEMP_SENSOR_2 0     // HE2 is unused
 #define TEMP_SENSOR_3 0
 #define TEMP_SENSOR_4 0
 #define TEMP_SENSOR_5 0
@@ -967,7 +967,7 @@
 #define X_MIN_ENDSTOP_INVERTING true  // Set to true to invert the logic of the endstop.
 #define Y_MIN_ENDSTOP_INVERTING false // Set to true to invert the logic of the endstop.
 #define Z_MIN_ENDSTOP_INVERTING false // Set to true to invert the logic of the endstop.
-#define I_MIN_ENDSTOP_INVERTING false // Set to true to invert the logic of the endstop.
+#define I_MIN_ENDSTOP_INVERTING true  // Active-low hall sensor: ~3V open, 0V at the home magnet.
 #define J_MIN_ENDSTOP_INVERTING false // Set to true to invert the logic of the endstop.
 #define K_MIN_ENDSTOP_INVERTING false // Set to true to invert the logic of the endstop.
 #define U_MIN_ENDSTOP_INVERTING false // Set to true to invert the logic of the endstop.
@@ -1043,7 +1043,7 @@
  * Override with M203
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_MAX_FEEDRATE          { 500, 500, 5, 100 }          // X, Y, Z, I
+#define DEFAULT_MAX_FEEDRATE          { 500, 500, 5, 300 }          // X, Y, Z, I (rotational deg/s)
 
 //#define LIMITED_MAX_FR_EDITING        // Limit edit via M203 or LCD to DEFAULT_MAX_FEEDRATE * 2
 #if ENABLED(LIMITED_MAX_FR_EDITING)
@@ -1903,7 +1903,7 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { (50*60), (50*60), (4*60), (10*60) }  // X, Y, Z, I (rotational °/min)
+#define HOMING_FEEDRATE_MM_M { (50*60), (50*60), (4*60), (30*60) }  // X, Y, Z, I (rotational °/min)
 
 //#define QUICK_HOME                          // If G28 contains XY do a diagonal move first
 #define HOME_Y_BEFORE_X                     // If G28 contains XY home Y before X
@@ -2992,12 +2992,13 @@
 
 // Set number of user-controlled fans. Disable to use all board-defined fans.
 // :[1,2,3,4,5,6,7,8]
-#define NUM_M106_FANS 4     // P0=FAN0/VIS, P1=HE0, P2=HE1, P3=HE2
+#define NUM_M106_FANS 4     // P0=FAN0/VIS, P1=FAN1/365 nm, P2=HE0/255 nm, P3=HE1/310 nm
+#define TABLETSCANNER_LIGHT_INTERLOCK // Any nonzero M106 clears the other three lamp outputs first
 
 // Use software PWM to drive the fan, as for the heaters. This uses a very low frequency
 // which is not as annoying as with the hardware PWM. On the other hand, if this frequency
 // is too low, you should also increment SOFT_PWM_SCALE.
-#define FAN_SOFT_PWM  // HE0 (PA2) and HE2 (PB10) share a hardware PWM timer channel
+#define FAN_SOFT_PWM  // Keep PWM behavior consistent across the custom lamp outputs
 
 // Incrementing this by 1 will double the software PWM frequency,
 // affecting heaters, and the fan if FAN_SOFT_PWM is enabled.
