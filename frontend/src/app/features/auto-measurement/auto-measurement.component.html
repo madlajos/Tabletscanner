@@ -1,27 +1,4 @@
 <div class="auto-measurement">
-  <!-- SAVE DIRECTORY -->
-  <div class="save-location-row">
-    <label>Mentési hely</label>
-    <div class="save-location-input-group">
-      <input
-        type="text"
-        class="styled-input save-location-input"
-        [(ngModel)]="saveLocation"
-        [disabled]="measurementActive"
-        placeholder="Válasszon mappát..."
-        readonly
-      />
-      <button
-        type="button"
-        class="browse-button"
-        (click)="selectSaveFolder()"
-        [disabled]="measurementActive"
-      >
-        ...
-      </button>
-    </div>
-  </div>
-
   <!-- MEASUREMENT NAME -->
   <div class="measurement-name-row">
     <label for="measurementName">Mérés neve</label>
@@ -35,29 +12,29 @@
     />
   </div>
 
-  <!-- TOGGLE BUTTONS -->
-  <div class="toggle-row">
-    <button
-      type="button"
-      class="toggle-button"
-      [class.active]="autofocus"
-      (click)="autofocus = !autofocus"
-      [disabled]="measurementActive"
-    >
-      <img src="assets/SVG/auto_focus.svg" alt="Autofocus" />
-      <span class="toggle-label">Autofocus</span>
-    </button>
-
-    <button
-      type="button"
-      class="toggle-button"
-      [class.active]="backgroundSubtraction"
-      (click)="backgroundSubtraction = !backgroundSubtraction"
-      [disabled]="measurementActive"
-    >
-      <img src="assets/SVG/bkgrndsub.svg" alt="Background subtraction" />
-      <span class="toggle-label">Háttérlevonás</span>
-    </button>
+  <!-- SAVE DIRECTORY -->
+  <div class="save-location-row">
+    <label for="saveLocation">Mentési hely</label>
+    <div class="save-location-input-group">
+      <input
+        id="saveLocation"
+        type="text"
+        class="styled-input save-location-input"
+        [(ngModel)]="saveLocation"
+        [disabled]="measurementActive"
+        placeholder="Válasszon mappát..."
+        readonly
+      />
+      <button
+        type="button"
+        class="browse-button"
+        (click)="selectSaveFolder()"
+        [disabled]="measurementActive"
+        aria-label="Mentési hely kiválasztása"
+      >
+        ...
+      </button>
+    </div>
   </div>
 
   <section class="capture-plan-section">
@@ -67,21 +44,52 @@
     <div class="capture-plan-scroll">
       <table class="capture-plan-table">
         <thead>
-          <tr><th>Hullámhossz</th><th>Szűrő</th><th aria-label="Műveletek"></th></tr>
+          <tr>
+            <th class="wavelength-column">Fény</th>
+            <th class="filter-column">Szűrő</th>
+            <th class="exposure-column">Záridő</th>
+            <th class="gamma-column">Gamma</th>
+            <th class="action-column" aria-label="Műveletek"></th>
+          </tr>
         </thead>
         <tbody>
           <tr *ngFor="let row of capturePlan; let index = index; trackBy: trackCapturePlanRow">
-            <td>
+            <td class="wavelength-column">
               <select [(ngModel)]="row.wavelength" (change)="onCapturePlanChanged()" [disabled]="measurementActive">
                 <option *ngFor="let wavelength of wavelengthOptions" [ngValue]="wavelength">{{ lightLabels[wavelength] }}</option>
               </select>
             </td>
-            <td>
+            <td class="filter-column">
               <select [(ngModel)]="row.filter_position" (change)="onCapturePlanChanged()" [disabled]="measurementActive">
-                <option *ngFor="let filter of filterOptions" [ngValue]="filter">{{ filter }}</option>
+                <option *ngFor="let filter of filterOptions" [ngValue]="filter">{{ getFilterSlotLabel(filter) }}</option>
               </select>
             </td>
-            <td>
+            <td class="exposure-column">
+              <div class="number-input-with-unit">
+              <input type="text" inputmode="decimal" [ngModel]="row.exposure_time_text"
+                (ngModelChange)="onCaptureNumberInput(row, 'exposure_time', $event)"
+                (keydown)="blockInvalidNumberKey($event)"
+                (paste)="blockInvalidNumberPaste($event)"
+                (blur)="onCaptureNumberBlur(row)"
+                [class.invalid]="!isExposureValid(row)"
+                [disabled]="measurementActive"
+                [title]="exposureRange ? exposureRange.min + '–' + exposureRange.max + ' µs' : 'Pozitív szám, µs'"
+                aria-label="Záridő mikroszekundumban" />
+                <span class="input-unit" aria-hidden="true">µs</span>
+              </div>
+            </td>
+            <td class="gamma-column">
+              <input type="text" inputmode="decimal" [ngModel]="row.gamma_text"
+                (ngModelChange)="onCaptureNumberInput(row, 'gamma', $event)"
+                (keydown)="blockInvalidNumberKey($event)"
+                (paste)="blockInvalidNumberPaste($event)"
+                (blur)="onGammaBlur(row)"
+                [class.invalid]="!isGammaValid(row)"
+                [disabled]="measurementActive"
+                [title]="gammaRange ? gammaRange.min + '–' + gammaRange.max : 'Pozitív szám'"
+                aria-label="Gamma" />
+            </td>
+            <td class="action-column">
               <button type="button" class="delete-capture-row" (click)="removeCapturePlanRow(index)"
                 [disabled]="measurementActive || index === 0" [attr.aria-label]="'Mérési sor ' + (index + 1) + ' törlése'">
                 ×
@@ -95,6 +103,34 @@
       +
     </button>
   </section>
+
+  <!-- COMPACT MEASUREMENT OPTIONS -->
+  <div class="measurement-options" role="group" aria-label="Automata mérés beállításai">
+    <span class="measurement-options-label">Beállítások</span>
+    <button
+      type="button"
+      class="toggle-button"
+      [class.active]="autofocus"
+      (click)="autofocus = !autofocus"
+      [disabled]="measurementActive"
+      [attr.aria-pressed]="autofocus"
+    >
+      <img src="assets/SVG/auto_focus.svg" alt="" />
+      <span class="toggle-label">Autofocus</span>
+    </button>
+
+    <button
+      type="button"
+      class="toggle-button"
+      [class.active]="backgroundSubtraction"
+      (click)="backgroundSubtraction = !backgroundSubtraction"
+      [disabled]="measurementActive"
+      [attr.aria-pressed]="backgroundSubtraction"
+    >
+      <img src="assets/SVG/bkgrndsub.svg" alt="" />
+      <span class="toggle-label">Háttérlevonás</span>
+    </button>
+  </div>
 
   <!-- SELECTION HEADER: COUNT + CLEAR BUTTON -->
   <div class="selection-header">

@@ -13,6 +13,24 @@ export interface AutoMeasurementSettings {
   capture_plan?: CaptureRequestRow[];
 }
 
+export interface CameraParameterRange {
+  min: number;
+  max: number;
+  inc: number;
+}
+
+export interface MeasurementCameraConfig {
+  connected: boolean;
+  values: {
+    ExposureTime: number;
+    Gamma: number;
+  };
+  ranges: {
+    ExposureTime?: CameraParameterRange;
+    Gamma?: CameraParameterRange;
+  };
+}
+
 // Interface for step-by-step measurement
 export interface TabletStepRequest {
   tablet_index: number;
@@ -61,6 +79,12 @@ export class AutoMeasurementService {
   getSettings(): Observable<{ auto_measurement_settings: AutoMeasurementSettings }> {
     return this.http.get<{ auto_measurement_settings: AutoMeasurementSettings }>(
       `${BASE_URL}/get-other-settings?category=auto_measurement_settings`
+    );
+  }
+
+  getCameraConfig(): Observable<MeasurementCameraConfig> {
+    return this.http.get<MeasurementCameraConfig>(
+      `${BASE_URL}/auto-measurement/camera-config`
     );
   }
 

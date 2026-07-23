@@ -6,8 +6,11 @@ import { concatMap, last, finalize, switchMap } from 'rxjs/operators';
 import { HttpClient } from '@angular/common/http';
 import {
   AutoMeasurementService,
+  CameraParameterRange,
   TabletStepRequest
 } from '../../services/auto-measurement.service';
+import { FilterSettingsService } from '../../services/filter-settings.service';
+import { FilterSettings } from '../../models/filter-settings.models';
 import { SharedService } from '../../shared.service';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { BASE_URL } from '../../api-config';
@@ -74,7 +77,12 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   readonly wavelengthOptions: readonly LightChannel[] = ['uv255', 'uv310', 'uv365', 'vis'];
   readonly filterOptions = [1, 2, 3, 4, 5, 6] as const;
   readonly lightLabels = LIGHT_CHANNEL_LABELS;
+  private defaultExposureTime = 100000;
+  private defaultGamma = 1;
   capturePlan: CapturePlanRow[] = [this.createCapturePlanRow('vis', 1)];
+  filterSettings: FilterSettings = { filters: [], slots: [null, null, null, null, null, null] };
+  exposureRange?: CameraParameterRange;
+  gammaRange?: CameraParameterRange;
 
   // Save location and measurement name
   saveLocation = '';
@@ -139,6 +147,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   constructor(
     private autoService: AutoMeasurementService,
+    private filterSettingsService: FilterSettingsService,
     private sharedService: SharedService,
     private errorNotificationService: ErrorNotificationService,
     private http: HttpClient
@@ -171,6 +180,21 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       }
     });
 
+    this.autoService.getCameraConfig().subscribe({
+      next: config => {
+        this.defaultExposureTime = config.values.ExposureTime;
+        this.defaultGamma = config.values.Gamma;
+        this.exposureRange = config.ranges.ExposureTime;
+        this.gammaRange = config.ranges.Gamma;
+      },
+      error: err => console.warn('Failed to load camera parameter ranges:', err)
+    });
+
+    this.filterSettingsService.get().subscribe({
+      next: response => this.filterSettings = response.filter_settings,
+      error: err => console.warn('Failed to load filter settings:', err)
+    });
+
     // Load saved settings from backend
     this.autoService.getSettings().subscribe({
       next: (res) => {
@@ -184,7 +208,12 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           if (Array.isArray(settings.capture_plan) && settings.capture_plan.length > 0) {
             this.capturePlan = settings.capture_plan
               .filter(row => this.isValidCaptureRequestRow(row))
-              .map(row => this.createCapturePlanRow(row.wavelength, row.filter_position));
+              .map(row => this.createCapturePlanRow(
+                row.wavelength,
+                row.filter_position,
+                row.exposure_time,
+                row.gamma
+              ));
           }
         }
       },
@@ -242,6 +271,9 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     if (this.capturePlan.length === 0) {
       return 'Adjon hozzá legalább egy mérési sort.';
     }
+    if (this.capturePlan.some(row => !this.isCapturePlanRowValid(row))) {
+      return 'Adjon meg érvényes záridő- és gammaértéket minden mérési sorban.';
+    }
     if (this.selectedSignal().size === 0) {
       return 'Válasszon legalább egy tablettát.';
     }
@@ -266,14 +298,20 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     const connected = this.cameraConnected && this.motionConnected;
     const hasSaveLocation = !!(this.saveLocation && this.saveLocation.trim() !== '');
     const hasMeasurementName = !!(this.measurementName && this.measurementName.trim() !== '');
-    const hasCapturePlan = this.capturePlan.length > 0;
+    const hasCapturePlan = this.capturePlan.length > 0
+      && this.capturePlan.every(row => this.isCapturePlanRowValid(row));
 
     return hasSelected && connected && hasSaveLocation && hasMeasurementName && hasCapturePlan;
   }
 
   addCapturePlanRow(): void {
     const previous = this.capturePlan[this.capturePlan.length - 1];
-    this.capturePlan.push(this.createCapturePlanRow(previous?.wavelength ?? 'vis', previous?.filter_position ?? 1));
+    this.capturePlan.push(this.createCapturePlanRow(
+      previous?.wavelength ?? 'vis',
+      previous?.filter_position ?? 1,
+      previous?.exposure_time ?? this.defaultExposureTime,
+      previous?.gamma ?? this.defaultGamma
+    ));
     this.persistCapturePlan();
   }
 
@@ -295,13 +333,22 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     return row.id;
   }
 
-  private createCapturePlanRow(wavelength: LightChannel, filterPosition: number): CapturePlanRow {
+  private createCapturePlanRow(
+    wavelength: LightChannel,
+    filterPosition: number,
+    exposureTime = this.defaultExposureTime,
+    gamma = this.defaultGamma
+  ): CapturePlanRow {
     return {
       id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
       wavelength,
       filter_position: this.filterOptions.includes(filterPosition as 1 | 2 | 3 | 4 | 5 | 6)
         ? filterPosition as 1 | 2 | 3 | 4 | 5 | 6
-        : 1
+        : 1,
+      exposure_time: exposureTime,
+      gamma,
+      exposure_time_text: this.formatExposureText(String(exposureTime)),
+      gamma_text: gamma.toFixed(1)
     };
   }
 
@@ -309,14 +356,129 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     if (!row || typeof row !== 'object') return false;
     const candidate = row as CaptureRequestRow;
     return this.wavelengthOptions.includes(candidate.wavelength)
-      && this.filterOptions.includes(candidate.filter_position as 1 | 2 | 3 | 4 | 5 | 6);
+      && this.filterOptions.includes(candidate.filter_position as 1 | 2 | 3 | 4 | 5 | 6)
+      && this.isFinitePositive(candidate.exposure_time)
+      && this.isFinitePositive(candidate.gamma);
   }
 
   private persistCapturePlan(): void {
-    const capturePlan = this.capturePlan.map(({ wavelength, filter_position }) => ({ wavelength, filter_position }));
+    if (!this.capturePlan.every(row => this.isCapturePlanRowValid(row))) return;
+    const capturePlan = this.capturePlan.map(
+      ({ wavelength, filter_position, exposure_time, gamma }) =>
+        ({ wavelength, filter_position, exposure_time, gamma })
+    );
     this.autoService.updateSettings('capture_plan', capturePlan).subscribe({
       error: err => console.warn('Failed to save capture plan:', err)
     });
+  }
+
+  getFilterSlotLabel(position: number): string {
+    const filterId = this.filterSettings.slots[position - 1];
+    const filter = this.filterSettings.filters.find(item => item.id === filterId);
+    return filter?.wavelength_range ? `${filter.wavelength_range} nm` : '—';
+  }
+
+  onCaptureNumberBlur(row: CapturePlanRow): void {
+    if (this.isExposureValid(row)) {
+      row.exposure_time = this.parseDecimal(row.exposure_time_text)!;
+      row.exposure_time_text = this.formatExposureText(String(row.exposure_time));
+    }
+    if (this.isCapturePlanRowValid(row)) {
+      this.persistCapturePlan();
+    }
+  }
+
+  onGammaBlur(row: CapturePlanRow): void {
+    if (this.isGammaValid(row)) {
+      row.gamma = Math.round(this.parseDecimal(row.gamma_text)! * 10) / 10;
+      row.gamma_text = row.gamma.toFixed(1);
+    }
+    if (this.isCapturePlanRowValid(row)) {
+      this.persistCapturePlan();
+    }
+  }
+
+  onCaptureNumberInput(
+    row: CapturePlanRow,
+    field: 'exposure_time' | 'gamma',
+    value: string
+  ): void {
+    if (field === 'exposure_time') {
+      const ungroupedValue = value.replace(/\s/g, '');
+      if (!/^\d*(?:[.,]\d*)?$/.test(ungroupedValue)) return;
+      row.exposure_time_text = this.formatExposureText(ungroupedValue);
+      const parsed = this.parseDecimal(ungroupedValue);
+      if (parsed !== null) row.exposure_time = parsed;
+    } else {
+      if (!/^\d*(?:[.,]\d*)?$/.test(value)) return;
+      row.gamma_text = value;
+      const parsed = this.parseDecimal(value);
+      if (parsed !== null) row.gamma = parsed;
+    }
+  }
+
+  blockInvalidNumberKey(event: KeyboardEvent): void {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const allowedControlKeys = [
+      'Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'
+    ];
+    if (allowedControlKeys.includes(event.key) || /^\d$/.test(event.key)) return;
+    if (event.key === '.' || event.key === ',') {
+      const input = event.target as HTMLInputElement;
+      if (!input.value.includes('.') && !input.value.includes(',')) return;
+    }
+    event.preventDefault();
+  }
+
+  blockInvalidNumberPaste(event: ClipboardEvent): void {
+    const pastedText = event.clipboardData?.getData('text') ?? '';
+    const input = event.target as HTMLInputElement;
+    const selectionStart = input.selectionStart ?? input.value.length;
+    const selectionEnd = input.selectionEnd ?? selectionStart;
+    const prospectiveValue =
+      input.value.slice(0, selectionStart) + pastedText + input.value.slice(selectionEnd);
+    const valueToValidate = input.closest('.exposure-column')
+      ? prospectiveValue.replace(/\s/g, '')
+      : prospectiveValue;
+    if (!/^\d*(?:[.,]\d*)?$/.test(valueToValidate)) {
+      event.preventDefault();
+    }
+  }
+
+  isCapturePlanRowValid(row: CapturePlanRow): boolean {
+    return this.isExposureValid(row) && this.isGammaValid(row);
+  }
+
+  isExposureValid(row: CapturePlanRow): boolean {
+    return this.isValueInRange(this.parseDecimal(row.exposure_time_text), this.exposureRange);
+  }
+
+  isGammaValid(row: CapturePlanRow): boolean {
+    return this.isValueInRange(this.parseDecimal(row.gamma_text), this.gammaRange);
+  }
+
+  private parseDecimal(value: string): number | null {
+    const ungroupedValue = value.replace(/\s/g, '');
+    if (!/^\d+(?:[.,]\d+)?$/.test(ungroupedValue)) return null;
+    const parsed = Number(ungroupedValue.replace(',', '.'));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private formatExposureText(value: string): string {
+    const separatorIndex = value.search(/[.,]/);
+    const integerPart = separatorIndex >= 0 ? value.slice(0, separatorIndex) : value;
+    const decimalPart = separatorIndex >= 0 ? value.slice(separatorIndex) : '';
+    return integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + decimalPart;
+  }
+
+  private isValueInRange(value: unknown, range?: CameraParameterRange): boolean {
+    if (!this.isFinitePositive(value)) return false;
+    const numericValue = Number(value);
+    return !range || (numericValue >= range.min && numericValue <= range.max);
+  }
+
+  private isFinitePositive(value: unknown): boolean {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0;
   }
 
   // Get info message to show when button is enabled
@@ -821,7 +983,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       measurement_folder: this.measurementFolder,
       measurement_name: this.measurementName.trim(),
       autofocus: this.autofocus,
-      capture_plan: this.capturePlan.map(({ wavelength, filter_position }) => ({ wavelength, filter_position })),
+      capture_plan: this.capturePlan.map(
+        ({ wavelength, filter_position, exposure_time, gamma }) =>
+          ({ wavelength, filter_position, exposure_time, gamma })
+      ),
       is_first_tablet: isFirstTablet,
       background_subtraction: this.backgroundSubtraction
     };

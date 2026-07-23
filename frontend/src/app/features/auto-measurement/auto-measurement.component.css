@@ -104,45 +104,51 @@
 }
 
 /* =======================
-   Toggle buttons row
+   Compact measurement options
    ======================= */
 
-.toggle-row {
+.measurement-options {
   display: flex;
-  gap: 6px;
-  align-items: stretch;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+}
+
+.measurement-options-label {
+  margin-right: auto;
+  color: #bbb;
+  font-size: 11px;
 }
 
 .toggle-button {
-  flex: 1 1 0;
-  border-radius: 6px;
+  flex: 0 0 auto;
+  min-height: 28px;
+  border-radius: 4px;
   border: 1px solid #555;
   background-color: #2f2f2f;
   color: #ddd;
 
-  padding: 4px 6px;
+  padding: 3px 7px 3px 5px;
   cursor: pointer;
 
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
 
-  font-size: 12px;
-  gap: 3px;
+  font-size: 11px;
+  gap: 5px;
 
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
 
   transition:
     background-color 0.2s ease-out,
     border-color 0.2s ease-out,
-    box-shadow 0.2s ease-out,
-    transform 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
+    box-shadow 0.2s ease-out;
 }
 
 .toggle-button img {
-  width: 50px;
-  height: 50px;
+  width: 18px;
+  height: 18px;
   display: block;
 }
 
@@ -154,7 +160,6 @@
   background-color: #3c3c3c;
   border-color: #777;
   box-shadow: 0 2px 3px rgba(0, 0, 0, 0.6);
-  transform: translateY(-1px);
 }
 
 .toggle-button.active {
@@ -162,6 +167,17 @@
   border-color: #1f4b8f;
   color: #fff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
+}
+
+.toggle-button:focus-visible,
+.browse-button:focus-visible {
+  outline: 2px solid #6ea8fe;
+  outline-offset: 1px;
+}
+
+.toggle-button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .capture-plan-section {
@@ -185,6 +201,7 @@
 
 .capture-plan-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 11px;
 }
@@ -196,14 +213,67 @@
   text-align: left;
 }
 
-.capture-plan-table select {
+.capture-plan-table select,
+.capture-plan-table input {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 2px;
   font-size: 11px;
   color: #fff;
   background: #333;
   border: 1px solid #555;
   border-radius: 3px;
+}
+
+.capture-plan-table input.invalid {
+  border-color: #c94b4b;
+  box-shadow: 0 0 0 1px rgba(201, 75, 75, 0.25);
+}
+
+.wavelength-column {
+  width: 52px;
+}
+
+.filter-column {
+  width: 72px;
+}
+
+.exposure-column {
+  width: 72px;
+}
+
+.gamma-column {
+  width: 42px;
+}
+
+.action-column {
+  width: 22px;
+}
+
+.exposure-column input {
+  letter-spacing: normal;
+  padding-right: 19px;
+}
+
+.gamma-column input {
+  text-align: center;
+}
+
+.number-input-with-unit {
+  position: relative;
+}
+
+.input-unit {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  color: #888;
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
+  transform: translateY(-50%);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.65);
 }
 
 .delete-capture-row,
@@ -223,7 +293,8 @@
 }
 
 .add-capture-row {
-  margin-top: 5px;
+  display: block;
+  margin: 5px auto 0;
   min-width: 24px;
   padding: 0 7px;
   font-size: 15px;

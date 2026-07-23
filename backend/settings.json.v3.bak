@@ -1,5 +1,5 @@
 {
-    "settings_schema_version": 4,
+    "settings_schema_version": 3,
     "camera_params": {
         "ExposureTime": 100000.0,
         "Gamma": 1.0
@@ -17,9 +17,7 @@
         "capture_plan": [
             {
                 "wavelength": "uv310",
-                "filter_position": 6,
-                "exposure_time": 1006000.0,
-                "gamma": 6.1
+                "filter_position": 6
             }
         ]
     },

@@ -23,7 +23,7 @@ def get_base_path():
     return os.path.dirname(__file__)
 
 DEFAULT_SETTINGS_PATH = os.path.join(get_base_path(), 'settings.json')
-SETTINGS_SCHEMA_VERSION = 3
+SETTINGS_SCHEMA_VERSION = 4
 UV_LAMP_CHANNELS = ('uv255', 'uv310', 'uv365')
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 FILTER_POSITIONS = (1, 2, 3, 4, 5, 6)
@@ -45,6 +45,8 @@ LAMP_SETTING_FIELDS = (
     'dim_timeout_seconds',
     'full_timeout_seconds',
 )
+DEFAULT_CAPTURE_EXPOSURE_TIME = 100000.0
+DEFAULT_CAPTURE_GAMMA = 1.0
 
 
 def _finite_number(value, default):
@@ -90,7 +92,7 @@ def validate_lamp_settings(payload):
 
 
 def validate_capture_plan(value):
-    """Validate the persisted ordered wavelength/filter measurement plan."""
+    """Validate the persisted ordered wavelength/filter/camera measurement plan."""
     if not isinstance(value, list) or not value:
         raise ValueError('Capture plan must contain at least one row.')
 
@@ -100,11 +102,22 @@ def validate_capture_plan(value):
             raise ValueError('Each capture plan row must be an object.')
         wavelength = row.get('wavelength')
         filter_position = row.get('filter_position')
+        exposure_time = _finite_number(row.get('exposure_time'), None)
+        gamma = _finite_number(row.get('gamma'), None)
         if wavelength not in LIGHT_CHANNELS:
             raise ValueError('Capture plan contains an unknown wavelength.')
         if isinstance(filter_position, bool) or not isinstance(filter_position, int) or filter_position not in FILTER_POSITIONS:
             raise ValueError('Capture plan filter position must be an integer from 1 to 6.')
-        normalized_rows.append({'wavelength': wavelength, 'filter_position': filter_position})
+        if exposure_time is None or exposure_time <= 0:
+            raise ValueError('Capture plan exposure time must be a positive finite number.')
+        if gamma is None or gamma <= 0:
+            raise ValueError('Capture plan gamma must be a positive finite number.')
+        normalized_rows.append({
+            'wavelength': wavelength,
+            'filter_position': filter_position,
+            'exposure_time': exposure_time,
+            'gamma': gamma,
+        })
     return normalized_rows
 
 
@@ -289,8 +302,39 @@ def migrate_settings(settings):
         if not isinstance(auto_measurement, dict):
             auto_measurement = {}
         auto_measurement.setdefault('capture_plan', [
-            {'wavelength': 'vis', 'filter_position': 1}
+            {
+                'wavelength': 'vis',
+                'filter_position': 1,
+                'exposure_time': DEFAULT_CAPTURE_EXPOSURE_TIME,
+                'gamma': DEFAULT_CAPTURE_GAMMA,
+            }
         ])
+        migrated['auto_measurement_settings'] = auto_measurement
+
+    if current_version < 4:
+        camera_params = migrated.get('camera_params')
+        if not isinstance(camera_params, dict):
+            camera_params = {}
+        default_exposure = _finite_number(
+            camera_params.get('ExposureTime'), DEFAULT_CAPTURE_EXPOSURE_TIME
+        )
+        default_gamma = _finite_number(camera_params.get('Gamma'), DEFAULT_CAPTURE_GAMMA)
+        auto_measurement = migrated.get('auto_measurement_settings')
+        if not isinstance(auto_measurement, dict):
+            auto_measurement = {}
+        capture_plan = auto_measurement.get('capture_plan')
+        if not isinstance(capture_plan, list) or not capture_plan:
+            capture_plan = [{'wavelength': 'vis', 'filter_position': 1}]
+        enriched_plan = []
+        for row in capture_plan:
+            if not isinstance(row, dict):
+                enriched_plan.append(row)
+                continue
+            enriched_row = copy.deepcopy(row)
+            enriched_row.setdefault('exposure_time', default_exposure)
+            enriched_row.setdefault('gamma', default_gamma)
+            enriched_plan.append(enriched_row)
+        auto_measurement['capture_plan'] = enriched_plan
         migrated['auto_measurement_settings'] = auto_measurement
 
     lamp_settings = migrated.get('lamp_settings')

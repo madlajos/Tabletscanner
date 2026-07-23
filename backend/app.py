@@ -852,6 +852,36 @@ def get_camera_settings():
             "details": str(e),
             "popup": True
         }), 500
+
+
+@app.route('/api/auto-measurement/camera-config', methods=['GET'])
+def get_auto_measurement_camera_config():
+    """Return current values and live Basler limits for per-row capture settings."""
+    settings_data = get_settings()
+    persisted = settings_data.get('camera_params', {})
+    values = {
+        'ExposureTime': float(persisted.get('ExposureTime', 100000.0)),
+        'Gamma': float(persisted.get('Gamma', 1.0)),
+    }
+    camera = globals.camera
+    connected = bool(camera and camera.IsOpen())
+    ranges = {}
+    if connected:
+        try:
+            camera_properties = get_camera_properties(camera)
+            globals.camera_properties = camera_properties
+            ranges = {
+                name: camera_properties[name]
+                for name in ('ExposureTime', 'Gamma')
+                if name in camera_properties
+            }
+        except Exception as error:
+            app.logger.warning('Could not query Basler capture parameter ranges: %s', error)
+    return jsonify({
+        'connected': connected,
+        'values': values,
+        'ranges': ranges,
+    }), 200
     
 @app.route('/api/update-camera-settings', methods=['POST'])
 def update_camera_settings():
@@ -1416,6 +1446,55 @@ def _apply_camera_settings_for_light(light: str):
         except Exception as e:
             app.logger.warning(f"Could not apply {setting_name} for {light}: {e}")
 
+
+def _apply_capture_plan_camera_settings(row: dict) -> dict:
+    """Apply and return the Basler-normalized exposure and gamma for one plan row."""
+    camera = globals.camera
+    if not camera or not camera.IsOpen():
+        raise RuntimeError('Camera is not connected.')
+    camera_properties = globals.camera_properties
+    if not camera_properties or any(
+        name not in camera_properties for name in ('ExposureTime', 'Gamma')
+    ):
+        camera_properties = get_camera_properties(camera)
+        globals.camera_properties = camera_properties
+    applied = {
+        'exposure_time': validate_and_set_camera_param(
+            camera, 'ExposureTime', row['exposure_time'], camera_properties
+        ),
+        'gamma': validate_and_set_camera_param(
+            camera, 'Gamma', row['gamma'], camera_properties
+        ),
+    }
+    for field in ('exposure_time', 'gamma'):
+        if not math.isclose(applied[field], row[field], rel_tol=1e-9, abs_tol=1e-6):
+            limits = camera_properties[
+                'ExposureTime' if field == 'exposure_time' else 'Gamma'
+            ]
+            raise ValueError(
+                f"{field} must match the Basler range/increment "
+                f"({limits['min']}..{limits['max']}, step {limits['inc']})."
+            )
+    return applied
+
+
+def _select_measurement_filter_position(motion_platform, target_position: int) -> None:
+    """Move the homed revolver to a plan slot using acknowledged shortest-path steps."""
+    with porthandler.motion_lock:
+        if not globals.toolhead_homed or not globals.filter_revolver_homed:
+            raise RuntimeError('Home the motion platform and filter revolver before measurement.')
+        direction, steps = filter_revolver.shortest_path(
+            globals.filter_revolver_position, target_position
+        )
+        globals.motion_busy = True
+    try:
+        for _ in range(steps):
+            globals.filter_revolver_position = filter_revolver.rotate_one_slot(
+                motion_platform, globals.filter_revolver_position, direction
+            )
+    finally:
+        globals.motion_busy = False
+
 def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False,
                             light_type: str = None, filter_position: int | None = None) -> list:
     """Capture image from camera and save to target folder.
@@ -1633,18 +1712,17 @@ def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_na
                               tablet_index: int, background_subtraction: bool = False) -> list:
     """Capture one persisted wavelength/filter row with the Octopus controller.
 
-    The selected filter position is recorded in the filename and response.
-    Automatic capture-plan positioning is intentionally not coupled to the
-    separately acknowledged manual revolver controller yet.
+    The caller positions the filter revolver before this function enables the
+    selected lamp channel.
     """
     wavelength = row['wavelength']
     filter_position = row['filter_position']
     mode = 'dimmed' if wavelength in ('uv255', 'uv310', 'uv365') else None
     activated = False
     try:
+        _apply_capture_plan_camera_settings(row)
         light_controller.activate(wavelength, mode)
         activated = True
-        _apply_camera_settings_for_light(wavelength)
         time.sleep(0.3)
 
         timestamp = _format_capture_timestamp(datetime.now())
@@ -2104,6 +2182,7 @@ def auto_measurement_step():
                         'Tablet %s: Capturing %s image with filter position %s',
                         tablet_index, wavelength, filter_position,
                     )
+                    _select_measurement_filter_position(motion_platform, filter_position)
                     saved_paths = _capture_capture_plan_row(
                         row, measurement_folder, measurement_name, tablet_index,
                         background_subtraction=background_subtraction,
@@ -2112,6 +2191,8 @@ def auto_measurement_step():
                     captured_plan_rows.append({
                         'wavelength': wavelength,
                         'filter_position': filter_position,
+                        'exposure_time': row['exposure_time'],
+                        'gamma': row['gamma'],
                         'saved_images': saved_paths,
                     })
                 except (OSError, PermissionError) as error:
