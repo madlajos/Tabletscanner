@@ -225,7 +225,7 @@ def drain_serial_buffer(ser, timeout=0.15):
     return bytes(drained)
 
 
-def write_and_wait(ser, command, timeout=5.0, expect=b"ok"):
+def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
     """
     Send a G-code command to the BTT SKR Mini E3 board and wait for the
     expected response (default: 'ok').
@@ -239,6 +239,7 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok"):
         command:  G-code string, e.g. "M400" or "G1 X10"
         timeout:  max seconds to wait for the expected response
         expect:   bytes to look for in the reply (case-insensitive)
+        failure_markers: reply fragments that end the wait as a failed command
 
     Returns:
         (True, reply_bytes)  – if expected response was seen
@@ -252,6 +253,7 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok"):
 
     cmd_bytes = (command.strip() + "\n").encode("ascii", "ignore")
     expect_lower = expect.lower()
+    failure_markers_lower = tuple(marker.lower() for marker in failure_markers)
 
     with motion_lock:
         # 1. Drain any stale data so we don't confuse old replies with new ones
@@ -271,8 +273,16 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok"):
                 chunk = ser.read(min(iw, 512))
                 if chunk:
                     buf += chunk
-                    if expect_lower in buf.lower():
+                    reply_lower = buf.lower()
+                    if expect_lower in reply_lower:
                         return True, bytes(buf)
+                    if any(marker in reply_lower for marker in failure_markers_lower):
+                        logging.warning(
+                            "Controller rejected '%s': %r",
+                            command.strip(),
+                            bytes(buf[:256]),
+                        )
+                        return False, bytes(buf)
             else:
                 time.sleep(0.01)
 

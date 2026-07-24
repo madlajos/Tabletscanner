@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, HostListener, OnInit, OnDestroy } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { interval, Subscription, of } from 'rxjs';
 import { switchMap, catchError, timeout, finalize } from 'rxjs/operators';
@@ -86,7 +86,12 @@ export class MotionControl implements OnInit, OnDestroy {
 
 
   isHoming = false;
-  private readonly HOMING_TIMEOUT_MS = 35000;
+  // The A axis may travel almost a full revolution before finding its Hall sensor.
+  // Keep the client timeout above the backend's 60-second A-axis limit.
+  private readonly HOMING_TIMEOUT_MS = 70000;
+  homeContextMenuVisible = false;
+  homeContextMenuX = 0;
+  homeContextMenuY = 0;
   xHomed: boolean = false;
   yHomed: boolean = false;
   zHomed: boolean = false;
@@ -401,11 +406,38 @@ export class MotionControl implements OnInit, OnDestroy {
 
   get filterRevolverControlsDisabled(): boolean {
     return this.controlsDisabled
-      || !(this.xHomed && this.yHomed && this.zHomed)
       || !this.filterRevolverStatus.homed
-      || !this.filterRevolverStatus.motion_platform_homed
       || this.filterRevolverBusy
       || this.filterRevolverStatus.busy;
+  }
+
+  openHomeContextMenu(event: MouseEvent): void {
+    if (this.isHoming || !this.isConnected || this.measurementActive || this.isAutofocusing) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 210;
+    const menuHeight = 80;
+    this.homeContextMenuX = Math.max(4, Math.min(event.clientX, window.innerWidth - menuWidth - 4));
+    this.homeContextMenuY = Math.max(4, Math.min(event.clientY, window.innerHeight - menuHeight - 4));
+    this.homeContextMenuVisible = true;
+  }
+
+  closeHomeContextMenu(): void {
+    this.homeContextMenuVisible = false;
+  }
+
+  @HostListener('document:click')
+  @HostListener('document:contextmenu')
+  closeHomeContextMenuFromDocument(): void {
+    this.closeHomeContextMenu();
+  }
+
+  @HostListener('document:keydown.escape')
+  closeHomeContextMenuOnEscape(): void {
+    this.closeHomeContextMenu();
   }
 
   rotateFilterRevolver(direction: FilterRevolverDirection): void {
@@ -421,7 +453,7 @@ export class MotionControl implements OnInit, OnDestroy {
     ).subscribe({
       next: status => {
         commandSucceeded = true;
-        this.filterRevolverRotationDegrees += direction === 'down' ? -60 : 60;
+        this.filterRevolverRotationDegrees += direction === 'up' ? -60 : 60;
         this.filterRevolverRotationInitialized = true;
         this.filterRevolverStatus = status;
       },
@@ -449,7 +481,7 @@ export class MotionControl implements OnInit, OnDestroy {
     ).subscribe({
       next: response => {
         commandSucceeded = true;
-        const visualDirection = response.direction === 'down' ? -1 : 1;
+        const visualDirection = response.direction === 'up' ? -1 : 1;
         this.filterRevolverRotationDegrees += visualDirection * response.steps * 60;
         this.filterRevolverRotationInitialized = true;
         this.filterRevolverStatus = response;
@@ -692,6 +724,9 @@ export class MotionControl implements OnInit, OnDestroy {
   }
 
   homeAxis(axis?: string): void {
+    if (this.isHoming) return;
+
+    this.closeHomeContextMenu();
     this.resetMotorOffState();
 
     const ax = axis ? axis.toLowerCase() as 'x' | 'y' | 'z' | 'a' : undefined;
@@ -716,12 +751,16 @@ export class MotionControl implements OnInit, OnDestroy {
 
           // Preserve your original side effects
           if (ax === 'a') {
+            this.filterStatusGeneration++;
             this.filterRevolverStatus = {
               position: 1,
               homed: true,
               motion_platform_homed: this.xHomed && this.yHomed && this.zHomed,
               busy: false
             };
+            this.filterRevolverRotationDegrees = 0;
+            this.filterRevolverRotationInitialized = true;
+            this.syncFilterRevolverStatus();
           } else if (ax) {
             if (ax === 'x') { this.xPosition = 0; this.xHomed = true; }
             else if (ax === 'y') { this.yPosition = 0; this.yHomed = true; }
@@ -745,6 +784,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
     if (this.isHoming) return;
 
+    this.closeHomeContextMenu();
     this.isHoming = true;
     this.stopPositionPolling();
 

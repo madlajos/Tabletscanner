@@ -10,8 +10,7 @@
   <div class="revolver-rotor" [style.transform]="'rotate(' + displayedRotationDegrees + 'deg)'">
     <div
       *ngFor="let slot of settings.slots; let i = index; trackBy: trackSlot"
-      [class]="'filter-slot slot-' + i"
-      [class.active]="activePosition === i + 1"
+      [class]="'filter-slot slot-' + i + (activePosition === i + 1 ? ' active' : '')"
       [class.interactive]="interactive"
       [attr.tabindex]="interactive ? 0 : null"
       [attr.role]="interactive ? 'button' : null"

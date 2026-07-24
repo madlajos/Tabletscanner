@@ -43,9 +43,9 @@ cd TabletScanner_Firmware_UV_MultiLED/Firmware
 python -m platformio run -e STM32F446ZE_btt
 ```
 
-The generated, unflashed binary is
+The generated, unflashed binary was rebuilt on 2026-07-24 with the faster A-axis homing profile:
 `.pio/build/STM32F446ZE_btt/firmware.bin` (SHA-256
-`D08B34100092CCD2E64F1A54DBC60072C57C40C0CDC35434CE388475F3637819`).
+`92316A34D4DC3E203A132A0E88CA5EE237722DB9C5DCF394C77FACFA6DCFB3E3`).
 The successful build does not prove
 physical output routing; verify it with a multimeter before connecting lamps.
 
@@ -85,8 +85,18 @@ disconnect, and shutdown attempts an all-off command.
 
 Marlin exposes its internal fourth `I` axis as the operator-facing `A` axis. The configured
 Hall-sensor endstop homes with `G28 A`; the six positions are 60° apart in the configured
-0–360° range. Manual control uses acknowledged `G91`, `G1 A+/-60`, `M400`, and restores `G90`.
-At the wrap boundary, `G92 A360` or `G92 A0` keeps the move inside the configured soft range.
+0–360° range. A-axis homing uses 90°/s (5400°/min), with a 60-second backend timeout and a
+70-second frontend request timeout. Marlin's explicit `Homing Failed` response terminates the
+request immediately without treating the controller as disconnected. The Motor 6 DIAG jumper
+must be removed because the external Hall sensor uses `DIAG6/E2DET` and sensorless homing is
+disabled. After the fine Hall-sensor trigger, the circular-axis firmware continues 90° in the
+homing direction—30° past the trigger plus the observed 60° slot-6-to-slot-1 step—to establish the slot-one
+reference. The A/I min/max software endstops are disabled so the circular
+revolver has no 0/360° travel seam; X/Y/Z software limits remain enabled. Manual control uses
+acknowledged `G91`, `G1 A+/-60 F5400`, `M400`, and restores `G90`, giving normal rotation the
+same 90°/s speed as the fast homing seek.
+The screen-right (`up`) command sends `A-60` and advances `1→2`; the screen-left (`down`)
+command sends `A+60` and moves `1→6`. At slot one, `G92 A0` normalizes the circular coordinate.
 The backend changes the active one-based slot only after `M400` and mode restoration are
 acknowledged. Disconnecting or changing the motion adapter invalidates the homed slot.
 

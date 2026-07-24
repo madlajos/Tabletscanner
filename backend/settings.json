@@ -16,8 +16,8 @@
         "save_location": "C:/Users/madlajos/Downloads",
         "capture_plan": [
             {
-                "wavelength": "uv310",
-                "filter_position": 6,
+                "wavelength": "uv365",
+                "filter_position": 1,
                 "exposure_time": 1006000.0,
                 "gamma": 6.1
             }
@@ -52,7 +52,7 @@
         }
     },
     "advanced_settings": {
-        "use_virtual_com_port": true,
+        "use_virtual_com_port": false,
         "max_height_offset_up_mm": 5.0,
         "max_height_offset_down_mm": -5.0
     },

@@ -840,7 +840,8 @@
 #define HOMING_BUMP_MM      { 5, 5, 2, 2 }    // I: back off 2° after the fast sensor seek
 #define HOMING_BUMP_DIVISOR { 2, 2, 4, 4 }    // I: fine re-seek at 30 / 4 = 7.5°/s
 
-#define HOMING_BACKOFF_POST_MM { 2, 2, 2, 30 }   // After the fine trigger, move I/A 30° away from the hall sensor.
+#define HOMING_BACKOFF_POST_MM { 2, 2, 2, 90 }   // I/A: 30° past the trigger plus one 60° step from slot 6 to slot 1.
+#define I_HOMING_POST_MOVE_TOWARD_HOME             // Circular I/A: continue through the Hall trigger instead.
 
 //#define QUICK_HOME                          // If G28 contains XY do a diagonal move first
 #define HOME_Y_BEFORE_X                     // If G28 contains XY home Y before X

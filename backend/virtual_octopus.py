@@ -30,7 +30,9 @@ class VirtualOctopusSerial:
             'X': (0.0, 175.0),
             'Y': (0.0, 175.0),
             'Z': (0.0, 30.0),
-            'A': (0.0, 360.0),
+            # The physical filter revolver is circular and has no software
+            # travel seam. The backend periodically normalizes its coordinate.
+            'A': (float('-inf'), float('inf')),
         }
         self._light_pwm = {}
         self.command_history = []

@@ -454,6 +454,13 @@ def api_home_toolhead():
     if not ser or not getattr(ser, 'is_open', False):
         return jsonify({'ok': False, 'error': 'Motion platform not connected'}), 503
 
+    # Once a new A-axis homing attempt starts, the previous slot reference is
+    # no longer safe to use unless this attempt completes successfully.
+    if 'a' in requested_axes:
+        globals.homed_axes.discard('a')
+        globals.filter_revolver_homed = False
+        globals.filter_revolver_position = None
+
     globals.motion_busy = True
     try:
         # Home each requested axis separately to guarantee the supplied order.
@@ -485,6 +492,39 @@ def api_home_toolhead():
             'homed_axes': requested_axes,
             'position': globals.last_toolhead_pos
         })
+    except motioncontrols.HomingRejectedError as e:
+        app.logger.warning(
+            "Controller rejected %s-axis homing; reply=%r",
+            e.axis,
+            e.reply[:256],
+        )
+        return jsonify({
+            'ok': False,
+            'error': str(e),
+            'code': ErrorCode.MOTION_HOMING_FAILED,
+            'popup': True
+        }), 422
+    except motioncontrols.HomingTimeoutError as e:
+        app.logger.warning(
+            "%s-axis homing exceeded %.1f seconds; reply=%r",
+            e.axis,
+            e.timeout,
+            e.reply[:256],
+        )
+        return jsonify({
+            'ok': False,
+            'error': str(e),
+            'code': ErrorCode.MOTION_HOMING_TIMEOUT,
+            'popup': True
+        }), 504
+    except TimeoutError as e:
+        app.logger.warning("Homing command timed out without closing the serial connection: %s", e)
+        return jsonify({
+            'ok': False,
+            'error': str(e),
+            'code': ErrorCode.MOTION_HOMING_TIMEOUT,
+            'popup': True
+        }), 504
     except (OSError, PermissionError) as e:
         app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
         try:
@@ -549,9 +589,9 @@ def rotate_filter_revolver():
                 'code': ErrorCode.GENERIC,
                 'popup': True,
             }), 409
-        if not globals.toolhead_homed or not globals.filter_revolver_homed:
+        if not globals.filter_revolver_homed:
             return jsonify({
-                'error': 'Home the motion platform and filter revolver before rotating it.',
+                'error': 'Home the filter revolver before rotating it.',
                 'code': ErrorCode.GENERIC,
                 'popup': True,
             }), 409
@@ -565,15 +605,25 @@ def rotate_filter_revolver():
         )
         globals.motion_busy = False
         return jsonify(_filter_revolver_status()), 200
-    except (OSError, PermissionError):
-        return _handle_motion_usb_disconnect(motion_platform, 'filter revolver rotation')
-    except (TimeoutError, ValueError) as error:
+    except filter_revolver.FilterRevolverCommandError as error:
+        globals.homed_axes.discard('a')
+        globals.filter_revolver_homed = False
+        globals.filter_revolver_position = None
         app.logger.warning('Filter revolver rotation failed: %s', error)
         return jsonify({
             'error': str(error),
             'code': ErrorCode.GENERIC,
             'popup': True,
         }), 504
+    except ValueError as error:
+        app.logger.warning('Filter revolver rotation rejected: %s', error)
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 409
+    except (OSError, PermissionError):
+        return _handle_motion_usb_disconnect(motion_platform, 'filter revolver rotation')
     finally:
         globals.motion_busy = False
 
@@ -609,9 +659,9 @@ def select_filter_revolver_position():
                 'code': ErrorCode.GENERIC,
                 'popup': True,
             }), 409
-        if not globals.toolhead_homed or not globals.filter_revolver_homed:
+        if not globals.filter_revolver_homed:
             return jsonify({
-                'error': 'Home the motion platform and filter revolver before rotating it.',
+                'error': 'Home the filter revolver before rotating it.',
                 'code': ErrorCode.GENERIC,
                 'popup': True,
             }), 409
@@ -641,15 +691,25 @@ def select_filter_revolver_position():
             'direction': direction,
             'steps': steps,
         }), 200
-    except (OSError, PermissionError):
-        return _handle_motion_usb_disconnect(motion_platform, 'filter revolver selection')
-    except (TimeoutError, ValueError) as error:
+    except filter_revolver.FilterRevolverCommandError as error:
+        globals.homed_axes.discard('a')
+        globals.filter_revolver_homed = False
+        globals.filter_revolver_position = None
         app.logger.warning('Filter revolver selection failed: %s', error)
         return jsonify({
             'error': str(error),
             'code': ErrorCode.GENERIC,
             'popup': True,
         }), 504
+    except ValueError as error:
+        app.logger.warning('Filter revolver selection rejected: %s', error)
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 409
+    except (OSError, PermissionError):
+        return _handle_motion_usb_disconnect(motion_platform, 'filter revolver selection')
     finally:
         globals.motion_busy = False
 

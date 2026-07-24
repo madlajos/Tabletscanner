@@ -86,14 +86,36 @@
     </div>
 
     <div class="home-buttons-grid">
-      <!-- Home (Z → Y → X) -->
-      <button class="home-button" 
-        (click)="homeAllAxesInOrder()" 
-        [class.homing]="isHoming"
-        [class.homed]="xHomed && yHomed && zHomed"
-        [disabled]="isHoming || !isConnected || measurementActive || isAutofocusing">
-        <img src="assets/SVG/home.svg" alt="Home" class="home-icon" />
-      </button>
+      <!-- Home: left click runs the usual homing; right click offers separate A-axis homing. -->
+      <div class="home-button-wrapper">
+        <button class="home-button"
+          (click)="homeAllAxesInOrder()"
+          (contextmenu)="openHomeContextMenu($event)"
+          [class.homing]="isHoming"
+          [class.homed]="xHomed && yHomed && zHomed"
+          [disabled]="isHoming || !isConnected || measurementActive || isAutofocusing"
+          aria-label="Tengelyek nullázása"
+          aria-haspopup="menu"
+          [attr.aria-expanded]="homeContextMenuVisible">
+          <img src="assets/SVG/home.svg" alt="" class="home-icon" />
+        </button>
+
+        <div *ngIf="homeContextMenuVisible"
+          class="home-context-menu"
+          role="menu"
+          aria-label="Nullázási műveletek"
+          [style.left.px]="homeContextMenuX"
+          [style.top.px]="homeContextMenuY"
+          (click)="$event.stopPropagation()"
+          (contextmenu)="$event.preventDefault(); $event.stopPropagation()">
+          <button type="button" role="menuitem" (click)="homeAllAxesInOrder()">
+            Tengelyek nullázása
+          </button>
+          <button type="button" role="menuitem" (click)="homeAxis('a')">
+            Szűrőváltó nullázása
+          </button>
+        </div>
+      </div>
 
       <!-- Autofocus (click again while running to abort) -->
       <button class="home-button" 
@@ -177,7 +199,7 @@
             class="direction-button rotate-down"
             (click)="rotateFilterRevolver('down')"
             [disabled]="filterRevolverControlsDisabled"
-            aria-label="Szűrőváltó a következő, nagyobb számú pozícióra"
+            aria-label="Szűrőváltó az előző, kisebb számú pozícióra"
           >
             <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
           </button>
@@ -186,15 +208,15 @@
             class="direction-button rotate-up"
             (click)="rotateFilterRevolver('up')"
             [disabled]="filterRevolverControlsDisabled"
-            aria-label="Szűrőváltó az előző, kisebb számú pozícióra"
+            aria-label="Szűrőváltó a következő, nagyobb számú pozícióra"
           >
             <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
           </button>
         </div>
       </div>
     </div>
-    <p class="filter-revolver-note" *ngIf="isConnected && (!filterRevolverStatus.homed || !filterRevolverStatus.motion_platform_homed)">
-      A szűrőváltó a mozgásplatform homingja után vezérelhető.
+    <p class="filter-revolver-note" *ngIf="isConnected && !filterRevolverStatus.homed">
+      A szűrőváltó a saját nullázása után vezérelhető.
     </p>
   </section>
 </div>

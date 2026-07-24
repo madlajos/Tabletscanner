@@ -44,6 +44,16 @@ class VirtualOctopusTests(unittest.TestCase):
             motioncontrols.get_toolhead_position(device),
         )
 
+    def test_circular_a_axis_is_not_clamped_at_zero_or_360_degrees(self):
+        device = VirtualOctopusSerial()
+
+        porthandler.write_and_wait(device, 'G91')
+        porthandler.write_and_wait(device, 'G1 A420 F5400')
+        self.assertEqual(420.0, device._position['A'])
+
+        porthandler.write_and_wait(device, 'G1 A-840 F5400')
+        self.assertEqual(-420.0, device._position['A'])
+
     def test_homing_and_light_commands_are_acknowledged(self):
         device = VirtualOctopusSerial()
         motioncontrols.move_to_position(device, x_pos=10, y_pos=20, z_pos=5)
@@ -66,6 +76,23 @@ class VirtualOctopusTests(unittest.TestCase):
 
         with self.assertRaises(OSError):
             porthandler.write_and_wait(device, 'M105')
+
+    def test_failure_marker_ends_acknowledgement_wait(self):
+        class RejectedCommandSerial(VirtualOctopusSerial):
+            def _execute(self, command):
+                return b'echo:Homing Failed\n'
+
+        device = RejectedCommandSerial()
+
+        acknowledged, reply = porthandler.write_and_wait(
+            device,
+            'G28 A',
+            timeout=10.0,
+            failure_markers=(b'homing failed',),
+        )
+
+        self.assertFalse(acknowledged)
+        self.assertIn(b'Homing Failed', reply)
 
     def test_firmware_interlock_clears_other_outputs_before_nonzero_m106(self):
         device = VirtualOctopusSerial()

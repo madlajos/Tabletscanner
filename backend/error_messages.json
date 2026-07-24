@@ -2,6 +2,8 @@
   "E1401": "Hiányzó lámpabeállítások a lámpa felkapcsolásához",
   "E1111": "Kamera csatlakozási hiba",
   "E1201": "Asztalvezérlő csatlakozási hiba",
+  "E1202": "A tengely nullázása sikertelen. Ellenőrizze a végállás- vagy Hall-szenzort.",
+  "E1203": "A tengely nullázása túllépte a megengedett időt.",
   "E1311": "Kamera profil (.pfs) betöltése sikertelen",
   "E1312": "Beállítás fájl (.tss) betöltése sikertelen",
   "E2000": "Hiányzó tabletta",

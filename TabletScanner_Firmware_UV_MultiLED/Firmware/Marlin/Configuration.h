@@ -1550,7 +1550,9 @@
   #define MIN_SOFTWARE_ENDSTOP_X
   #define MIN_SOFTWARE_ENDSTOP_Y
   #define MIN_SOFTWARE_ENDSTOP_Z
-  #define MIN_SOFTWARE_ENDSTOP_I
+  // The filter revolver is circular. Its A/I coordinate is normalized by the
+  // host, but firmware must never clip a physical move at the 0-degree seam.
+  //#define MIN_SOFTWARE_ENDSTOP_I
   #define MIN_SOFTWARE_ENDSTOP_J
   #define MIN_SOFTWARE_ENDSTOP_K
   #define MIN_SOFTWARE_ENDSTOP_U
@@ -1564,7 +1566,7 @@
   #define MAX_SOFTWARE_ENDSTOP_X
   #define MAX_SOFTWARE_ENDSTOP_Y
   #define MAX_SOFTWARE_ENDSTOP_Z
-  #define MAX_SOFTWARE_ENDSTOP_I
+  //#define MAX_SOFTWARE_ENDSTOP_I
   #define MAX_SOFTWARE_ENDSTOP_J
   #define MAX_SOFTWARE_ENDSTOP_K
   #define MAX_SOFTWARE_ENDSTOP_U
@@ -1903,7 +1905,7 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { (50*60), (50*60), (4*60), (30*60) }  // X, Y, Z, I (rotational °/min)
+#define HOMING_FEEDRATE_MM_M { (50*60), (50*60), (4*60), (90*60) }  // X, Y, Z, I (rotational °/min)
 
 //#define QUICK_HOME                          // If G28 contains XY do a diagonal move first
 #define HOME_Y_BEFORE_X                     // If G28 contains XY home Y before X

@@ -227,6 +227,10 @@
   justify-content: center;
 }
 
+.home-button-wrapper {
+  display: flex;
+}
+
 .home-button {
   @extend %button-base;
   flex-direction: column;
@@ -288,6 +292,36 @@
 
     &:hover:not(:disabled) {
       background-color: #0d5a99;
+    }
+  }
+}
+
+.home-context-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  min-width: 210px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid #666;
+  border-radius: 5px;
+  background: #333;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+
+  button {
+    border: 0;
+    border-radius: 3px;
+    padding: 8px 10px;
+    background: transparent;
+    color: #fff;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      background: var(--main-blue, #224477);
+      outline: 1px solid #8bb8e8;
     }
   }
 }

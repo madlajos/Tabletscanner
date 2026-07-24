@@ -9,6 +9,25 @@ log = logging.getLogger(__name__)
 
 _POS_RE = re.compile(r'X:\s*(-?\d+(?:\.\d+)?)\s+Y:\s*(-?\d+(?:\.\d+)?)\s+Z:\s*(-?\d+(?:\.\d+)?)', re.I)
 
+A_AXIS_HOMING_TIMEOUT_SECONDS = 60.0
+DEFAULT_HOMING_TIMEOUT_SECONDS = 30.0
+
+
+class HomingError(RuntimeError):
+    def __init__(self, axis: str, timeout: float, reply: bytes):
+        self.axis = axis
+        self.timeout = timeout
+        self.reply = reply
+        super().__init__(f'{axis} axis homing failed.')
+
+
+class HomingRejectedError(HomingError):
+    pass
+
+
+class HomingTimeoutError(HomingError):
+    pass
+
 
 class Printer:
     def __init__(self, port):
@@ -24,15 +43,28 @@ def home_axes(motion_platform, *axes):
 
     axes_str = " ".join(axes)
     command = f"G28 {axes_str}"
+    timeout_seconds = (
+        A_AXIS_HOMING_TIMEOUT_SECONDS
+        if axes == ['A']
+        else DEFAULT_HOMING_TIMEOUT_SECONDS
+    )
 
     try:
         # Hold the shared serial lock until Marlin acknowledges completion so
         # no status probe or second motion command can interleave with G28.
-        return porthandler.write_and_wait_motion(
+        acknowledged, reply = porthandler.write_and_wait(
             motion_platform,
             command,
-            timeout=30.0,
+            timeout=timeout_seconds,
+            failure_markers=(b'homing failed', b'error:'),
         )
+        if acknowledged:
+            return True
+        if b'homing failed' in reply.lower() or b'error:' in reply.lower():
+            raise HomingRejectedError(axes_str, timeout_seconds, reply)
+        raise HomingTimeoutError(axes_str, timeout_seconds, reply)
+    except HomingError:
+        raise
     except (OSError, PermissionError):
         raise  # let caller handle USB disconnect
     except Exception as e:
