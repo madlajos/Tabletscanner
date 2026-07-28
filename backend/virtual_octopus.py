@@ -93,7 +93,7 @@ class VirtualOctopusSerial:
 
         if code == 'M115':
             return (
-                b'FIRMWARE_NAME:Marlin TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK '
+                b'FIRMWARE_NAME:Marlin TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME '
                 b'MACHINE_TYPE:Tablet Scanner BTT Octopus V1.1\nok\n'
             )
         if code == 'M105':
@@ -108,7 +108,12 @@ class VirtualOctopusSerial:
         elif code == 'G28':
             axes = [axis for axis in ('X', 'Y', 'Z', 'A') if re.search(rf'(?:^|\s){axis}(?:\s|$)', upper)]
             for axis in axes or ('X', 'Y', 'Z'):
-                self._position[axis] = 0.0
+                # X/Z home to their native minimum and Y homes to its native
+                # maximum. Each uses a 2 mm post-home backoff.
+                if axis == 'Y':
+                    self._position[axis] = self._limits[axis][1] - 2.0
+                else:
+                    self._position[axis] = 2.0 if axis in ('X', 'Z') else 0.0
         elif code in ('G0', 'G1'):
             for axis, raw_value in _AXIS_VALUE_RE.findall(upper):
                 value = float(raw_value)

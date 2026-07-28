@@ -48,6 +48,7 @@
             <th class="wavelength-column">Fény</th>
             <th class="filter-column">Szűrő</th>
             <th class="exposure-column">Záridő</th>
+            <th class="gain-column">Erősítés</th>
             <th class="gamma-column">Gamma</th>
             <th class="action-column" aria-label="Műveletek"></th>
           </tr>
@@ -55,12 +56,16 @@
         <tbody>
           <tr *ngFor="let row of capturePlan; let index = index; trackBy: trackCapturePlanRow">
             <td class="wavelength-column">
-              <select [(ngModel)]="row.wavelength" (change)="onCapturePlanChanged()" [disabled]="measurementActive">
+              <select [(ngModel)]="row.wavelength" (change)="onCapturePlanChanged()"
+                [disabled]="measurementActive || index === 0"
+                [attr.aria-label]="index === 0 ? 'Autofókusz referenciafény: VIS' : 'Mérési fény'">
                 <option *ngFor="let wavelength of wavelengthOptions" [ngValue]="wavelength">{{ lightLabels[wavelength] }}</option>
               </select>
             </td>
             <td class="filter-column">
-              <select [(ngModel)]="row.filter_position" (change)="onCapturePlanChanged()" [disabled]="measurementActive">
+              <select [(ngModel)]="row.filter_position" (change)="onCapturePlanChanged()"
+                [disabled]="measurementActive || index === 0"
+                [attr.aria-label]="index === 0 ? 'Autofókusz referenciaszűrő: üres' : 'Mérési szűrő'">
                 <option *ngFor="let filter of filterOptions" [ngValue]="filter">{{ getFilterSlotLabel(filter) }}</option>
               </select>
             </td>
@@ -77,6 +82,17 @@
                 aria-label="Záridő mikroszekundumban" />
                 <span class="input-unit" aria-hidden="true">µs</span>
               </div>
+            </td>
+            <td class="gain-column">
+              <input type="text" inputmode="decimal" [ngModel]="row.gain_text"
+                (ngModelChange)="onCaptureNumberInput(row, 'gain', $event)"
+                (keydown)="blockInvalidNumberKey($event)"
+                (paste)="blockInvalidNumberPaste($event)"
+                (blur)="onGainBlur(row)"
+                [class.invalid]="!isGainValid(row)"
+                [disabled]="measurementActive"
+                [title]="gainRange ? gainRange.min + '–' + gainRange.max + (gainRange.inc > 0 ? ', lépés: ' + gainRange.inc : ', folyamatos') : 'Nemnegatív szám'"
+                aria-label="Erősítés" />
             </td>
             <td class="gamma-column">
               <input type="text" inputmode="decimal" [ngModel]="row.gamma_text"

@@ -23,7 +23,7 @@ def get_base_path():
     return os.path.dirname(__file__)
 
 DEFAULT_SETTINGS_PATH = os.path.join(get_base_path(), 'settings.json')
-SETTINGS_SCHEMA_VERSION = 4
+SETTINGS_SCHEMA_VERSION = 7
 UV_LAMP_CHANNELS = ('uv255', 'uv310', 'uv365')
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 FILTER_POSITIONS = (1, 2, 3, 4, 5, 6)
@@ -46,7 +46,21 @@ LAMP_SETTING_FIELDS = (
     'full_timeout_seconds',
 )
 DEFAULT_CAPTURE_EXPOSURE_TIME = 100000.0
+DEFAULT_CAPTURE_GAIN = 0.0
 DEFAULT_CAPTURE_GAMMA = 1.0
+DEFAULT_FIRST_TABLET_X_MM = 2.9
+DEFAULT_FIRST_TABLET_Y_MM = 10.6
+DEFAULT_FIRST_TABLET_Z_MM = 20.0
+DEFAULT_TABLET_SPACING_MM = 18.3
+DEFAULT_CAMERA_IMAGE_WIDTH = 4000
+DEFAULT_CAMERA_IMAGE_HEIGHT = 4000
+TRAY_GRID_SIZE = 10
+XY_TRAVEL_MAX_MM = 175.0
+Z_TRAVEL_MAX_MM = 30.0
+# The existing calibrated tray reaches Y=175.3 mm. Motion commands are still
+# clamped to 175 mm; retain this sub-millimetre edge allowance so migration
+# doesn't invalidate installations using the established 10.6/18.3 geometry.
+TRAY_EDGE_CALIBRATION_TOLERANCE_MM = 0.5
 
 
 def _finite_number(value, default):
@@ -103,6 +117,7 @@ def validate_capture_plan(value):
         wavelength = row.get('wavelength')
         filter_position = row.get('filter_position')
         exposure_time = _finite_number(row.get('exposure_time'), None)
+        gain = _finite_number(row.get('gain'), None)
         gamma = _finite_number(row.get('gamma'), None)
         if wavelength not in LIGHT_CHANNELS:
             raise ValueError('Capture plan contains an unknown wavelength.')
@@ -110,14 +125,21 @@ def validate_capture_plan(value):
             raise ValueError('Capture plan filter position must be an integer from 1 to 6.')
         if exposure_time is None or exposure_time <= 0:
             raise ValueError('Capture plan exposure time must be a positive finite number.')
+        if gain is None or gain < 0:
+            raise ValueError('Capture plan gain must be a non-negative finite number.')
         if gamma is None or gamma <= 0:
             raise ValueError('Capture plan gamma must be a positive finite number.')
         normalized_rows.append({
             'wavelength': wavelength,
             'filter_position': filter_position,
             'exposure_time': exposure_time,
+            'gain': gain,
             'gamma': gamma,
         })
+    # Row 1 is the fixed autofocus reference. Normalize older/direct API
+    # payloads so the persisted and runtime plan cannot bypass the UI lock.
+    normalized_rows[0]['wavelength'] = 'vis'
+    normalized_rows[0]['filter_position'] = 1
     return normalized_rows
 
 
@@ -186,6 +208,8 @@ def validate_filter_settings(
         if slot is not None and (not isinstance(slot, str) or slot not in ids):
             raise ValueError('Each selected slot must reference a configured filter.')
         normalized_slots.append(slot)
+    # Slot 1 is the physical no-filter position used by autofocus.
+    normalized_slots[0] = None
     return {'filters': normalized_filters, 'slots': normalized_slots}
 
 
@@ -213,11 +237,15 @@ def validate_lamp_output_selectors(payload):
 
 
 def validate_motion_simulation_settings(payload):
-    """Validate the advanced motion and filter-height preferences."""
+    """Validate advanced motion, tray geometry, and filter-height preferences."""
     required_fields = {
         'use_virtual_com_port',
         'max_height_offset_up_mm',
         'max_height_offset_down_mm',
+        'first_tablet_x_mm',
+        'first_tablet_y_mm',
+        'first_tablet_z_mm',
+        'tablet_spacing_mm',
     }
     if not isinstance(payload, dict) or set(payload) != required_fields:
         raise ValueError('Advanced motion settings contain missing or unknown fields.')
@@ -230,10 +258,31 @@ def validate_motion_simulation_settings(payload):
         raise ValueError('Maximum upward height offset must be a positive number.')
     if max_down is None or max_down >= 0:
         raise ValueError('Maximum downward height offset must be a negative number.')
+    first_x = _finite_number(payload['first_tablet_x_mm'], None)
+    first_y = _finite_number(payload['first_tablet_y_mm'], None)
+    first_z = _finite_number(payload['first_tablet_z_mm'], None)
+    spacing = _finite_number(payload['tablet_spacing_mm'], None)
+    if first_x is None or not 0 <= first_x <= XY_TRAVEL_MAX_MM:
+        raise ValueError('First tablet X must be between 0 and 175 mm.')
+    if first_y is None or not 0 <= first_y <= XY_TRAVEL_MAX_MM:
+        raise ValueError('First tablet Y must be between 0 and 175 mm.')
+    if first_z is None or not 0 <= first_z <= Z_TRAVEL_MAX_MM:
+        raise ValueError('First tablet Z must be between 0 and 30 mm.')
+    if spacing is None or spacing <= 0:
+        raise ValueError('Tablet spacing must be a positive number.')
+    last_x = first_x + (TRAY_GRID_SIZE - 1) * spacing
+    last_y = first_y + (TRAY_GRID_SIZE - 1) * spacing
+    tray_limit = XY_TRAVEL_MAX_MM + TRAY_EDGE_CALIBRATION_TOLERANCE_MM
+    if last_x > tray_limit or last_y > tray_limit:
+        raise ValueError('The 10 x 10 tray coordinates must stay within the X/Y travel limits.')
     return {
         'use_virtual_com_port': enabled,
         'max_height_offset_up_mm': max_up,
         'max_height_offset_down_mm': max_down,
+        'first_tablet_x_mm': first_x,
+        'first_tablet_y_mm': first_y,
+        'first_tablet_z_mm': first_z,
+        'tablet_spacing_mm': spacing,
     }
 
 
@@ -288,6 +337,7 @@ def migrate_settings(settings):
 
         migrated['camera_params'] = {
             'ExposureTime': _finite_number(camera_source.get('ExposureTime'), 100000.0),
+            'Gain': _finite_number(camera_source.get('Gain'), DEFAULT_CAPTURE_GAIN),
             'Gamma': _finite_number(camera_source.get('Gamma'), 1.0),
         }
         migrated.pop('camera_params_dome', None)
@@ -301,12 +351,16 @@ def migrate_settings(settings):
         auto_measurement = migrated.get('auto_measurement_settings')
         if not isinstance(auto_measurement, dict):
             auto_measurement = {}
+        camera_params = migrated.get('camera_params', {})
         auto_measurement.setdefault('capture_plan', [
             {
                 'wavelength': 'vis',
                 'filter_position': 1,
-                'exposure_time': DEFAULT_CAPTURE_EXPOSURE_TIME,
-                'gamma': DEFAULT_CAPTURE_GAMMA,
+                'exposure_time': _finite_number(
+                    camera_params.get('ExposureTime'), DEFAULT_CAPTURE_EXPOSURE_TIME
+                ),
+                'gain': _finite_number(camera_params.get('Gain'), DEFAULT_CAPTURE_GAIN),
+                'gamma': _finite_number(camera_params.get('Gamma'), DEFAULT_CAPTURE_GAMMA),
             }
         ])
         migrated['auto_measurement_settings'] = auto_measurement
@@ -337,6 +391,79 @@ def migrate_settings(settings):
         auto_measurement['capture_plan'] = enriched_plan
         migrated['auto_measurement_settings'] = auto_measurement
 
+    if current_version < 5:
+        advanced_settings = migrated.get('advanced_settings')
+        if not isinstance(advanced_settings, dict):
+            advanced_settings = {}
+        auto_measurement = migrated.get('auto_measurement_settings')
+        if not isinstance(auto_measurement, dict):
+            auto_measurement = {}
+        advanced_settings.setdefault(
+            'first_tablet_x_mm',
+            _finite_number(auto_measurement.pop('first_tablet_x', None), DEFAULT_FIRST_TABLET_X_MM),
+        )
+        advanced_settings.setdefault(
+            'first_tablet_y_mm',
+            _finite_number(auto_measurement.pop('first_tablet_y', None), DEFAULT_FIRST_TABLET_Y_MM),
+        )
+        advanced_settings.setdefault(
+            'first_tablet_z_mm',
+            _finite_number(auto_measurement.pop('first_tablet_z', None), DEFAULT_FIRST_TABLET_Z_MM),
+        )
+        advanced_settings.setdefault(
+            'tablet_spacing_mm',
+            _finite_number(auto_measurement.pop('tablet_spacing', None), DEFAULT_TABLET_SPACING_MM),
+        )
+        migrated['advanced_settings'] = advanced_settings
+        migrated['auto_measurement_settings'] = auto_measurement
+
+    if current_version < 6:
+        camera_params = migrated.get('camera_params')
+        if not isinstance(camera_params, dict):
+            camera_params = {}
+        migrated['camera_image_settings'] = {
+            'override_enabled': False,
+            'width': int(_finite_number(camera_params.pop('Width', None), DEFAULT_CAMERA_IMAGE_WIDTH)),
+            'height': int(_finite_number(camera_params.pop('Height', None), DEFAULT_CAMERA_IMAGE_HEIGHT)),
+            'offset_x': int(_finite_number(camera_params.pop('OffsetX', None), 0)),
+            'offset_y': int(_finite_number(camera_params.pop('OffsetY', None), 0)),
+        }
+        migrated['camera_params'] = camera_params
+
+    if current_version < 7:
+        camera_params = migrated.get('camera_params')
+        if not isinstance(camera_params, dict):
+            camera_params = {}
+        default_gain = _finite_number(camera_params.get('Gain'), DEFAULT_CAPTURE_GAIN)
+        camera_params['Gain'] = default_gain
+        migrated['camera_params'] = camera_params
+
+        auto_measurement = migrated.get('auto_measurement_settings')
+        if not isinstance(auto_measurement, dict):
+            auto_measurement = {}
+        capture_plan = auto_measurement.get('capture_plan')
+        if not isinstance(capture_plan, list) or not capture_plan:
+            capture_plan = [{
+                'wavelength': 'vis',
+                'filter_position': 1,
+                'exposure_time': _finite_number(
+                    camera_params.get('ExposureTime'), DEFAULT_CAPTURE_EXPOSURE_TIME
+                ),
+                'gamma': _finite_number(
+                    camera_params.get('Gamma'), DEFAULT_CAPTURE_GAMMA
+                ),
+            }]
+        enriched_plan = []
+        for row in capture_plan:
+            if not isinstance(row, dict):
+                enriched_plan.append(row)
+                continue
+            enriched_row = copy.deepcopy(row)
+            enriched_row.setdefault('gain', default_gain)
+            enriched_plan.append(enriched_row)
+        auto_measurement['capture_plan'] = enriched_plan
+        migrated['auto_measurement_settings'] = auto_measurement
+
     lamp_settings = migrated.get('lamp_settings')
     if not isinstance(lamp_settings, dict):
         lamp_settings = {}
@@ -344,7 +471,7 @@ def migrate_settings(settings):
     if not isinstance(channels, dict):
         channels = {}
     lamp_settings['channels'] = channels
-    if current_version < 3:
+    if current_version < 3 or lamp_settings.get('output_selectors') != OCTOPUS_LIGHT_OUTPUT_SELECTORS:
         lamp_settings['output_selectors'] = copy.deepcopy(OCTOPUS_LIGHT_OUTPUT_SELECTORS)
     migrated['lamp_settings'] = lamp_settings
     migrated['settings_schema_version'] = SETTINGS_SCHEMA_VERSION

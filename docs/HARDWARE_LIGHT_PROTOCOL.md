@@ -14,7 +14,7 @@ enabled, confirmed acknowledged explicit-off commands for `M106 P0 S0` through
 the physical header mapping until the revised firmware is compiled and flashed.
 
 The release firmware now embeds the mapping-specific `M115` marker
-`TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK`. Real-device discovery rejects firmware
+`TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME`. Real-device discovery rejects firmware
 without this exact marker so an older selector order cannot drive the lamps.
 
 The software controls four logical channels: `uv255`, `uv310`, `uv365`, and
@@ -43,9 +43,9 @@ cd TabletScanner_Firmware_UV_MultiLED/Firmware
 python -m platformio run -e STM32F446ZE_btt
 ```
 
-The generated, unflashed binary was rebuilt on 2026-07-24 with the faster A-axis homing profile:
+The generated, unflashed binary was rebuilt on 2026-07-28 with recoverable homing failures:
 `.pio/build/STM32F446ZE_btt/firmware.bin` (SHA-256
-`92316A34D4DC3E203A132A0E88CA5EE237722DB9C5DCF394C77FACFA6DCFB3E3`).
+`270597C4EC6E81492E2595B69202F95C2F1D1CCA8427A0E968614F0415119504`).
 The successful build does not prove
 physical output routing; verify it with a multimeter before connecting lamps.
 
@@ -80,6 +80,11 @@ disconnect, and shutdown attempts an all-off command.
 4. Configure UV brightness and timeout values before enabling UV lamps.
 5. Test dimmed and full UV timeout behavior one channel at a time.
 6. Verify all-off on application exit and controller disconnect.
+7. With the selected axis motor disconnected before power-on, issue its `G28`, verify
+   `Error:Homing failed`, then verify `M105` is acknowledged without resetting the board.
+8. Guard the emergency stop and home Y once. Verify the CoreXY carriage travels toward the same
+   physical sensor as before, the application reports `Y:2` after backoff, and a small positive-Y
+   jog moves away from that sensor.
 
 ## Filter revolver protocol
 
@@ -87,7 +92,16 @@ Marlin exposes its internal fourth `I` axis as the operator-facing `A` axis. The
 Hall-sensor endstop homes with `G28 A`; the six positions are 60° apart in the configured
 0–360° range. A-axis homing uses 90°/s (5400°/min), with a 60-second backend timeout and a
 70-second frontend request timeout. Marlin's explicit `Homing Failed` response terminates the
-request immediately without treating the controller as disconnected. The Motor 6 DIAG jumper
+request immediately without treating the controller as disconnected. The `-RHOME` firmware
+retains endstop validation but replaces Marlin's fatal `kill()` path for a missed endstop:
+the failed axis remains unhomed, `G28` returns to the command loop, and other serial commands
+remain available. Retrying motion on that axis still requires a successful homing operation.
+Marlin retains the proven CoreXY motor mixing and max-homed native Y configuration. The backend
+maps operator coordinates with `logical Y = 175 - native Y` for position reports, absolute
+moves, and relative moves. Thus native `Y:173` after the 2 mm homing backoff is shown as
+operator `Y:2`, and positive operator Y moves away from the home sensor without changing
+CoreXY motor directions or the Zâ†’Yâ†’X homing sequence.
+The Motor 6 DIAG jumper
 must be removed because the external Hall sensor uses `DIAG6/E2DET` and sensorless homing is
 disabled. After the fine Hall-sensor trigger, the circular-axis firmware continues 90° in the
 homing direction—30° past the trigger plus the observed 60° slot-6-to-slot-1 step—to establish the slot-one

@@ -10,11 +10,13 @@ import {
   TabletStepRequest
 } from '../../services/auto-measurement.service';
 import { FilterSettingsService } from '../../services/filter-settings.service';
+import { MotionSettingsService } from '../../services/motion-settings.service';
 import { FilterSettings } from '../../models/filter-settings.models';
 import { SharedService } from '../../shared.service';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { BASE_URL } from '../../api-config';
 import { CapturePlanRow, CaptureRequestRow, LightChannel, LIGHT_CHANNEL_LABELS } from '../../models/light.models';
+import { AdvancedMotionSettings } from '../../models/motion.models';
 
 // Type declaration for Electron API (exposed via preload.js)
 declare global {
@@ -78,10 +80,12 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   readonly filterOptions = [1, 2, 3, 4, 5, 6] as const;
   readonly lightLabels = LIGHT_CHANNEL_LABELS;
   private defaultExposureTime = 100000;
+  private defaultGain = 0;
   private defaultGamma = 1;
   capturePlan: CapturePlanRow[] = [this.createCapturePlanRow('vis', 1)];
   filterSettings: FilterSettings = { filters: [], slots: [null, null, null, null, null, null] };
   exposureRange?: CameraParameterRange;
+  gainRange?: CameraParameterRange;
   gammaRange?: CameraParameterRange;
 
   // Save location and measurement name
@@ -89,8 +93,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   measurementName = '';
 
   // First tablet position and spacing (from settings)
-  firstTabletX = 6.0;
-  firstTabletY = 7.0;
+  firstTabletX = 2.9;
+  firstTabletY = 10.6;
   firstTabletZ = 20.0;
   tabletSpacing = 18.3;
 
@@ -144,10 +148,12 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   tabletContextMenuId: number | null = null;
   tabletHomed = false;
   private homedSub?: Subscription;
+  private traySettingsSub?: Subscription;
 
   constructor(
     private autoService: AutoMeasurementService,
     private filterSettingsService: FilterSettingsService,
+    private motionSettingsService: MotionSettingsService,
     private sharedService: SharedService,
     private errorNotificationService: ErrorNotificationService,
     private http: HttpClient
@@ -183,8 +189,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.autoService.getCameraConfig().subscribe({
       next: config => {
         this.defaultExposureTime = config.values.ExposureTime;
+        this.defaultGain = config.values.Gain;
         this.defaultGamma = config.values.Gamma;
         this.exposureRange = config.ranges.ExposureTime;
+        this.gainRange = config.ranges.Gain;
         this.gammaRange = config.ranges.Gamma;
       },
       error: err => console.warn('Failed to load camera parameter ranges:', err)
@@ -195,23 +203,27 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       error: err => console.warn('Failed to load filter settings:', err)
     });
 
+    this.traySettingsSub = this.motionSettingsService.advanced$.subscribe(settings => {
+      if (settings) this.applyTrayGeometry(settings);
+    });
+    this.motionSettingsService.getAdvanced().subscribe({
+      error: err => console.warn('Failed to load tray geometry settings:', err)
+    });
+
     // Load saved settings from backend
     this.autoService.getSettings().subscribe({
       next: (res) => {
         if (res.auto_measurement_settings) {
           const settings = res.auto_measurement_settings;
           this.saveLocation = normalizePath(settings.save_location || '');
-          this.firstTabletX = settings.first_tablet_x ?? 2.9;
-          this.firstTabletY = settings.first_tablet_y ?? 10.6;
-          this.firstTabletZ = settings.first_tablet_z ?? 20.0;
-          this.tabletSpacing = settings.tablet_spacing ?? 18.3;
           if (Array.isArray(settings.capture_plan) && settings.capture_plan.length > 0) {
             this.capturePlan = settings.capture_plan
               .filter(row => this.isValidCaptureRequestRow(row))
-              .map(row => this.createCapturePlanRow(
-                row.wavelength,
-                row.filter_position,
+              .map((row, index) => this.createCapturePlanRow(
+                index === 0 ? 'vis' : row.wavelength,
+                index === 0 ? 1 : row.filter_position,
                 row.exposure_time,
+                row.gain,
                 row.gamma
               ));
           }
@@ -234,6 +246,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.homedSub?.unsubscribe();
     this.autofocusErrorSub?.unsubscribe();
     this.autofocusActiveSub?.unsubscribe();
+    this.traySettingsSub?.unsubscribe();
     
     // Ensure measurement is marked inactive on destroy
     if (this.measurementActive) {
@@ -272,7 +285,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       return 'Adjon hozzá legalább egy mérési sort.';
     }
     if (this.capturePlan.some(row => !this.isCapturePlanRowValid(row))) {
-      return 'Adjon meg érvényes záridő- és gammaértéket minden mérési sorban.';
+      return 'Adjon meg érvényes záridő-, erősítés- és gammaértéket minden mérési sorban.';
     }
     if (this.selectedSignal().size === 0) {
       return 'Válasszon legalább egy tablettát.';
@@ -310,6 +323,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       previous?.wavelength ?? 'vis',
       previous?.filter_position ?? 1,
       previous?.exposure_time ?? this.defaultExposureTime,
+      previous?.gain ?? this.defaultGain,
       previous?.gamma ?? this.defaultGamma
     ));
     this.persistCapturePlan();
@@ -325,6 +339,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   onCapturePlanChanged(): void {
     if (!this.measurementActive) {
+      this.enforceAutofocusReferenceRow();
       this.persistCapturePlan();
     }
   }
@@ -337,6 +352,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     wavelength: LightChannel,
     filterPosition: number,
     exposureTime = this.defaultExposureTime,
+    gain = this.defaultGain,
     gamma = this.defaultGamma
   ): CapturePlanRow {
     return {
@@ -346,8 +362,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         ? filterPosition as 1 | 2 | 3 | 4 | 5 | 6
         : 1,
       exposure_time: exposureTime,
+      gain,
       gamma,
       exposure_time_text: this.formatExposureText(String(exposureTime)),
+      gain_text: gain.toString(),
       gamma_text: gamma.toFixed(1)
     };
   }
@@ -358,18 +376,27 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     return this.wavelengthOptions.includes(candidate.wavelength)
       && this.filterOptions.includes(candidate.filter_position as 1 | 2 | 3 | 4 | 5 | 6)
       && this.isFinitePositive(candidate.exposure_time)
+      && this.isFiniteNonNegative(candidate.gain)
       && this.isFinitePositive(candidate.gamma);
   }
 
   private persistCapturePlan(): void {
+    this.enforceAutofocusReferenceRow();
     if (!this.capturePlan.every(row => this.isCapturePlanRowValid(row))) return;
     const capturePlan = this.capturePlan.map(
-      ({ wavelength, filter_position, exposure_time, gamma }) =>
-        ({ wavelength, filter_position, exposure_time, gamma })
+      ({ wavelength, filter_position, exposure_time, gain, gamma }) =>
+        ({ wavelength, filter_position, exposure_time, gain, gamma })
     );
     this.autoService.updateSettings('capture_plan', capturePlan).subscribe({
       error: err => console.warn('Failed to save capture plan:', err)
     });
+  }
+
+  private enforceAutofocusReferenceRow(): void {
+    const firstRow = this.capturePlan[0];
+    if (!firstRow) return;
+    firstRow.wavelength = 'vis';
+    firstRow.filter_position = 1;
   }
 
   getFilterSlotLabel(position: number): string {
@@ -390,8 +417,18 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   onGammaBlur(row: CapturePlanRow): void {
     if (this.isGammaValid(row)) {
-      row.gamma = Math.round(this.parseDecimal(row.gamma_text)! * 10) / 10;
-      row.gamma_text = row.gamma.toFixed(1);
+      row.gamma = this.parseDecimal(row.gamma_text)!;
+      row.gamma_text = String(row.gamma);
+    }
+    if (this.isCapturePlanRowValid(row)) {
+      this.persistCapturePlan();
+    }
+  }
+
+  onGainBlur(row: CapturePlanRow): void {
+    if (this.isGainValid(row)) {
+      row.gain = this.parseDecimal(row.gain_text)!;
+      row.gain_text = String(row.gain);
     }
     if (this.isCapturePlanRowValid(row)) {
       this.persistCapturePlan();
@@ -400,7 +437,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   onCaptureNumberInput(
     row: CapturePlanRow,
-    field: 'exposure_time' | 'gamma',
+    field: 'exposure_time' | 'gain' | 'gamma',
     value: string
   ): void {
     if (field === 'exposure_time') {
@@ -409,6 +446,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       row.exposure_time_text = this.formatExposureText(ungroupedValue);
       const parsed = this.parseDecimal(ungroupedValue);
       if (parsed !== null) row.exposure_time = parsed;
+    } else if (field === 'gain') {
+      if (!/^\d*(?:[.,]\d*)?$/.test(value)) return;
+      row.gain_text = value;
+      const parsed = this.parseDecimal(value);
+      if (parsed !== null) row.gain = parsed;
     } else {
       if (!/^\d*(?:[.,]\d*)?$/.test(value)) return;
       row.gamma_text = value;
@@ -446,7 +488,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   isCapturePlanRowValid(row: CapturePlanRow): boolean {
-    return this.isExposureValid(row) && this.isGammaValid(row);
+    return this.isExposureValid(row) && this.isGainValid(row) && this.isGammaValid(row);
   }
 
   isExposureValid(row: CapturePlanRow): boolean {
@@ -455,6 +497,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   isGammaValid(row: CapturePlanRow): boolean {
     return this.isValueInRange(this.parseDecimal(row.gamma_text), this.gammaRange);
+  }
+
+  isGainValid(row: CapturePlanRow): boolean {
+    return this.isValueInRange(this.parseDecimal(row.gain_text), this.gainRange, true);
   }
 
   private parseDecimal(value: string): number | null {
@@ -471,14 +517,28 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     return integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + decimalPart;
   }
 
-  private isValueInRange(value: unknown, range?: CameraParameterRange): boolean {
-    if (!this.isFinitePositive(value)) return false;
+  private isValueInRange(
+    value: unknown,
+    range?: CameraParameterRange,
+    allowZero = false
+  ): boolean {
+    if (!(allowZero ? this.isFiniteNonNegative(value) : this.isFinitePositive(value))) return false;
     const numericValue = Number(value);
-    return !range || (numericValue >= range.min && numericValue <= range.max);
+    if (!range) return true;
+    if (numericValue < range.min || numericValue > range.max) return false;
+    const increment = range.inc || 0;
+    if (increment <= 0) return true;
+    const steps = Math.round((numericValue - range.min) / increment);
+    const accepted = range.min + steps * increment;
+    return Math.abs(accepted - numericValue) <= 1e-6;
   }
 
   private isFinitePositive(value: unknown): boolean {
     return typeof value === 'number' && Number.isFinite(value) && value > 0;
+  }
+
+  private isFiniteNonNegative(value: unknown): boolean {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
   }
 
   // Get info message to show when button is enabled
@@ -861,7 +921,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     // Signal motion-control component that homing is in progress
     this.sharedService.setMotionHoming(true);
 
-    const axesOrder: Array<'z' | 'y' | 'x'> = ['z', 'y', 'x']; // match manual home order
+    const axesOrder: Array<'z' | 'y' | 'x' | 'a'> = ['z', 'y', 'x', 'a'];
 
     const homing$ = from(axesOrder).pipe(
       concatMap((axis) => this.http.post(`${BASE_URL}/home_toolhead`, { axes: [axis] })),
@@ -875,7 +935,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
     this.homingSubscription = homing$.subscribe({
       next: (position) => {
-        console.log('Motion platform homed successfully (Z→Y→X). Position:', position);
+        console.log('Motion platform and filter revolver homed successfully (Z→Y→X→A). Position:', position);
         this.validationMessage = null;
         
         // Update motion position and homed state via SharedService
@@ -980,12 +1040,13 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       tablet_index: tabletId,
       x: position.x,
       y: position.y,
+      z: this.firstTabletZ,
       measurement_folder: this.measurementFolder,
       measurement_name: this.measurementName.trim(),
       autofocus: this.autofocus,
       capture_plan: this.capturePlan.map(
-        ({ wavelength, filter_position, exposure_time, gamma }) =>
-          ({ wavelength, filter_position, exposure_time, gamma })
+        ({ wavelength, filter_position, exposure_time, gain, gamma }) =>
+          ({ wavelength, filter_position, exposure_time, gain, gamma })
       ),
       is_first_tablet: isFirstTablet,
       background_subtraction: this.backgroundSubtraction
@@ -1074,6 +1135,13 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         this.finishMeasurement(false);
       }
     });
+  }
+
+  private applyTrayGeometry(settings: AdvancedMotionSettings): void {
+    this.firstTabletX = settings.first_tablet_x_mm;
+    this.firstTabletY = settings.first_tablet_y_mm;
+    this.firstTabletZ = settings.first_tablet_z_mm;
+    this.tabletSpacing = settings.tablet_spacing_mm;
   }
 
   // ===== Device disconnect detection helpers =====

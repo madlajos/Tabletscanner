@@ -6,8 +6,10 @@ import time
 import globals
 from pypylon import pylon
 from cameracontrol import (apply_camera_settings, 
-                           validate_and_set_camera_param, get_camera_properties, stream_video,
-                           load_camera_profile)
+                           validate_and_set_camera_param, validate_param,
+                           get_camera_properties, stream_video,
+                           load_camera_profile, apply_camera_image_geometry,
+                           center_camera_axis, get_camera_image_geometry)
 import porthandler
 import motioncontrols
 import filter_revolver
@@ -21,6 +23,10 @@ from threading import Lock
 from settings_manager import (
     DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM,
     DEFAULT_MAX_HEIGHT_OFFSET_UP_MM,
+    DEFAULT_FIRST_TABLET_X_MM,
+    DEFAULT_FIRST_TABLET_Y_MM,
+    DEFAULT_FIRST_TABLET_Z_MM,
+    DEFAULT_TABLET_SPACING_MM,
     load_settings,
     save_settings,
     update_lamp_output_selectors,
@@ -64,6 +70,7 @@ import pipeline_validators
 import recipe_manager
 import calibration_manager
 from pipeline_types import PipelineDocument
+from image_metadata import build_capture_metadata
 
 
 app = Flask(__name__)
@@ -101,12 +108,6 @@ latest_frames = None
 
 backend_ready = False
 
-
-
-GRID_SIZE_DEFAULT = 10
-ORIGIN_X_DEFAULT = 20.0
-ORIGIN_Y_DEFAULT = 20.0
-SPACING_DEFAULT = 20.0
 
 
 def _normalize_path(p: str) -> str:
@@ -898,10 +899,24 @@ def get_camera_settings():
         
         settings_data = get_settings()
         camera_settings = settings_data.get('camera_params', {})
+        ranges = {}
+        camera = globals.camera
+        if camera and camera.IsOpen():
+            try:
+                camera_properties = get_camera_properties(camera)
+                globals.camera_properties = camera_properties
+                ranges = {
+                    name: camera_properties[name]
+                    for name in ('ExposureTime', 'Gain', 'Gamma')
+                    if name in camera_properties
+                }
+            except Exception as error:
+                app.logger.warning('Could not query live camera setting ranges: %s', error)
 
         app.logger.info(f"Sending camera settings to frontend")
         return jsonify({
-            "camera_params": camera_settings
+            "camera_params": camera_settings,
+            "ranges": ranges,
         }), 200
 
     except Exception as e:
@@ -914,6 +929,113 @@ def get_camera_settings():
         }), 500
 
 
+def _saved_camera_image_settings():
+    stored = get_settings().get('camera_image_settings', {})
+    return {
+        'override_enabled': bool(stored.get('override_enabled', False)),
+        'width': int(stored.get('width', 4000)),
+        'height': int(stored.get('height', 4000)),
+        'offset_x': int(stored.get('offset_x', 0)),
+        'offset_y': int(stored.get('offset_y', 0)),
+    }
+
+
+@app.route('/api/settings/camera/image-size', methods=['GET', 'PUT'])
+def camera_image_size_settings():
+    camera = globals.camera
+    connected = bool(camera and camera.IsOpen())
+    saved = _saved_camera_image_settings()
+
+    if request.method == 'GET':
+        geometry = None
+        if connected:
+            try:
+                geometry = get_camera_image_geometry(camera)
+            except Exception as error:
+                app.logger.warning('Could not query live camera image geometry: %s', error)
+        return jsonify({
+            'camera_image_settings': saved if saved['override_enabled'] or not geometry else {
+                'override_enabled': False,
+                **geometry['values'],
+            },
+            'limits': geometry['limits'] if geometry else {},
+            'connected': connected,
+        }), 200
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        required = {'override_enabled', 'width', 'height', 'offset_x', 'offset_y'}
+        if set(payload) != required or not isinstance(payload['override_enabled'], bool):
+            raise ValueError('Camera image settings contain missing or unknown fields.')
+        values = {name: payload[name] for name in ('width', 'height', 'offset_x', 'offset_y')}
+        if payload['override_enabled']:
+            if not connected:
+                return jsonify({
+                    'error': 'A kamera képgeometria felülírásához csatlakoztatott kamera szükséges.',
+                    'code': ErrorCode.CAMERA_DISCONNECTED,
+                    'popup': True,
+                }), 503
+            geometry = apply_camera_image_geometry(camera, values)
+            values = geometry['values']
+            limits = geometry['limits']
+        else:
+            # Disabling the override affects future reconnects. It deliberately
+            # does not mutate the current live ROI.
+            for name, value in values.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not float(value).is_integer():
+                    raise ValueError(f'{name} must be an integer.')
+            values = {name: int(value) for name, value in values.items()}
+            geometry = get_camera_image_geometry(camera) if connected else None
+            limits = geometry['limits'] if geometry else {}
+
+        normalized = {'override_enabled': payload['override_enabled'], **values}
+        get_settings()['camera_image_settings'] = normalized
+        if not save_settings():
+            raise OSError('Failed to persist camera image settings.')
+        return jsonify({
+            'camera_image_settings': normalized,
+            'limits': limits,
+            'connected': connected,
+        }), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to update camera image settings')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
+@app.route('/api/settings/camera/image-size/center', methods=['POST'])
+def center_camera_image():
+    try:
+        saved = _saved_camera_image_settings()
+        if not saved['override_enabled']:
+            raise ValueError('Enable camera image-size override before centering.')
+        camera = globals.camera
+        if not camera or not camera.IsOpen():
+            return jsonify({
+                'error': 'A kamera középre igazításához csatlakoztatott kamera szükséges.',
+                'code': ErrorCode.CAMERA_DISCONNECTED,
+                'popup': True,
+            }), 503
+        axis = (request.get_json(silent=True) or {}).get('axis')
+        geometry = center_camera_axis(camera, axis)
+        values = geometry['values']
+        normalized = {'override_enabled': True, **values}
+        get_settings()['camera_image_settings'] = normalized
+        if not save_settings():
+            raise OSError('Failed to persist centered camera image settings.')
+        return jsonify({
+            'camera_image_settings': normalized,
+            'limits': geometry['limits'],
+            'connected': True,
+        }), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to center camera image')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
 @app.route('/api/auto-measurement/camera-config', methods=['GET'])
 def get_auto_measurement_camera_config():
     """Return current values and live Basler limits for per-row capture settings."""
@@ -921,6 +1043,7 @@ def get_auto_measurement_camera_config():
     persisted = settings_data.get('camera_params', {})
     values = {
         'ExposureTime': float(persisted.get('ExposureTime', 100000.0)),
+        'Gain': float(persisted.get('Gain', 0.0)),
         'Gamma': float(persisted.get('Gamma', 1.0)),
     }
     camera = globals.camera
@@ -932,7 +1055,7 @@ def get_auto_measurement_camera_config():
             globals.camera_properties = camera_properties
             ranges = {
                 name: camera_properties[name]
-                for name in ('ExposureTime', 'Gamma')
+                for name in ('ExposureTime', 'Gain', 'Gamma')
                 if name in camera_properties
             }
         except Exception as error:
@@ -945,14 +1068,14 @@ def get_auto_measurement_camera_config():
     
 @app.route('/api/update-camera-settings', methods=['POST'])
 def update_camera_settings():
-    """Update one global persisted camera setting (ExposureTime or Gamma)."""
+    """Update one global persisted exposure, gain, or gamma setting."""
     try:
         data = request.get_json(silent=True) or {}
         setting_name = data.get('setting_name')
         setting_value = data.get('setting_value')
 
-        if setting_name not in ('ExposureTime', 'Gamma'):
-            return jsonify({"error": "Only ExposureTime and Gamma are configurable.", "code": ErrorCode.GENERIC, "popup": True}), 400
+        if setting_name not in ('ExposureTime', 'Gain', 'Gamma'):
+            return jsonify({"error": "Only ExposureTime, Gain, and Gamma are configurable.", "code": ErrorCode.GENERIC, "popup": True}), 400
 
         try:
             numeric_value = float(setting_value)
@@ -970,6 +1093,12 @@ def update_camera_settings():
             if not camera_properties or setting_name not in camera_properties:
                 camera_properties = get_camera_properties(camera)
                 globals.camera_properties = camera_properties
+            if setting_name not in camera_properties:
+                return jsonify({
+                    "error": f"{setting_name} is not supported by the connected camera.",
+                    "code": ErrorCode.GENERIC,
+                    "popup": True,
+                }), 400
             updated_value = validate_and_set_camera_param(camera, setting_name, numeric_value, camera_properties)
 
         settings_data = get_settings()
@@ -1480,7 +1609,7 @@ def _apply_camera_settings_for_light(light: str):
     """Apply the global camera settings used by every illumination channel.
 
     ``light`` is retained only for legacy callers and diagnostics.  Camera
-    exposure and gamma are no longer coupled to the active lamp.
+    Exposure, gain, and gamma are no longer coupled to the active lamp.
     """
     settings_data = get_settings()
     camera = globals.camera
@@ -1507,30 +1636,65 @@ def _apply_camera_settings_for_light(light: str):
             app.logger.warning(f"Could not apply {setting_name} for {light}: {e}")
 
 
+CAPTURE_PLAN_CAMERA_FIELDS = {
+    'exposure_time': 'ExposureTime',
+    'gain': 'Gain',
+    'gamma': 'Gamma',
+}
+
+
+def _validate_capture_plan_camera_values(capture_plan: list[dict]) -> None:
+    """Reject values that the connected camera would need to clamp or round."""
+    camera = globals.camera
+    if not camera or not camera.IsOpen():
+        return
+    camera_properties = globals.camera_properties
+    if not camera_properties or any(
+        name not in camera_properties for name in CAPTURE_PLAN_CAMERA_FIELDS.values()
+    ):
+        camera_properties = get_camera_properties(camera)
+        globals.camera_properties = camera_properties
+    missing = [
+        name for name in CAPTURE_PLAN_CAMERA_FIELDS.values()
+        if name not in camera_properties
+    ]
+    if missing:
+        raise ValueError(
+            f"The connected camera does not support: {', '.join(missing)}."
+        )
+    for row_index, row in enumerate(capture_plan, start=1):
+        for field, camera_name in CAPTURE_PLAN_CAMERA_FIELDS.items():
+            accepted = validate_param(camera_name, row[field], camera_properties)
+            if not math.isclose(accepted, row[field], rel_tol=1e-9, abs_tol=1e-6):
+                limits = camera_properties[camera_name]
+                raise ValueError(
+                    f"Capture plan row {row_index} {field} must match the Basler "
+                    f"range/increment ({limits['min']}..{limits['max']}, "
+                    f"step {limits['inc']})."
+                )
+
+
 def _apply_capture_plan_camera_settings(row: dict) -> dict:
-    """Apply and return the Basler-normalized exposure and gamma for one plan row."""
+    """Apply and return the camera-normalized values for one plan row."""
     camera = globals.camera
     if not camera or not camera.IsOpen():
         raise RuntimeError('Camera is not connected.')
     camera_properties = globals.camera_properties
     if not camera_properties or any(
-        name not in camera_properties for name in ('ExposureTime', 'Gamma')
+        name not in camera_properties for name in CAPTURE_PLAN_CAMERA_FIELDS.values()
     ):
         camera_properties = get_camera_properties(camera)
         globals.camera_properties = camera_properties
+    _validate_capture_plan_camera_values([row])
     applied = {
-        'exposure_time': validate_and_set_camera_param(
-            camera, 'ExposureTime', row['exposure_time'], camera_properties
-        ),
-        'gamma': validate_and_set_camera_param(
-            camera, 'Gamma', row['gamma'], camera_properties
-        ),
+        field: validate_and_set_camera_param(
+            camera, camera_name, row[field], camera_properties
+        )
+        for field, camera_name in CAPTURE_PLAN_CAMERA_FIELDS.items()
     }
-    for field in ('exposure_time', 'gamma'):
+    for field, camera_name in CAPTURE_PLAN_CAMERA_FIELDS.items():
         if not math.isclose(applied[field], row[field], rel_tol=1e-9, abs_tol=1e-6):
-            limits = camera_properties[
-                'ExposureTime' if field == 'exposure_time' else 'Gamma'
-            ]
+            limits = camera_properties[camera_name]
             raise ValueError(
                 f"{field} must match the Basler range/increment "
                 f"({limits['min']}..{limits['max']}, step {limits['inc']})."
@@ -1554,6 +1718,79 @@ def _select_measurement_filter_position(motion_platform, target_position: int) -
             )
     finally:
         globals.motion_busy = False
+
+
+def _live_camera_capture_values() -> dict:
+    """Read the camera values that were actually active for a capture."""
+    camera = globals.camera
+    values = {
+        'exposure_time': None,
+        'gain': None,
+        'gamma': None,
+    }
+    if not camera or not camera.IsOpen():
+        return values
+
+    for metadata_name, camera_name in (
+        ('exposure_time', 'ExposureTime'),
+        ('gain', 'Gain'),
+        ('gamma', 'Gamma'),
+    ):
+        try:
+            values[metadata_name] = getattr(camera, camera_name).GetValue()
+        except Exception as error:
+            app.logger.warning(
+                'Could not read live camera metadata value %s: %s',
+                camera_name, error,
+            )
+    return values
+
+
+def _current_capture_metadata(
+    light_type: str | None,
+    filter_position: int | None = None,
+    requested_metadata: dict | None = None,
+) -> dict:
+    """Snapshot all backend-owned metadata for the image being saved."""
+    if filter_position is None:
+        current_filter_position = getattr(
+            globals, 'filter_revolver_position', None
+        )
+        if isinstance(current_filter_position, int) and not isinstance(
+            current_filter_position, bool
+        ):
+            filter_position = current_filter_position
+
+    return build_capture_metadata(
+        settings=get_settings(),
+        position=dict(getattr(globals, 'last_toolhead_pos', {}) or {}),
+        wavelength=_canonical_light_channel(light_type),
+        filter_position=filter_position,
+        camera_values=_live_camera_capture_values(),
+        requested_metadata=requested_metadata,
+    )
+
+
+def _save_capture_jpeg(
+    image_bgr: np.ndarray,
+    full_path: str,
+    light_type: str | None,
+    filter_position: int | None = None,
+    requested_metadata: dict | None = None,
+) -> dict:
+    """Save a BGR image and embed the complete capture snapshot as JSON EXIF."""
+    metadata = _current_capture_metadata(
+        light_type,
+        filter_position=filter_position,
+        requested_metadata=requested_metadata,
+    )
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(image_rgb)
+    exif_obj = Image.Exif()
+    exif_obj[0x010E] = json.dumps(metadata, ensure_ascii=False)
+    pil_img.save(full_path, format='JPEG', quality=95, exif=exif_obj)
+    return metadata
+
 
 def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False,
                             light_type: str = None, filter_position: int | None = None) -> list:
@@ -1586,49 +1823,12 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     
     full_path = os.path.join(target_folder, f"{filename}.jpg")
     
-    # Convert BGR -> RGB for Pillow
-    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(img_rgb)
-
-    # Build EXIF metadata from settings + live camera values
-    try:
-        settings_data = get_settings()
-        other = settings_data.get('other_settings', {})
-        cam = globals.camera
-        current_exposure = None
-        current_gamma = None
-        if cam and cam.IsOpen():
-            try:
-                current_exposure = cam.ExposureTime.GetValue()
-            except Exception:
-                pass
-            try:
-                current_gamma = cam.Gamma.GetValue()
-            except Exception:
-                pass
-        meta_fields = {
-            'objective': other.get('objective'),
-            'spacer_rings': other.get('spacer_rings'),
-            'camera_settings_file': other.get('camera_settings_file'),
-            'exposure_time': current_exposure,
-            'gamma': current_gamma,
-            'wavelength': _canonical_light_channel(light_type),
-            'filter_position': filter_position,
-        }
-        meta_fields = {k: v for k, v in meta_fields.items() if v is not None}
-        meta_json = json.dumps(meta_fields, ensure_ascii=False) if meta_fields else None
-    except Exception:
-        meta_json = None
-
-    if meta_json:
-        exif_obj = Image.Exif()
-        try:
-            exif_obj[0x010E] = meta_json  # ImageDescription
-        except Exception:
-            pass
-        pil_img.save(full_path, format='JPEG', quality=95, exif=exif_obj)
-    else:
-        pil_img.save(full_path, format='JPEG', quality=95)
+    _save_capture_jpeg(
+        img_cv,
+        full_path,
+        light_type,
+        filter_position=filter_position,
+    )
     
     saved_paths = [full_path]
     
@@ -1842,6 +2042,7 @@ def auto_measurement_step():
         if 'capture_plan' in data:
             try:
                 capture_plan = validate_capture_plan(data['capture_plan'])
+                _validate_capture_plan_camera_values(capture_plan)
             except ValueError as error:
                 return jsonify({'status': 'error', 'message': str(error)}), 400
         is_first_tablet = bool(data.get('is_first_tablet', False))
@@ -1946,13 +2147,15 @@ def auto_measurement_step():
         if should_autofocus:
             app.logger.info(f"Tablet {tablet_index}: Starting autofocus ({'coarse' if is_first_tablet else 'fine'})")
             
-            # Capture-plan measurements use VIS as their autofocus reference.
-            # Legacy requests retain their existing dome-light behavior.
+            # The locked first plan row is the autofocus reference: VIS,
+            # empty filter slot 1, and operator-selected camera values.
             if capture_plan is not None:
+                _select_measurement_filter_position(motion_platform, 1)
+                _apply_capture_plan_camera_settings(capture_plan[0])
                 light_controller.activate('vis')
             else:
                 _turn_on_dome_light()
-            _apply_camera_settings_for_light('dome')
+                _apply_camera_settings_for_light('dome')
             time.sleep(0.3)  # Let light and camera settings stabilize
             
             if autofocus_enabled:
@@ -2252,6 +2455,7 @@ def auto_measurement_step():
                         'wavelength': wavelength,
                         'filter_position': filter_position,
                         'exposure_time': row['exposure_time'],
+                        'gain': row['gain'],
                         'gamma': row['gamma'],
                         'saved_images': saved_paths,
                     })
@@ -2623,39 +2827,15 @@ def save_raw_image_endpoint():
     full_path = os.path.join(target_folder, f"{filename}.jpg")
 
     try:
-        # Convert BGR (OpenCV) -> RGB (Pillow)
-        img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(img_rgb)
-
-        # Prepare EXIF metadata (ImageDescription and UserComment)
-        metadata = data.get('metadata') if isinstance(data, dict) else None
-        meta_json = None
-        if isinstance(metadata, dict):
-            meta_fields = {
-                'objective': metadata.get('objective'),
-                # support both possible keys used in templates
-                'spacer_rings': metadata.get('spacer_rings'),
-                'camera_settings_file': metadata.get('camera_settings_file'),
-                'exposure_time': metadata.get('exposure_time'),
-                'gamma': metadata.get('gamma')
-            }
-            # remove None entries
-            meta_fields = {k: v for k, v in meta_fields.items() if v is not None}
-            try:
-                meta_json = json.dumps(meta_fields, ensure_ascii=False)
-            except Exception:
-                meta_json = None
-
-        if meta_json:
-            exif_obj = Image.Exif()
-            # 0x010E = ImageDescription, 0x9286 = UserComment
-            try:
-                exif_obj[0x010E] = meta_json
-            except Exception:
-                pass
-            pil_img.save(full_path, format='JPEG', quality=95, exif=exif_obj)
-        else:
-            pil_img.save(full_path, format='JPEG', quality=95)
+        requested_metadata = data.get('metadata')
+        saved_metadata = _save_capture_jpeg(
+            img_cv,
+            full_path,
+            light_type,
+            requested_metadata=(
+                requested_metadata if isinstance(requested_metadata, dict) else None
+            ),
+        )
     except Exception as e:
         return jsonify({
             "error": f"Could not save image: {e}",
@@ -2691,7 +2871,8 @@ def save_raw_image_endpoint():
 
     result = {
         "message": "Raw image saved",
-        "path": full_path
+        "path": full_path,
+        "metadata": saved_metadata,
     }
     if masked_path:
         result["masked_path"] = masked_path
@@ -2919,11 +3100,16 @@ def filter_settings():
 def advanced_motion_settings():
     if request.method == 'GET':
         max_up, max_down = _height_offset_limits()
+        advanced = get_settings().get('advanced_settings', {})
         return jsonify({
             'advanced_motion_settings': {
                 'use_virtual_com_port': _use_virtual_motion_platform(),
                 'max_height_offset_up_mm': max_up,
                 'max_height_offset_down_mm': max_down,
+                'first_tablet_x_mm': advanced.get('first_tablet_x_mm', DEFAULT_FIRST_TABLET_X_MM),
+                'first_tablet_y_mm': advanced.get('first_tablet_y_mm', DEFAULT_FIRST_TABLET_Y_MM),
+                'first_tablet_z_mm': advanced.get('first_tablet_z_mm', DEFAULT_FIRST_TABLET_Z_MM),
+                'tablet_spacing_mm': advanced.get('tablet_spacing_mm', DEFAULT_TABLET_SPACING_MM),
             }
         }), 200
 
@@ -2983,6 +3169,7 @@ def update_other_settings():
 
         if category == 'auto_measurement_settings' and setting_name == 'capture_plan':
             setting_value = validate_capture_plan(setting_value)
+            _validate_capture_plan_camera_values(setting_value)
 
         # Normalize path-like settings to use forward slashes
         updated_value = setting_value
@@ -3282,6 +3469,14 @@ def connect_camera_internal():
                 app.logger.warning(f"Error loading .pfs profile on connect: {pfs_e}")
         elif pfs_path:
             app.logger.warning(f"Configured .pfs file not found: {pfs_path}")
+
+        image_settings = _saved_camera_image_settings()
+        if image_settings['override_enabled']:
+            try:
+                apply_camera_image_geometry(globals.camera, image_settings)
+                app.logger.info('Persisted camera image-size override applied on connect.')
+            except Exception as geometry_error:
+                app.logger.warning('Could not apply persisted camera image-size override: %s', geometry_error)
         
     except Exception as e:
         app.logger.warning(f"get_camera_properties failed: {e}")

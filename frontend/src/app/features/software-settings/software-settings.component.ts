@@ -23,8 +23,10 @@ import { FilterDefinition, FilterSettings } from '../../models/filter-settings.m
 import { MotionSettingsService } from '../../services/motion-settings.service';
 import { SharedService } from '../../shared.service';
 import { FilterRevolverComponent } from '../../components/filter-revolver/filter-revolver.component';
+import { CameraImageSettingsService } from '../../services/camera-image-settings.service';
+import { CameraImageSettings, CameraIntegerLimit } from '../../models/camera-image-settings.models';
 
-type SettingsType = 'filter' | 'lamp' | 'tray' | 'advanced';
+type SettingsType = 'filter' | 'lamp' | 'camera' | 'tray' | 'advanced';
 type UvChannel = 'uv255' | 'uv310' | 'uv365';
 
 interface LampRow {
@@ -53,6 +55,16 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   savingLampSettings = false;
   lampError = '';
   lampSaved = false;
+  loadingCameraSettings = false;
+  savingCameraSettings = false;
+  centeringCameraAxis: 'x' | 'y' | null = null;
+  cameraError = '';
+  cameraSaved = false;
+  cameraConnected = false;
+  cameraImageSettings: CameraImageSettings = {
+    override_enabled: false, width: 4000, height: 4000, offset_x: 0, offset_y: 0
+  };
+  cameraLimits: Partial<Record<'width' | 'height' | 'offset_x' | 'offset_y', CameraIntegerLimit>> = {};
   loadingAdvancedSettings = false;
   savingAdvancedSettings = false;
   advancedError = '';
@@ -60,15 +72,21 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   useVirtualComPort = false;
   maxHeightOffsetUpMm = 5;
   maxHeightOffsetDownMm = -5;
+  firstTabletXMm = 2.9;
+  firstTabletYMm = 10.6;
+  firstTabletZMm = 20;
+  tabletSpacingMm = 18.3;
   virtualConnectionLabel = '';
   private advancedSettingsLoaded = false;
   private filterSettingsLoaded = false;
   private lampSettingsLoaded = false;
+  private cameraSettingsLoaded = false;
   private nextFilterId = 1;
   private readonly destroy$ = new Subject<void>();
   private readonly filterSaveRequests$ = new Subject<void>();
   private readonly lampSaveRequests$ = new Subject<void>();
   private readonly advancedSaveRequests$ = new Subject<void>();
+  private readonly cameraSaveRequests$ = new Subject<void>();
   private filterDirty = false;
   private lampDirty = false;
   private advancedDirty = false;
@@ -77,6 +95,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   readonly settingsTypes: { id: SettingsType; label: string; icon: string }[] = [
     { id: 'filter', label: 'Szűrőváltó', icon: 'tune' },
     { id: 'lamp', label: 'Lámpa', icon: 'lightbulb' },
+    { id: 'camera', label: 'Kamera', icon: 'photo_camera' },
     { id: 'tray', label: 'Tálca', icon: 'table_restaurant' },
     { id: 'advanced', label: 'Haladó', icon: 'build' }
   ];
@@ -97,6 +116,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     private readonly lampSettingsService: LampSettingsService,
     private readonly filterSettingsService: FilterSettingsService,
     private readonly motionSettingsService: MotionSettingsService,
+    private readonly cameraImageSettingsService: CameraImageSettingsService,
     private readonly sharedService: SharedService
   ) {}
 
@@ -114,6 +134,11 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     this.advancedSaveRequests$.pipe(
       debounceTime(500),
       concatMap(() => this.persistAdvancedSettings()),
+      takeUntil(this.destroy$)
+    ).subscribe();
+    this.cameraSaveRequests$.pipe(
+      debounceTime(500),
+      concatMap(() => this.persistCameraSettings()),
       takeUntil(this.destroy$)
     ).subscribe();
     this.measurementSubscription = this.sharedService.measurementActive$.subscribe(active => {
@@ -136,6 +161,9 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     }
     if (type === 'filter' && !this.loadingFilterSettings && !this.hasLoadedFilterSettings()) {
       this.loadFilterSettings();
+    }
+    if (type === 'camera' && !this.loadingCameraSettings && !this.cameraSettingsLoaded) {
+      this.loadCameraSettings();
     }
     if (type === 'advanced' && !this.loadingAdvancedSettings && !this.hasLoadedAdvancedSettings()) {
       this.loadAdvancedSettings();
@@ -203,6 +231,95 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     );
   }
 
+  onCameraSettingsChanged(): void {
+    this.cameraError = '';
+    this.cameraSaved = false;
+    if (!this.hasNumericCameraGeometry()) {
+      this.cameraError = 'A képgeometria mezőiben érvényes számokat adjon meg.';
+      return;
+    }
+    this.cameraSaveRequests$.next();
+  }
+
+  centerCamera(axis: 'x' | 'y'): void {
+    if (!this.cameraImageSettings.override_enabled || !this.cameraConnected || this.centeringCameraAxis) return;
+    this.cameraError = '';
+    this.cameraSaved = false;
+    this.centeringCameraAxis = axis;
+    this.cameraImageSettingsService.center(axis).subscribe({
+      next: response => {
+        this.applyCameraSettingsResponse(response);
+        this.cameraSaved = true;
+        this.centeringCameraAxis = null;
+      },
+      error: error => {
+        this.cameraError = error?.error?.error || 'A kamerakép középre igazítása sikertelen.';
+        this.centeringCameraAxis = null;
+      }
+    });
+  }
+
+  cameraLimit(name: 'width' | 'height' | 'offset_x' | 'offset_y'): CameraIntegerLimit | undefined {
+    return this.cameraLimits[name];
+  }
+
+  private persistCameraSettings(): Observable<boolean> {
+    this.savingCameraSettings = true;
+    const payload: CameraImageSettings = {
+      override_enabled: this.cameraImageSettings.override_enabled,
+      width: Number(this.cameraImageSettings.width),
+      height: Number(this.cameraImageSettings.height),
+      offset_x: Number(this.cameraImageSettings.offset_x),
+      offset_y: Number(this.cameraImageSettings.offset_y)
+    };
+    return this.cameraImageSettingsService.update(payload).pipe(
+      tap(response => {
+        this.applyCameraSettingsResponse(response);
+        this.cameraSaved = true;
+        this.savingCameraSettings = false;
+      }),
+      map(() => true),
+      catchError(error => {
+        this.cameraError = error?.error?.error || 'A kamerakép-beállítások mentése sikertelen.';
+        this.savingCameraSettings = false;
+        return of(false);
+      })
+    );
+  }
+
+  private loadCameraSettings(): void {
+    this.loadingCameraSettings = true;
+    this.cameraError = '';
+    this.cameraImageSettingsService.get().subscribe({
+      next: response => {
+        this.applyCameraSettingsResponse(response);
+        this.cameraSettingsLoaded = true;
+        this.loadingCameraSettings = false;
+      },
+      error: error => {
+        this.cameraError = error?.error?.error || 'A kamerabeállítások betöltése sikertelen.';
+        this.loadingCameraSettings = false;
+      }
+    });
+  }
+
+  private applyCameraSettingsResponse(response: {
+    camera_image_settings: CameraImageSettings;
+    limits: Partial<Record<'width' | 'height' | 'offset_x' | 'offset_y', CameraIntegerLimit>>;
+    connected: boolean;
+  }): void {
+    this.cameraImageSettings = { ...response.camera_image_settings };
+    this.cameraLimits = { ...response.limits };
+    this.cameraConnected = response.connected;
+  }
+
+  private hasNumericCameraGeometry(): boolean {
+    if (!this.cameraImageSettings.override_enabled) return true;
+    if (!this.cameraConnected) return false;
+    return (['width', 'height', 'offset_x', 'offset_y'] as const)
+      .every(name => Number.isFinite(Number(this.cameraImageSettings[name])));
+  }
+
   addFilter(): void {
     this.filterSettings.filters.push({
       id: this.createFilterId(),
@@ -231,6 +348,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   }
 
   assignFilterToSlot(index: number, filterId: string | null): void {
+    if (index === 0) return;
     const slots = [...this.filterSettings.slots];
     slots[index] = filterId;
     this.filterSettings = { ...this.filterSettings, slots };
@@ -292,7 +410,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
 
     const payload: FilterSettings = {
       filters: normalizedFilters,
-      slots: [...this.filterSettings.slots]
+      slots: [null, ...this.filterSettings.slots.slice(1)]
     };
     this.savingFilterSettings = true;
     return this.filterSettingsService.update(payload).pipe(
@@ -315,6 +433,10 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     this.advancedSaved = false;
     if (!this.hasValidHeightOffsetLimits()) {
       this.advancedError = 'A felfelé határ pozitív, a lefelé határ negatív szám legyen.';
+      return;
+    }
+    if (!this.hasValidTrayGeometry()) {
+      this.advancedError = 'Az első tabletta és a 10×10-es kiosztás minden koordinátája maradjon a gép mozgástartományában.';
       return;
     }
     const filtersOutsideLimits = this.filterSettings.filters.some(filter => {
@@ -344,7 +466,11 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     return this.motionSettingsService.updateAdvanced({
       use_virtual_com_port: this.useVirtualComPort,
       max_height_offset_up_mm: Number(this.maxHeightOffsetUpMm),
-      max_height_offset_down_mm: Number(this.maxHeightOffsetDownMm)
+      max_height_offset_down_mm: Number(this.maxHeightOffsetDownMm),
+      first_tablet_x_mm: Number(this.firstTabletXMm),
+      first_tablet_y_mm: Number(this.firstTabletYMm),
+      first_tablet_z_mm: Number(this.firstTabletZMm),
+      tablet_spacing_mm: Number(this.tabletSpacingMm)
     }).pipe(
       // Change adapters before applying new output selectors so a real board
       // can still receive its all-off commands through the previous mapping.
@@ -391,7 +517,10 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     this.filterError = '';
     this.filterSettingsService.get().subscribe({
       next: response => {
-        this.filterSettings = response.filter_settings;
+        this.filterSettings = {
+          ...response.filter_settings,
+          slots: [null, ...response.filter_settings.slots.slice(1)]
+        };
         this.filterSettingsLoaded = true;
         this.loadingFilterSettings = false;
       },
@@ -417,6 +546,10 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
         this.useVirtualComPort = response.motion.advanced_motion_settings.use_virtual_com_port;
         this.maxHeightOffsetUpMm = response.motion.advanced_motion_settings.max_height_offset_up_mm;
         this.maxHeightOffsetDownMm = response.motion.advanced_motion_settings.max_height_offset_down_mm;
+        this.firstTabletXMm = response.motion.advanced_motion_settings.first_tablet_x_mm;
+        this.firstTabletYMm = response.motion.advanced_motion_settings.first_tablet_y_mm;
+        this.firstTabletZMm = response.motion.advanced_motion_settings.first_tablet_z_mm;
+        this.tabletSpacingMm = response.motion.advanced_motion_settings.tablet_spacing_mm;
         this.advancedSettingsLoaded = true;
         this.loadingAdvancedSettings = false;
       },
@@ -468,5 +601,16 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     const maxUp = Number(this.maxHeightOffsetUpMm);
     const maxDown = Number(this.maxHeightOffsetDownMm);
     return Number.isFinite(maxUp) && maxUp > 0 && Number.isFinite(maxDown) && maxDown < 0;
+  }
+
+  private hasValidTrayGeometry(): boolean {
+    const x = Number(this.firstTabletXMm);
+    const y = Number(this.firstTabletYMm);
+    const z = Number(this.firstTabletZMm);
+    const spacing = Number(this.tabletSpacingMm);
+    return [x, y, z, spacing].every(Number.isFinite)
+      && x >= 0 && y >= 0 && z >= 0 && z <= 30 && spacing > 0
+      && x + 9 * spacing <= 175.5
+      && y + 9 * spacing <= 175.5;
   }
 }

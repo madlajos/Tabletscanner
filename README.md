@@ -65,7 +65,7 @@ Python backend from its resources directory.
 - Motion access is implemented by `porthandler.py` and `motioncontrols.py`. The controller is
   detected as USB `0483:5740`, identified with `M115`, and driven with Marlin G-code at 115200
   baud. Real hardware must report the mapping-specific marker
-  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK`; generic or older Marlin builds are rejected.
+  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME`; generic or older Marlin builds are rejected.
 - Autofocus and measurement helpers live in `autofocus_main.py`, `manual_bgr_with_check.py`,
   `check_only.py`, and related image-analysis modules.
 - The backend starts a daemon lamp-timeout monitor and Flask may serve concurrent requests.
@@ -157,12 +157,15 @@ Configure dimmed/full percentages and their UV safety timeouts in
 VIS is a single-click 100% channel without a thermal timeout.
 
 Automatic measurement requires a non-empty `capture_plan`; legacy `lamp_top`/`lamp_side` payloads
-are rejected. Each plan row records a wavelength and filter position. Filter positions are stored
-in output metadata; automatic capture-plan execution does not yet move the revolver.
+are rejected. Each plan row records a wavelength, filter position, exposure time, gain, and gamma.
+The first row is fixed to VIS with empty filter slot 1 for autofocus, while its three camera values
+remain operator-configurable. Live camera limits and increments validate those values before
+capture. Filter positions are stored in output metadata.
 
 The six revolver positions and reusable filter definitions (name, wavelength range, height offset,
-and display color) can be configured under **Beállítások → Szűrőváltó**. After X/Y/Z/A
-homing, the Vezérlőpult can move the physical A-axis revolver one 60° slot at a time. The UI
+and display color) can be configured under **Beállítások → Szűrőváltó**. After the A axis is
+homed—either by the regular full homing operation or separately from the Home button's
+right-click menu—the Vezérlőpult can move the physical revolver one 60° slot at a time. The UI
 updates its active filter only after the controller acknowledges the completed move.
 
 The required board mapping, command contract, and hardware bring-up checks are in

@@ -32,7 +32,9 @@ class HomingFailedSerial(VirtualOctopusSerial):
 
     def _execute(self, command):
         if command.upper() == 'G28 A':
-            return b'echo:busy: processing\necho:Homing Failed\n//action:notification\n'
+            # Recoverable firmware returns to the command loop, so Marlin may
+            # append its normal command acknowledgement after the error.
+            return b'echo:busy: processing\nError:Homing failed\nok\n'
         return super()._execute(command)
 
 
@@ -155,6 +157,8 @@ class FilterRevolverApiTests(unittest.TestCase):
         self.assertIs(porthandler.motion_platform, self.device)
         self.assertTrue(self.device.is_open)
         self.assertFalse(globals.filter_revolver_homed)
+        acknowledged, _ = porthandler.write_and_wait(self.device, 'M105')
+        self.assertTrue(acknowledged)
 
     def test_invalid_direction_does_not_touch_hardware(self):
         response = self.client.post('/api/filter-revolver/rotate', json={'direction': 'left'})
@@ -182,9 +186,14 @@ class FilterRevolverApiTests(unittest.TestCase):
         self.assertEqual(200, homing.status_code)
         self.assertEqual(['z', 'y', 'x', 'a'], homing.get_json()['homed_axes'])
         self.assertEqual(
+            {'x': 2.0, 'y': 2.0, 'z': 2.0},
+            homing.get_json()['position'],
+        )
+        self.assertEqual(
             ['G28 Z', 'G28 Y', 'G28 X', 'G28 A'],
             [command for command in self.device.command_history if command.startswith('G28')],
         )
+        self.assertEqual(173.0, self.device._position['Y'])
         self.assertEqual(200, rotation.status_code)
         self.assertEqual(2, rotation.get_json()['position'])
 

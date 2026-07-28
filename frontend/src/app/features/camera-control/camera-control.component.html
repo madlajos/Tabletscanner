@@ -90,7 +90,10 @@
         <tr>
           <td>Záridő</td>
           <td>
-            <input type="number" inputmode="numeric" step="1" min="0"
+            <input type="number" inputmode="numeric"
+              [step]="cameraRange('ExposureTime')?.inc || 1"
+              [min]="cameraRange('ExposureTime')?.min ?? 0"
+              [max]="cameraRange('ExposureTime')?.max ?? null"
               [(ngModel)]="cameraSettings.ExposureTime"
               (focus)="handleNumericFocus('ExposureTime', 0)"
               (blur)="handleNumericBlur('ExposureTime', 0)"
@@ -99,9 +102,26 @@
         </tr>
 
         <tr>
+          <td>Erősítés</td>
+          <td>
+            <input type="number" inputmode="decimal"
+              [step]="cameraRange('Gain')?.inc || 'any'"
+              [min]="cameraRange('Gain')?.min ?? 0"
+              [max]="cameraRange('Gain')?.max ?? null"
+              [(ngModel)]="cameraSettings.Gain"
+              (focus)="handleNumericFocus('Gain', 6)"
+              (blur)="handleNumericBlur('Gain', 6)"
+              [disabled]="!isConnected || !cameraRange('Gain') || measurementActive || isAutofocusing">
+          </td>
+        </tr>
+
+        <tr>
           <td>Gamma</td>
           <td>
-            <input type="number" inputmode="decimal" step="0.0001" min="0"
+            <input type="number" inputmode="decimal"
+              [step]="cameraRange('Gamma')?.inc || 'any'"
+              [min]="cameraRange('Gamma')?.min ?? 0"
+              [max]="cameraRange('Gamma')?.max ?? null"
               [(ngModel)]="cameraSettings.Gamma"
               (focus)="handleNumericFocus('Gamma', 4)"
               (blur)="handleNumericBlur('Gamma', 4)"

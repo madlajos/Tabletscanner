@@ -33,16 +33,20 @@ class VirtualOctopusTests(unittest.TestCase):
         device = VirtualOctopusSerial()
 
         motioncontrols.move_to_position(device, x_pos=12.5, y_pos=200, z_pos=4)
+        self.assertIn('G1 X12.5 Y-25.0 Z4', device.command_history)
         self.assertEqual(
             {'x': 12.5, 'y': 175.0, 'z': 4.0},
             motioncontrols.get_toolhead_position(device),
         )
+        self.assertEqual(0.0, device._position['Y'])
 
-        motioncontrols.move_relative(device, x=-2.5, z=40)
+        motioncontrols.move_relative(device, x=-2.5, y=-5, z=40)
+        self.assertIn('G1 X-2.5 Y5.0 Z40', device.command_history)
         self.assertEqual(
-            {'x': 10.0, 'y': 175.0, 'z': 30.0},
+            {'x': 10.0, 'y': 170.0, 'z': 30.0},
             motioncontrols.get_toolhead_position(device),
         )
+        self.assertEqual(5.0, device._position['Y'])
 
     def test_circular_a_axis_is_not_clamped_at_zero_or_360_degrees(self):
         device = VirtualOctopusSerial()
@@ -58,7 +62,7 @@ class VirtualOctopusTests(unittest.TestCase):
         device = VirtualOctopusSerial()
         motioncontrols.move_to_position(device, x_pos=10, y_pos=20, z_pos=5)
 
-        porthandler.write(device, 'G28 X Z')
+        porthandler.write(device, 'G28 X Y Z')
         homing_reply = device.read(device.in_waiting)
         light_ok, _ = porthandler.write_and_wait(device, 'M106 P3 S128')
 
@@ -66,9 +70,10 @@ class VirtualOctopusTests(unittest.TestCase):
         self.assertTrue(light_ok)
         self.assertEqual(128, device._light_pwm[3])
         self.assertEqual(
-            {'x': 0.0, 'y': 20.0, 'z': 0.0},
+            {'x': 2.0, 'y': 2.0, 'z': 2.0},
             motioncontrols.get_toolhead_position(device),
         )
+        self.assertEqual(173.0, device._position['Y'])
 
     def test_closed_virtual_port_behaves_like_disconnected_serial(self):
         device = VirtualOctopusSerial()

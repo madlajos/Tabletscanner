@@ -1,9 +1,8 @@
 {
-    "settings_schema_version": 7,
+    "settings_schema_version": 5,
     "camera_params": {
         "ExposureTime": 10000000.0,
-        "Gamma": 1.0,
-        "Gain": 0.0
+        "Gamma": 1.0
     },
     "other_settings": {
         "objective": "1.0x",
@@ -20,8 +19,7 @@
                 "wavelength": "vis",
                 "filter_position": 1,
                 "exposure_time": 1006000.0,
-                "gain": 0.0,
-                "gamma": 1.0
+                "gamma": 6.1
             }
         ]
     },
@@ -108,12 +106,5 @@
             "07641f64-d518-4657-9799-c699ee4c8f24",
             "7f4c7a34-1660-4a66-99d5-c380c0c04c66"
         ]
-    },
-    "camera_image_settings": {
-        "override_enabled": false,
-        "width": 2840,
-        "height": 2840,
-        "offset_x": 4,
-        "offset_y": 4
     }
 }

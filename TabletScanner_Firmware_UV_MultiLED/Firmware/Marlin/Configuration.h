@@ -1914,6 +1914,11 @@
 
 // Validate that endstops are triggered on homing moves
 #define VALIDATE_HOMING_ENDSTOPS
+// TabletScanner is a supervised motion appliance, not a printer. A missed
+// endstop must fail G28 and leave the axis unhomed, but it must not enter
+// Marlin's irreversible kill() loop. The host may correct the sensor issue
+// and retry homing without resetting the Octopus board.
+#define TABLETSCANNER_RECOVERABLE_HOMING
 
 // @section calibrate
 

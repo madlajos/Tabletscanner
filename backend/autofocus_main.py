@@ -182,7 +182,13 @@ def move_to_virtual_z(motion_platform, current_z, target_z, settle_s=0):
         move_relative(motion_platform, z=dz)
         time.sleep(float(settle_s))
         wait_motion_done(motion_platform)
-    return float(target_z)
+    reached_z = float(target_z)
+    # Keep the shared acknowledged-position cache aligned with autofocus
+    # motion so capture metadata records the focused Z rather than the
+    # pre-autofocus tray coordinate.
+    if isinstance(getattr(globals, "last_toolhead_pos", None), dict):
+        globals.last_toolhead_pos["z"] = reached_z
+    return reached_z
 
 
 def near_zero(v, eps=1e-9) -> bool:

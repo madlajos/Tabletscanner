@@ -28,6 +28,14 @@ function normalizePath(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
+interface CameraParameterRange {
+  min: number;
+  max: number;
+  inc: number;
+}
+
+type CameraRanges = Partial<Record<'ExposureTime' | 'Gain' | 'Gamma', CameraParameterRange>>;
+
 
 @Component({
   standalone: true,
@@ -57,6 +65,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
   // Settings
   cameraSettings: any = {};
+  cameraRanges: CameraRanges = {};
 
   otherSettings = {
     objective: '50x',
@@ -457,9 +466,12 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   fetchCameraSettings(): void {
-    this.http.get(`${BASE_URL}/get-camera-settings`).subscribe(
+    this.http.get<{ camera_params: CameraSettings; ranges?: CameraRanges }>(
+      `${BASE_URL}/get-camera-settings`
+    ).subscribe(
       (settings: any) => {
         this.cameraSettings = settings.camera_params;
+        this.cameraRanges = settings.ranges || {};
         console.log(`Camera settings loaded:`, settings);
       },
       error => console.error(`Error loading camera settings:`, error)
@@ -521,12 +533,15 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   }
 
   loadCameraSettings(): void {
-    this.http.get<any>(`${BASE_URL}/get-camera-settings`)
+    this.http.get<{ camera_params: CameraSettings; ranges?: CameraRanges }>(
+      `${BASE_URL}/get-camera-settings`
+    )
       .subscribe({
-        next: (response: any) => {
+        next: response => {
           if (response.camera_params) {
             this.cameraSettings = { ...this.cameraSettings, ...response.camera_params };
           }
+          this.cameraRanges = response.ranges || {};
 
           this.settingsUpdatesService.updateCameraSettings(this.cameraSettings);
           console.log(`Loaded camera settings:`, this.cameraSettings);
@@ -539,7 +554,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     const value = this.cameraSettings[setting];
     console.log(`Applying setting ${setting}: ${value} (persist=${persist})`);
 
-    if (setting === 'ExposureTime' || setting === 'Gamma') {
+    if (setting === 'ExposureTime' || setting === 'Gain' || setting === 'Gamma') {
       this.http.post<{ updated_value: number }>(`${BASE_URL}/update-camera-settings`, {
         setting_name: setting,
         setting_value: value
@@ -801,18 +816,35 @@ export class CameraControlComponent implements OnInit, OnDestroy {
       return; // do not apply empty/invalid
     }
 
+    const acceptedValue = this.normalizeToCameraRange(settingKey, num);
     const prev = this.numericFocusValues[settingKey];
-    if (prev !== undefined && prev === num) {
+    if (prev !== undefined && prev === acceptedValue) {
       // No effective change; keep preset name intact and skip backend call
-      this.cameraSettings[settingKey] = num;
+      this.cameraSettings[settingKey] = acceptedValue;
       return;
     }
 
-    // Trim trailing zeros by storing as number (not string)
-    this.cameraSettings[settingKey] = num;
+    // Store the nearest value supported by the live camera before applying.
+    this.cameraSettings[settingKey] = acceptedValue;
 
     // Apply to backend
     this.applySetting(settingKey);
+  }
+
+  cameraRange(settingKey: 'ExposureTime' | 'Gain' | 'Gamma'): CameraParameterRange | undefined {
+    return this.cameraRanges[settingKey];
+  }
+
+  private normalizeToCameraRange(settingKey: string, value: number): number {
+    const range = this.cameraRanges[settingKey as 'ExposureTime' | 'Gain' | 'Gamma'];
+    if (!range) return value;
+    const clamped = Math.min(range.max, Math.max(range.min, value));
+    const increment = range.inc || 0;
+    if (increment <= 0) return clamped;
+    const maxSteps = Math.max(0, Math.floor((range.max - range.min) / increment + 1e-9));
+    const steps = Math.min(maxSteps, Math.max(0, Math.round((clamped - range.min) / increment)));
+    const normalized = range.min + steps * increment;
+    return Number(normalized.toFixed(6));
   }
 
   /* Removed legacy .tss per-light camera preset implementation.

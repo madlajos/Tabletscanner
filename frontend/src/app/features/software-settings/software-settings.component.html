@@ -25,7 +25,7 @@
               <div class="filter-layout">
                 <app-filter-revolver [settings]="filterSettings"></app-filter-revolver>
                 <table class="filter-slot-table"><thead><tr><th>Pozíció</th><th>Szűrő</th></tr></thead><tbody><tr *ngFor="let slot of filterSettings.slots; let i = index; trackBy: trackSlotIndex">
-                  <td>{{ i + 1 }}</td><td><select (change)="assignFilterToSlotFromEvent(i, $event)" [disabled]="measurementActive" [attr.aria-label]="(i + 1) + '. pozíció szűrője'"><option value="" [selected]="slot === null">Üres</option><option *ngFor="let filter of selectableFilters" [value]="filter.id" [selected]="slot === filter.id">{{ filter.name }}</option></select></td>
+                  <td>{{ i + 1 }}</td><td><select (change)="assignFilterToSlotFromEvent(i, $event)" [disabled]="measurementActive || i === 0" [attr.aria-label]="i === 0 ? '1. pozíció: rögzített üres hely' : (i + 1) + '. pozíció szűrője'"><option value="" [selected]="slot === null">Üres</option><option *ngFor="let filter of selectableFilters" [value]="filter.id" [selected]="slot === filter.id">{{ filter.name }}</option></select></td>
                 </tr></tbody></table>
               </div>
               <h4>Szűrők konfigurálása</h4>
@@ -51,43 +51,117 @@
             <p>A tálca beállításai egy későbbi fejlesztési fázisban lesznek elérhetők.</p>
           </section>
 
+          <section *ngSwitchCase="'camera'">
+            <h3>Kamera</h3>
+            <p *ngIf="loadingCameraSettings" class="settings-note">Betöltés…</p>
+            <div class="camera-settings-groups" *ngIf="!loadingCameraSettings">
+              <section class="advanced-group" aria-labelledby="camera-image-size-title">
+                <h4 class="advanced-group-title" id="camera-image-size-title">Kép méret</h4>
+                <label class="camera-override-setting">
+                  <input type="checkbox" [(ngModel)]="cameraImageSettings.override_enabled"
+                    (ngModelChange)="onCameraSettingsChanged()" [disabled]="measurementActive || !cameraConnected">
+                  <span>Képméret felülírása</span>
+                </label>
+                <p class="settings-note" *ngIf="!cameraConnected">
+                  A határértékek lekéréséhez és a felülírás használatához csatlakoztassa a kamerát.
+                </p>
+                <div class="camera-image-fields">
+                  <label>
+                    <span>Kamerakép szélessége:</span>
+                    <input type="number" [min]="cameraLimit('width')?.min ?? null" [max]="cameraLimit('width')?.max ?? null"
+                      [step]="cameraLimit('width')?.inc || 1" [(ngModel)]="cameraImageSettings.width"
+                      (ngModelChange)="onCameraSettingsChanged()"
+                      [disabled]="measurementActive || !cameraImageSettings.override_enabled || !cameraConnected">
+                  </label>
+                  <label>
+                    <span>Kamerakép magassága:</span>
+                    <input type="number" [min]="cameraLimit('height')?.min ?? null" [max]="cameraLimit('height')?.max ?? null"
+                      [step]="cameraLimit('height')?.inc || 1" [(ngModel)]="cameraImageSettings.height"
+                      (ngModelChange)="onCameraSettingsChanged()"
+                      [disabled]="measurementActive || !cameraImageSettings.override_enabled || !cameraConnected">
+                  </label>
+                  <div class="camera-offset-row">
+                    <label>
+                      <span>X irányú eltolás:</span>
+                      <input type="number" [min]="cameraLimit('offset_x')?.min ?? null" [max]="cameraLimit('offset_x')?.max ?? null"
+                        [step]="cameraLimit('offset_x')?.inc || 1" [(ngModel)]="cameraImageSettings.offset_x"
+                        (ngModelChange)="onCameraSettingsChanged()"
+                        [disabled]="measurementActive || !cameraImageSettings.override_enabled || !cameraConnected">
+                    </label>
+                    <button type="button" (click)="centerCamera('x')"
+                      [disabled]="measurementActive || !cameraImageSettings.override_enabled || !cameraConnected || centeringCameraAxis !== null || savingCameraSettings">
+                      Center X
+                    </button>
+                  </div>
+                  <div class="camera-offset-row">
+                    <label>
+                      <span>Y irányú eltolás:</span>
+                      <input type="number" [min]="cameraLimit('offset_y')?.min ?? null" [max]="cameraLimit('offset_y')?.max ?? null"
+                        [step]="cameraLimit('offset_y')?.inc || 1" [(ngModel)]="cameraImageSettings.offset_y"
+                        (ngModelChange)="onCameraSettingsChanged()"
+                        [disabled]="measurementActive || !cameraImageSettings.override_enabled || !cameraConnected">
+                    </label>
+                    <button type="button" (click)="centerCamera('y')"
+                      [disabled]="measurementActive || !cameraImageSettings.override_enabled || !cameraConnected || centeringCameraAxis !== null || savingCameraSettings">
+                      Center Y
+                    </button>
+                  </div>
+                </div>
+                <p class="settings-note" *ngIf="cameraConnected && cameraLimit('width') as widthLimit">
+                  A megengedett tartományokat és lépésközöket a csatlakoztatott kamera határozza meg.
+                  Szélesség: {{ widthLimit.min }}–{{ widthLimit.max }}, lépésköz: {{ widthLimit.inc }}.
+                </p>
+              </section>
+            </div>
+            <p *ngIf="cameraError" class="settings-error">{{ cameraError }}</p>
+            <p *ngIf="savingCameraSettings || centeringCameraAxis" class="settings-note">Alkalmazás és mentés…</p>
+            <p *ngIf="cameraSaved && !savingCameraSettings && !centeringCameraAxis" class="settings-success">Automatikusan mentve.</p>
+          </section>
+
           <section *ngSwitchCase="'advanced'">
             <h3>Haladó</h3>
-            <p class="settings-note">A lámpakimeneteket a jóváhagyott Octopus firmware rögzíti; itt csak ellenőrzésként jelennek meg.</p>
             <p *ngIf="loadingAdvancedSettings" class="settings-note">Betöltés…</p>
-            <table class="advanced-settings-table" *ngIf="!loadingAdvancedSettings">
-              <thead><tr><th>Hullámhossz</th><th>M106 kimenet</th></tr></thead>
-              <tbody>
-                <tr><td>255 nm (HE0)</td><td><code>{{ advancedSelectors.uv255 }}</code></td></tr>
-                <tr><td>310 nm (HE1)</td><td><code>{{ advancedSelectors.uv310 }}</code></td></tr>
-                <tr><td>365 nm (FAN1)</td><td><code>{{ advancedSelectors.uv365 }}</code></td></tr>
-                <tr><td>VIS (FAN0)</td><td><code>{{ advancedSelectors.vis }}</code></td></tr>
-              </tbody>
-            </table>
-            <label class="virtual-com-setting" *ngIf="!loadingAdvancedSettings">
-              <input type="checkbox" [(ngModel)]="useVirtualComPort" (ngModelChange)="onAdvancedChanged()"
-                [disabled]="measurementActive">
-              <span>Virtuális COM-port használata</span>
-            </label>
-            <div *ngIf="!loadingAdvancedSettings" style="display:grid;gap:8px;max-width:430px;margin:18px 0">
-              <label style="display:flex;align-items:center;justify-content:space-between;gap:16px">
-                <span>Max. Magasság eltolás felfelé</span>
-                <span><input type="number" min="0.001" step="any" [(ngModel)]="maxHeightOffsetUpMm"
-                  (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"
-                  style="width:72px;padding:5px;color:#fff;background:#333;border:1px solid #666;border-radius:3px"> mm</span>
-              </label>
-              <label style="display:flex;align-items:center;justify-content:space-between;gap:16px">
-                <span>Max. Magasság eltolás lefelé</span>
-                <span><input type="number" max="-0.001" step="any" [(ngModel)]="maxHeightOffsetDownMm"
-                  (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"
-                  style="width:72px;padding:5px;color:#fff;background:#333;border:1px solid #666;border-radius:3px"> mm</span>
-              </label>
+            <div class="advanced-groups" *ngIf="!loadingAdvancedSettings">
+              <section class="advanced-group" aria-labelledby="advanced-lamp-title">
+                <h4 class="advanced-group-title" id="advanced-lamp-title">Lámpa</h4>
+                <p class="settings-note">A lámpakimeneteket a jóváhagyott Octopus firmware rögzíti; itt csak ellenőrzésként jelennek meg.</p>
+                <table class="advanced-settings-table">
+                  <thead><tr><th>Hullámhossz</th><th>M106 kimenet</th></tr></thead>
+                  <tbody>
+                    <tr><td>255 nm (HE0)</td><td><code>{{ advancedSelectors.uv255 }}</code></td></tr>
+                    <tr><td>310 nm (HE1)</td><td><code>{{ advancedSelectors.uv310 }}</code></td></tr>
+                    <tr><td>365 nm (FAN1)</td><td><code>{{ advancedSelectors.uv365 }}</code></td></tr>
+                    <tr><td>VIS (FAN0)</td><td><code>{{ advancedSelectors.vis }}</code></td></tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section class="advanced-group" aria-labelledby="advanced-connection-title">
+                <h4 class="advanced-group-title" id="advanced-connection-title">Csatlakozás</h4>
+                <label class="virtual-com-setting">
+                  <input type="checkbox" [(ngModel)]="useVirtualComPort" (ngModelChange)="onAdvancedChanged()"
+                    [disabled]="measurementActive">
+                  <span>Virtuális COM-port használata</span>
+                </label>
+                <p class="settings-note">
+                  Bekapcsolva a program egy alkalmazáson belüli BTT Octopus/Marlin szimulátorhoz
+                  csatlakozik. A mozgás és a pozíciók tesztelhetők, fizikai motor nem mozdul.
+                </p>
+                <p class="settings-note" *ngIf="virtualConnectionLabel">{{ virtualConnectionLabel }}</p>
+              </section>
+
+              <section class="advanced-group" aria-labelledby="advanced-motion-title">
+                <h4 class="advanced-group-title" id="advanced-motion-title">Mozgásbeállítások</h4>
+                <div class="advanced-motion-fields">
+                  <label><span>Első tabletta X koordinátája</span><span><input type="number" min="0" max="175" step="any" [(ngModel)]="firstTabletXMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Első tabletta Y koordinátája</span><span><input type="number" min="0" max="175" step="any" [(ngModel)]="firstTabletYMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Első tabletta Z koordinátája</span><span><input type="number" min="0" max="30" step="any" [(ngModel)]="firstTabletZMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Tabletták közötti távolság</span><span><input type="number" min="0.001" step="any" [(ngModel)]="tabletSpacingMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Max. magasságeltolás felfelé</span><span><input type="number" min="0.001" step="any" [(ngModel)]="maxHeightOffsetUpMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Max. magasságeltolás lefelé</span><span><input type="number" max="-0.001" step="any" [(ngModel)]="maxHeightOffsetDownMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                </div>
+              </section>
             </div>
-            <p class="settings-note" *ngIf="!loadingAdvancedSettings">
-              Bekapcsolva a program egy alkalmazáson belüli BTT Octopus/Marlin szimulátorhoz
-              csatlakozik. A mozgás és a pozíciók tesztelhetők, fizikai motor nem mozdul.
-            </p>
-            <p class="settings-note" *ngIf="virtualConnectionLabel">{{ virtualConnectionLabel }}</p>
             <p *ngIf="advancedError" class="settings-error">{{ advancedError }}</p>
             <p *ngIf="savingAdvancedSettings" class="settings-note">Automatikus mentés…</p>
             <p *ngIf="advancedSaved && !savingAdvancedSettings" class="settings-success">Automatikusan mentve.</p>
@@ -123,6 +197,9 @@
                 </tr>
               </tbody>
             </table>
+            <p class="uv-exposure-warning" *ngIf="!loadingLampSettings">
+              A hosszú UV expozíció a minta degradációját eredményezheti!
+            </p>
 
             <p *ngIf="lampError" class="settings-error">{{ lampError }}</p>
             <p *ngIf="savingLampSettings" class="settings-note">Automatikus mentés…</p>

@@ -9,6 +9,7 @@ import os
 import time
 import requests
 import threading
+import math
 import globals
 from globals import app
 
@@ -440,6 +441,13 @@ def get_camera_properties(camera: pylon.InstantCamera) -> dict:
         except Exception as e:
             app.logger.warning(f"Could not load property '{prop_name}': {e}")
 
+    def float_increment(node) -> float:
+        """Return zero for continuous GenICam float nodes without an increment."""
+        try:
+            return float(node.GetInc())
+        except Exception:
+            return 0.0
+
     safe_get('Width', lambda: {
         'min': camera.Width.GetMin(),
         'max': camera.Width.GetMax(),
@@ -474,14 +482,14 @@ def get_camera_properties(camera: pylon.InstantCamera) -> dict:
         safe_get('Gamma', lambda: {
             'min': camera.Gamma.GetMin(),
             'max': camera.Gamma.GetMax(),
-            'inc': 0.01
+            'inc': float_increment(camera.Gamma)
         })
 
     if hasattr(camera, 'Gain'):
         safe_get('Gain', lambda: {
             'min': camera.Gain.GetMin(),
             'max': camera.Gain.GetMax(),
-            'inc': 0.01
+            'inc': float_increment(camera.Gain)
         })
 
     safe_get('FrameRate', lambda: {
@@ -503,19 +511,18 @@ def validate_param(param_name: str, param_value: float, properties: dict) -> flo
 
     min_value = prop['min']
     max_value = prop['max']
-    increment = prop['inc'] or 1  # Default to 1 if None
+    increment = float(prop.get('inc') or 0)
 
-    if param_value < min_value:
-        adjusted_value = min_value
-    elif param_value > max_value:
-        # Safely clamp to the largest valid value below max
-        steps = int((max_value - min_value) // increment)
+    if increment > 0:
+        max_steps = max(0, int(math.floor((max_value - min_value) / increment + 1e-9)))
+        requested_steps = round((param_value - min_value) / increment)
+        steps = min(max_steps, max(0, requested_steps))
         adjusted_value = min_value + steps * increment
+        adjusted_value = round(adjusted_value, 6)
     else:
-        steps = round((param_value - min_value) / increment)
-        adjusted_value = min_value + steps * increment
-
-    adjusted_value = round(adjusted_value, 6)  # high precision to avoid overflow
+        # GenICam float nodes may be continuous and throw when GetInc() is
+        # queried. Any finite value inside their live range is writable.
+        adjusted_value = min(max_value, max(min_value, param_value))
 
     if adjusted_value != param_value:
         app.logger.info(
@@ -523,6 +530,117 @@ def validate_param(param_name: str, param_value: float, properties: dict) -> flo
             f"(min={min_value}, max={max_value}, inc={increment})"
         )
     return adjusted_value
+
+
+def validate_camera_integer_param(param_name: str, value, properties: dict) -> int:
+    """Normalize a numeric camera feature to the nearest live, writable integer."""
+    if isinstance(value, bool):
+        raise ValueError(f'{param_name} must be numeric.')
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{param_name} must be numeric.') from None
+    if not math.isfinite(numeric):
+        raise ValueError(f'{param_name} must be finite.')
+    prop = properties.get(param_name)
+    if not prop:
+        raise ValueError(f'{param_name} is not supported by the connected camera.')
+    minimum = int(prop['min'])
+    maximum = int(prop['max'])
+    increment = int(prop.get('inc') or 1)
+    clamped = min(float(maximum), max(float(minimum), numeric))
+    steps = round((clamped - minimum) / increment)
+    normalized = minimum + steps * increment
+    return min(maximum, max(minimum, int(normalized)))
+
+
+def get_camera_image_geometry(camera) -> dict:
+    """Return current image geometry and live ranges from an open camera."""
+    properties = get_camera_properties(camera)
+    names = ('Width', 'Height', 'OffsetX', 'OffsetY')
+    return {
+        'values': {
+            'width': int(camera.Width.GetValue()),
+            'height': int(camera.Height.GetValue()),
+            'offset_x': int(camera.OffsetX.GetValue()),
+            'offset_y': int(camera.OffsetY.GetValue()),
+        },
+        'limits': {
+            'width': properties['Width'],
+            'height': properties['Height'],
+            'offset_x': properties['OffsetX'],
+            'offset_y': properties['OffsetY'],
+        },
+    }
+
+
+def apply_camera_image_geometry(camera, values: dict) -> dict:
+    """Apply a complete ROI using live, dynamically refreshed camera limits."""
+    # Offsets constrain the maximum writable dimensions on many Basler models.
+    properties = get_camera_properties(camera)
+    minimum_x = int(properties['OffsetX']['min'])
+    validate_and_set_camera_param(camera, 'OffsetX', minimum_x, properties)
+    properties = get_camera_properties(camera)
+    minimum_y = int(properties['OffsetY']['min'])
+    validate_and_set_camera_param(camera, 'OffsetY', minimum_y, properties)
+
+    properties = get_camera_properties(camera)
+    width = validate_camera_integer_param('Width', values.get('width'), properties)
+    validate_and_set_camera_param(camera, 'Width', width, properties)
+    properties = get_camera_properties(camera)
+    height = validate_camera_integer_param('Height', values.get('height'), properties)
+    validate_and_set_camera_param(camera, 'Height', height, properties)
+
+    properties = get_camera_properties(camera)
+    offset_x = validate_camera_integer_param('OffsetX', values.get('offset_x'), properties)
+    validate_and_set_camera_param(camera, 'OffsetX', offset_x, properties)
+    properties = get_camera_properties(camera)
+    offset_y = validate_camera_integer_param('OffsetY', values.get('offset_y'), properties)
+    validate_and_set_camera_param(camera, 'OffsetY', offset_y, properties)
+    return get_camera_image_geometry(camera)
+
+
+def center_camera_axis(camera, axis: str) -> dict:
+    """Center the current ROI on X or Y using the camera's live offset range."""
+    if axis not in ('x', 'y'):
+        raise ValueError('Camera center axis must be x or y.')
+    param_name = 'OffsetX' if axis == 'x' else 'OffsetY'
+    center_name = 'CenterX' if axis == 'x' else 'CenterY'
+    try:
+        # Pylon's dynamic attribute lookup may itself raise a GenICam
+        # "Node not existing" exception instead of returning None.
+        center_node = getattr(camera, center_name)
+        if center_node is not None:
+            if not hasattr(center_node, 'IsWritable') or center_node.IsWritable():
+                lock = getattr(globals, 'grab_lock', None)
+                if lock is None:
+                    globals.grab_lock = threading.Lock()
+                    lock = globals.grab_lock
+                with lock:
+                    was_grabbing = camera.IsGrabbing()
+                    if was_grabbing:
+                        camera.StopGrabbing()
+                    try:
+                        if hasattr(center_node, 'Execute'):
+                            center_node.Execute()
+                        else:
+                            center_node.SetValue(True)
+                    finally:
+                        if was_grabbing:
+                            camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+                return get_camera_image_geometry(camera)
+    except Exception as error:
+        app.logger.info('%s unavailable; using calculated offset center: %s', center_name, error)
+
+    properties = get_camera_properties(camera)
+    prop = properties[param_name]
+    minimum = int(prop['min'])
+    maximum = int(prop['max'])
+    increment = int(prop.get('inc') or 1)
+    target = minimum + round(((maximum - minimum) / 2) / increment) * increment
+    target = min(maximum, max(minimum, target))
+    validate_and_set_camera_param(camera, param_name, target, properties)
+    return get_camera_image_geometry(camera)
 
  
 def apply_camera_settings(camera, camera_properties, settings):

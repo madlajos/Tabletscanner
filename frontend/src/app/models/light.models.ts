@@ -34,8 +34,10 @@ export interface CapturePlanRow {
   wavelength: LightChannel;
   filter_position: 1 | 2 | 3 | 4 | 5 | 6;
   exposure_time: number;
+  gain: number;
   gamma: number;
   exposure_time_text: string;
+  gain_text: string;
   gamma_text: string;
 }
 
@@ -43,6 +45,7 @@ export interface CaptureRequestRow {
   wavelength: LightChannel;
   filter_position: number;
   exposure_time: number;
+  gain: number;
   gamma: number;
 }
 

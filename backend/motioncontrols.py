@@ -11,6 +11,17 @@ _POS_RE = re.compile(r'X:\s*(-?\d+(?:\.\d+)?)\s+Y:\s*(-?\d+(?:\.\d+)?)\s+Z:\s*(-
 
 A_AXIS_HOMING_TIMEOUT_SECONDS = 60.0
 DEFAULT_HOMING_TIMEOUT_SECONDS = 30.0
+Y_NATIVE_MAX_MM = 175.0
+
+
+def logical_y_to_native(y: float) -> float:
+    """Map operator Y (increasing away from home) to Marlin's CoreXY Y."""
+    return Y_NATIVE_MAX_MM - float(y)
+
+
+def native_y_to_logical(y: float) -> float:
+    """Map Marlin's max-homed CoreXY Y to the operator coordinate system."""
+    return Y_NATIVE_MAX_MM - float(y)
 
 
 class HomingError(RuntimeError):
@@ -178,13 +189,17 @@ def get_toolhead_position(ser, timeout: float = 0.3, allow_busy: bool = False) -
 
     if m:
         x, y, z = float(m.group(1)), float(m.group(2)), float(m.group(3))
-        return {"x": x, "y": y, "z": z}
+        return {"x": x, "y": native_y_to_logical(y), "z": z}
 
     # Fallback parser (handles lines like: "X:10.00 Y:20.00 Z:30.00 E:...").
     try:
         pos = parse_position(s)
         if all(k in pos for k in ("x", "y", "z")):
-            return {"x": float(pos["x"]), "y": float(pos["y"]), "z": float(pos["z"])}
+            return {
+                "x": float(pos["x"]),
+                "y": native_y_to_logical(pos["y"]),
+                "z": float(pos["z"]),
+            }
     except Exception:
         pass
 
@@ -218,7 +233,7 @@ def move_to_position(motion_platform, x_pos=None, y_pos=None, z_pos=None):
     if x_pos is not None:
         parts.append(f"X{x_pos}")
     if y_pos is not None:
-        parts.append(f"Y{y_pos}")
+        parts.append(f"Y{logical_y_to_native(y_pos)}")
     if z_pos is not None:
         parts.append(f"Z{z_pos}")
 
@@ -255,7 +270,7 @@ def move_relative(motion_platform, x=None, y=None, z=None):
 
     # Add y-axis movement if provided
     if y is not None:
-        move_command += f" Y{y}"
+        move_command += f" Y{-float(y)}"
 
     # Add z-axis movement if provided
     if z is not None:

@@ -11,6 +11,10 @@ export interface AppError {
   abortMeasurement?: boolean;
 }
 
+const CENTER_POPUP_CODES = new Set([
+  'E1202', // Homing rejected: endstop / Hall sensor was not reached.
+  'E1203', // Homing timed out.
+]);
 
 @Injectable({ providedIn: 'root' })
 export class ErrorNotificationService {
@@ -43,9 +47,21 @@ export class ErrorNotificationService {
 
   addError(error: AppError): void {
     // Respect explicitly provided popupStyle. Only auto-set for measurement errors if not provided.
-    if (!error.popupStyle && error.code && (error.code.startsWith("E2") || error.code.startsWith("E13"))) {
+    if (
+      !error.popupStyle
+      && error.code
+      && (
+        error.code.startsWith('E2')
+        || error.code.startsWith('E13')
+        || CENTER_POPUP_CODES.has(error.code)
+      )
+    ) {
       error.popupStyle = 'center';
-      error.abortMeasurement = true;
+      // Homing errors use the same centered presentation as analysis errors,
+      // but only measurement/profile error families own measurement abort.
+      if (error.code.startsWith('E2') || error.code.startsWith('E13')) {
+        error.abortMeasurement = true;
+      }
     }
     
     const currentErrors = this.errorsSubject.value;

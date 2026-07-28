@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 motion_platform = None
 motion_platform_waiting_for_done = False
 motion_lock = threading.RLock()
-EXPECTED_FIRMWARE_MARKER = "TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK"
+EXPECTED_FIRMWARE_MARKER = "TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME"
 
 def connect_to_serial_device(device_name, identification_command, expected_response, vid, pid):
     ports = list(serial.tools.list_ports.comports())
@@ -274,8 +274,6 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
                 if chunk:
                     buf += chunk
                     reply_lower = buf.lower()
-                    if expect_lower in reply_lower:
-                        return True, bytes(buf)
                     if any(marker in reply_lower for marker in failure_markers_lower):
                         logging.warning(
                             "Controller rejected '%s': %r",
@@ -283,6 +281,8 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
                             bytes(buf[:256]),
                         )
                         return False, bytes(buf)
+                    if expect_lower in reply_lower:
+                        return True, bytes(buf)
             else:
                 time.sleep(0.01)
 

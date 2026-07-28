@@ -6,10 +6,6 @@ import { CaptureRequestRow } from '../models/light.models';
 
 export interface AutoMeasurementSettings {
   save_location: string;
-  first_tablet_x: number;
-  first_tablet_y: number;
-  first_tablet_z: number;
-  tablet_spacing: number;
   capture_plan?: CaptureRequestRow[];
 }
 
@@ -23,10 +19,12 @@ export interface MeasurementCameraConfig {
   connected: boolean;
   values: {
     ExposureTime: number;
+    Gain: number;
     Gamma: number;
   };
   ranges: {
     ExposureTime?: CameraParameterRange;
+    Gain?: CameraParameterRange;
     Gamma?: CameraParameterRange;
   };
 }

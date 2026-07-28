@@ -16,6 +16,7 @@ import {
   FilterSettings
 } from '../../models/filter-settings.models';
 import { FilterSettingsService } from '../../services/filter-settings.service';
+import { MotionSettingsService } from '../../services/motion-settings.service';
 import { FilterRevolverService } from '../../services/filter-revolver.service';
 import { FilterRevolverComponent } from '../../components/filter-revolver/filter-revolver.component';
 
@@ -30,6 +31,10 @@ import { FilterRevolverComponent } from '../../components/filter-revolver/filter
 })
 export class MotionControl implements OnInit, OnDestroy {
   movementAmount: number = 1;
+  firstTabletX = 2.9;
+  firstTabletY = 10.6;
+  firstTabletZ = 20;
+  tabletSpacing = 18.3;
 
   motorOffState: boolean = false;
 
@@ -59,6 +64,7 @@ export class MotionControl implements OnInit, OnDestroy {
   private fourChannelLightPolling?: Subscription;
   private filterStatusPolling?: Subscription;
   private filterSettingsSub?: Subscription;
+  private traySettingsSub?: Subscription;
   private filterStatusGeneration = 0;
   isConnected: boolean = false;
 
@@ -118,6 +124,7 @@ export class MotionControl implements OnInit, OnDestroy {
     private errorNotificationService: ErrorNotificationService,
     private sharedService: SharedService,
     private filterSettingsService: FilterSettingsService,
+    private motionSettingsService: MotionSettingsService,
     private filterRevolverService: FilterRevolverService
   ) { }
 
@@ -172,6 +179,16 @@ export class MotionControl implements OnInit, OnDestroy {
     this.filterSettingsService.get().subscribe({
       error: error => console.error('Failed to load filter settings:', error)
     });
+    this.traySettingsSub = this.motionSettingsService.advanced$.subscribe(settings => {
+      if (!settings) return;
+      this.firstTabletX = settings.first_tablet_x_mm;
+      this.firstTabletY = settings.first_tablet_y_mm;
+      this.firstTabletZ = settings.first_tablet_z_mm;
+      this.tabletSpacing = settings.tablet_spacing_mm;
+    });
+    this.motionSettingsService.getAdvanced().subscribe({
+      error: error => console.error('Failed to load tray geometry settings:', error)
+    });
     this.startFilterRevolverStatusPolling();
 
     // Listen for external reconnections (e.g., auto-measurement reconnects the platform).
@@ -200,6 +217,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.fourChannelLightPolling?.unsubscribe();
     this.filterStatusPolling?.unsubscribe();
     this.filterSettingsSub?.unsubscribe();
+    this.traySettingsSub?.unsubscribe();
     Object.values(this.lampClickTimers).forEach(timer => timer && clearTimeout(timer));
     this.measurementActiveSub?.unsubscribe();
     this.motionPositionSub?.unsubscribe();
@@ -748,6 +766,11 @@ export class MotionControl implements OnInit, OnDestroy {
       .subscribe({
         next: (response: any) => {
           console.log(`Motion platform ${ax ? ax.toUpperCase() : 'ALL'} homed successfully.`, response);
+          const position = response?.position;
+          const homedPosition = (axis: 'x' | 'y' | 'z'): number =>
+            typeof position?.[axis] === 'number' && Number.isFinite(position[axis])
+              ? position[axis]
+              : 0;
 
           // Preserve your original side effects
           if (ax === 'a') {
@@ -762,11 +785,13 @@ export class MotionControl implements OnInit, OnDestroy {
             this.filterRevolverRotationInitialized = true;
             this.syncFilterRevolverStatus();
           } else if (ax) {
-            if (ax === 'x') { this.xPosition = 0; this.xHomed = true; }
-            else if (ax === 'y') { this.yPosition = 0; this.yHomed = true; }
-            else if (ax === 'z') { this.zPosition = 0; this.zHomed = true; }
+            if (ax === 'x') { this.xPosition = homedPosition('x'); this.xHomed = true; }
+            else if (ax === 'y') { this.yPosition = homedPosition('y'); this.yHomed = true; }
+            else if (ax === 'z') { this.zPosition = homedPosition('z'); this.zHomed = true; }
           } else {
-            this.xPosition = 0; this.yPosition = 0; this.zPosition = 0;
+            this.xPosition = homedPosition('x');
+            this.yPosition = homedPosition('y');
+            this.zPosition = homedPosition('z');
             this.xHomed = this.yHomed = this.zHomed = true;
           }
           // Publish homed state to SharedService
@@ -791,11 +816,18 @@ export class MotionControl implements OnInit, OnDestroy {
     try {
       this.filterStatusGeneration++;
       // The backend executes this exact order and acknowledges every axis.
-      await firstValueFrom(
+      const response: any = await firstValueFrom(
         this.http.post(`${BASE_URL}/home_toolhead`, { axes: ['z', 'y', 'x', 'a'] })
       );
+      const position = response?.position;
+      const homedPosition = (axis: 'x' | 'y' | 'z'): number =>
+        typeof position?.[axis] === 'number' && Number.isFinite(position[axis])
+          ? position[axis]
+          : 0;
       this.xHomed = this.yHomed = this.zHomed = true;
-      this.xPosition = this.yPosition = this.zPosition = 0;
+      this.xPosition = homedPosition('x');
+      this.yPosition = homedPosition('y');
+      this.zPosition = homedPosition('z');
       this.updateSharedHomedState();
       this.filterRevolverStatus = {
         position: 1,

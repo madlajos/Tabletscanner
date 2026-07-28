@@ -1,9 +1,8 @@
 {
-    "settings_schema_version": 7,
+    "settings_schema_version": 6,
     "camera_params": {
         "ExposureTime": 10000000.0,
-        "Gamma": 1.0,
-        "Gain": 0.0
+        "Gamma": 1.0
     },
     "other_settings": {
         "objective": "1.0x",
@@ -20,7 +19,6 @@
                 "wavelength": "vis",
                 "filter_position": 1,
                 "exposure_time": 1006000.0,
-                "gain": 0.0,
                 "gamma": 1.0
             }
         ]
