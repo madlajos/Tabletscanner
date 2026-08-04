@@ -11,6 +11,7 @@ import { BASE_URL } from '../../api-config';
 import { LightChannel, LightStatus } from '../../models/light.models';
 import {
   FilterDefinition,
+  HeightOffsetApplication,
   FilterRevolverDirection,
   FilterRevolverStatus,
   FilterSettings
@@ -65,6 +66,7 @@ export class MotionControl implements OnInit, OnDestroy {
   private filterStatusPolling?: Subscription;
   private filterSettingsSub?: Subscription;
   private traySettingsSub?: Subscription;
+  private autofocusInvalidateSub?: Subscription;
   private filterStatusGeneration = 0;
   isConnected: boolean = false;
 
@@ -106,7 +108,10 @@ export class MotionControl implements OnInit, OnDestroy {
   private filterRevolverRotationInitialized = false;
   filterSettings: FilterSettings = {
     filters: [],
-    slots: [null, null, null, null, null, null]
+    slots: [null, null, null, null, null, null],
+    height_offsets_mm: {
+      empty: { uv255: 0, uv310: 0, uv365: 0, vis: 0 }
+    }
   };
   filterRevolverStatus: FilterRevolverStatus = {
     position: null,
@@ -168,7 +173,7 @@ export class MotionControl implements OnInit, OnDestroy {
     });
 
     // Subscribe to autofocus invalidation (e.g., when auto-measurement moves the platform)
-    this.sharedService.autofocusInvalidate$.subscribe(() => {
+    this.autofocusInvalidateSub = this.sharedService.autofocusInvalidate$.subscribe(() => {
       this.autofocusDone = false;
     });
 
@@ -218,6 +223,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.filterStatusPolling?.unsubscribe();
     this.filterSettingsSub?.unsubscribe();
     this.traySettingsSub?.unsubscribe();
+    this.autofocusInvalidateSub?.unsubscribe();
     Object.values(this.lampClickTimers).forEach(timer => timer && clearTimeout(timer));
     this.measurementActiveSub?.unsubscribe();
     this.motionPositionSub?.unsubscribe();
@@ -390,7 +396,13 @@ export class MotionControl implements OnInit, OnDestroy {
   private syncFourChannelLightStatus(): void {
     if (!this.isConnected || this.lightBusy) return;
     this.http.get<LightStatus>(`${BASE_URL}/lights/status`).subscribe({
-      next: status => this.lightStatus = status,
+      next: status => {
+        this.lightStatus = status;
+        if (!this.isAutofocusing && status.height_offset_reference) {
+          this.autofocusDone = status.height_offset_reference.available;
+        }
+        this.applyHeightOffsetPosition(status.height_offset);
+      },
       error: () => undefined
     });
   }
@@ -427,6 +439,15 @@ export class MotionControl implements OnInit, OnDestroy {
       || !this.filterRevolverStatus.homed
       || this.filterRevolverBusy
       || this.filterRevolverStatus.busy;
+  }
+
+  get activeHeightOffset(): number | null {
+    const channel = this.lightStatus.active_channel;
+    const position = this.filterRevolverStatus.position;
+    if (!channel || !position) return null;
+    const filterKey = this.filterSettings.slots[position - 1] || 'empty';
+    const value = this.filterSettings.height_offsets_mm[filterKey]?.[channel];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
   }
 
   openHomeContextMenu(event: MouseEvent): void {
@@ -474,6 +495,7 @@ export class MotionControl implements OnInit, OnDestroy {
         this.filterRevolverRotationDegrees += direction === 'up' ? -60 : 60;
         this.filterRevolverRotationInitialized = true;
         this.filterRevolverStatus = status;
+        this.applyHeightOffsetPosition(status.height_offset);
       },
       error: error => {
         console.error('Filter revolver rotation failed:', error);
@@ -503,6 +525,7 @@ export class MotionControl implements OnInit, OnDestroy {
         this.filterRevolverRotationDegrees += visualDirection * response.steps * 60;
         this.filterRevolverRotationInitialized = true;
         this.filterRevolverStatus = response;
+        this.applyHeightOffsetPosition(response.height_offset);
       },
       error: error => {
         console.error('Filter revolver position selection failed:', error);
@@ -547,7 +570,11 @@ export class MotionControl implements OnInit, OnDestroy {
       ? this.http.post<LightStatus>(`${BASE_URL}/lights/off`, { channel })
       : this.http.post<LightStatus>(`${BASE_URL}/lights/activate`, mode ? { channel, mode } : { channel });
     request.subscribe({
-      next: status => { this.lightStatus = status; this.lightBusy = false; },
+      next: status => {
+        this.lightStatus = status;
+        this.applyHeightOffsetPosition(status.height_offset);
+        this.lightBusy = false;
+      },
       error: error => { console.error('Four-channel lamp command failed:', error); this.lightBusy = false; this.syncFourChannelLightStatus(); }
     });
   }
@@ -589,6 +616,11 @@ export class MotionControl implements OnInit, OnDestroy {
 
   private clamp(v: number, lo: number, hi: number): number {
     return Math.max(lo, Math.min(hi, v));
+  }
+
+  private applyHeightOffsetPosition(application?: HeightOffsetApplication): void {
+    if (!application?.applied || typeof application.target_z !== 'number') return;
+    this.zPosition = Math.round(application.target_z * 1000) / 1000;
   }
 
   private toNumberOrUndefined(v?: number | string): number | undefined {
@@ -746,6 +778,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
     this.closeHomeContextMenu();
     this.resetMotorOffState();
+    this.autofocusDone = false;
 
     const ax = axis ? axis.toLowerCase() as 'x' | 'y' | 'z' | 'a' : undefined;
     const payload = { axes: ax ? [ax] : [] };
@@ -810,6 +843,7 @@ export class MotionControl implements OnInit, OnDestroy {
     if (this.isHoming) return;
 
     this.closeHomeContextMenu();
+    this.autofocusDone = false;
     this.isHoming = true;
     this.stopPositionPolling();
 
@@ -882,6 +916,7 @@ export class MotionControl implements OnInit, OnDestroy {
       next: () => {
         console.log('Motors have been turned off.');
         this.motorOffState = true;
+        this.autofocusDone = false;
       },
       error: (error) => {
         console.error('Failed to turn off motors:', error);
@@ -907,24 +942,6 @@ export class MotionControl implements OnInit, OnDestroy {
     this.autofocusAbortedByUser = false;
     this.sharedService.setAutofocusActive(true);
 
-    // Autofocus requires VIS. Route it through the four-channel controller so
-    // its physical all-other-outputs-off interlock is always applied.
-    if (this.lightStatus.active_channel !== 'vis') {
-      try {
-        this.lightStatus = await firstValueFrom(
-          this.http.post<LightStatus>(`${BASE_URL}/lights/activate`, { channel: 'vis' })
-        );
-        console.log('[MotionControl] Dome light auto-enabled for autofocus');
-        this.sharedService.setActiveLight('dome');
-        this.applyCameraSettingsForLight('dome');
-      } catch (err) {
-        console.error('Failed to turn on dome light before autofocus', err);
-        this.isAutofocusing = false;
-        this.sharedService.setAutofocusActive(false);
-        return;
-      }
-    }
-
     this.sharedService.setAutofocusError(null);
 
     this.http.post(`${BASE_URL}/autofocus_coarse`, { skip_empty_check: true }).subscribe({
@@ -942,6 +959,9 @@ export class MotionControl implements OnInit, OnDestroy {
           }
         } else {
           this.autofocusDone = true;
+          this.filterStatusGeneration++;
+          this.syncFilterRevolverStatus();
+          this.syncFourChannelLightStatus();
           this.sharedService.setAutofocusError(null);
         }
       },

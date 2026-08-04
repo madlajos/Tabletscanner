@@ -13,10 +13,24 @@
 .filter-layout { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(230px, 1fr); gap: 28px; align-items: center; margin: 18px 0 28px; }
 .filter-layout app-filter-revolver { margin: 0 auto; }
 .filter-slot-table, .filter-definition-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.filter-definition-table { table-layout: fixed; }
 .filter-slot-table th, .filter-slot-table td, .filter-definition-table th, .filter-definition-table td { padding: 7px; border-bottom: 1px solid #444; }
+.filter-definition-table th, .filter-definition-table td { box-sizing: border-box; text-align: center; vertical-align: middle; }
+.filter-definition-table .filter-name-column { width: 42%; }
+.filter-definition-table .filter-wavelength-column { width: 30%; }
+.filter-definition-table .filter-color-column { width: 18%; }
+.filter-definition-table .filter-actions-column { width: 10%; }
 .filter-slot-table select, .filter-definition-table input { max-width: 100%; padding: 5px; color: #fff; background: #333; border: 1px solid #666; border-radius: 3px; }
-.filter-slot-table select { width: 100%; }.filter-definition-table input[type='text'] { width: 120px; }.filter-definition-table input[type='number'] { width: 62px; }
+.filter-slot-table select { width: 100%; }.filter-definition-table input[type='text'] { box-sizing: border-box; width: 100%; }.filter-definition-table td:nth-child(2) input { width: calc(100% - 26px); }
 .filter-definition-table .color-picker { width: 32px; height: 28px; padding: 2px; }.delete-filter { border: 0; background: transparent; color: #ff9a9a; }.delete-filter:disabled { opacity: .55; }
+.height-offset-table-wrapper { max-height: 460px; overflow: auto; margin: 18px 0; }
+.height-offset-table { width: 100%; min-width: 620px; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+.height-offset-table th, .height-offset-table td { padding: 8px 6px; border-bottom: 1px solid #444; text-align: center; vertical-align: middle; }
+.height-offset-table thead th { position: sticky; top: 0; z-index: 1; background: #292929; }
+.height-offset-table th:first-child { width: 28%; text-align: left; }
+.height-offset-input { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.height-offset-input input { box-sizing: border-box; width: 68px; padding: 5px; color: #fff; background: #333; border: 1px solid #666; border-radius: 3px; text-align: right; }
+.height-offset-input input:disabled { opacity: .65; cursor: not-allowed; }
 .lamp-settings-table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 12px; }
 .lamp-settings-table th, .lamp-settings-table td { padding: 9px 7px; border-bottom: 1px solid #444; text-align: left; }
 .lamp-settings-table input { width: 62px; padding: 5px; margin-right: 4px; color: #fff; background: #333; border: 1px solid #666; border-radius: 3px; }

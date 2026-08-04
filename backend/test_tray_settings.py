@@ -5,6 +5,7 @@ from settings_manager import (
     DEFAULT_FIRST_TABLET_Y_MM,
     DEFAULT_FIRST_TABLET_Z_MM,
     DEFAULT_TABLET_SPACING_MM,
+    TrayGeometryError,
     migrate_settings,
     validate_motion_simulation_settings,
 )
@@ -31,7 +32,7 @@ class TraySettingsTests(unittest.TestCase):
         self.assertEqual(18.3, normalized['tablet_spacing_mm'])
 
     def test_out_of_range_tray_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, '10 x 10 tray'):
+        with self.assertRaisesRegex(TrayGeometryError, '10 x 10 tray'):
             validate_motion_simulation_settings(
                 advanced_payload(first_tablet_x_mm=20, tablet_spacing_mm=18.3)
             )
@@ -53,7 +54,7 @@ class TraySettingsTests(unittest.TestCase):
             },
         })
         self.assertTrue(changed)
-        self.assertEqual(6, migrated['settings_schema_version'])
+        self.assertEqual(8, migrated['settings_schema_version'])
         self.assertEqual(3, migrated['advanced_settings']['first_tablet_x_mm'])
         self.assertEqual(18, migrated['advanced_settings']['tablet_spacing_mm'])
         self.assertNotIn('first_tablet_x', migrated['auto_measurement_settings'])

@@ -30,10 +30,11 @@
               </div>
               <h4>Szűrők konfigurálása</h4>
               <div style="max-height: 310px; overflow-y: auto;">
-                <table class="filter-definition-table"><thead><tr><th>Név</th><th>Hullámhossz tartomány</th><th>Magasság-eltolás</th><th>Szín</th><th aria-label="Műveletek"></th></tr></thead><tbody><tr *ngFor="let filter of filterSettings.filters; let i = index">
+                <table class="filter-definition-table">
+                  <colgroup><col class="filter-name-column"><col class="filter-wavelength-column"><col class="filter-color-column"><col class="filter-actions-column"></colgroup>
+                  <thead><tr><th>Név</th><th>Hullámhossz tartomány</th><th>Szín</th><th aria-label="Műveletek"></th></tr></thead><tbody><tr *ngFor="let filter of filterSettings.filters; let i = index">
                   <td><input type="text" maxlength="100" [(ngModel)]="filter.name" (ngModelChange)="onFilterChanged()" [disabled]="measurementActive" aria-label="Szűrő neve"></td>
                   <td><input type="text" maxlength="100" [(ngModel)]="filter.wavelength_range" (ngModelChange)="onFilterChanged()" placeholder="pl. 300–320" [disabled]="measurementActive" aria-label="Hullámhossz tartomány nm-ben"><span>nm</span></td>
-                  <td><input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any" [(ngModel)]="filter.height_offset_mm" (ngModelChange)="onFilterChanged()" [disabled]="measurementActive" aria-label="Magasság-eltolás mm-ben"><span>mm</span></td>
                   <td><input class="color-picker" type="color" [(ngModel)]="filter.color" (ngModelChange)="onFilterChanged()" [disabled]="measurementActive" aria-label="Szűrő színe" style="opacity:.6"></td>
                   <td><button type="button" class="delete-filter" (click)="removeFilter(i)" [disabled]="measurementActive" aria-label="Szűrő törlése"><mat-icon>delete</mat-icon></button></td>
                 </tr></tbody></table>
@@ -48,7 +49,48 @@
 
           <section *ngSwitchCase="'tray'">
             <h3>Tálca</h3>
-            <p>A tálca beállításai egy későbbi fejlesztési fázisban lesznek elérhetők.</p>
+            <p class="settings-note">
+              Magasság-eltolás szűrő és megvilágítás szerint. Az értékek csak sikeres kézi autofókusz után kerülnek alkalmazásra.
+            </p>
+            <p *ngIf="loadingFilterSettings" class="settings-note">Betöltés…</p>
+            <div class="height-offset-table-wrapper" *ngIf="!loadingFilterSettings">
+              <table class="height-offset-table">
+                <thead>
+                  <tr><th>Szűrő</th><th *ngFor="let channel of heightOffsetChannels">{{ channel.label }}</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">Üres szűrő</th>
+                    <td *ngFor="let channel of heightOffsetChannels">
+                      <span class="height-offset-input">
+                        <input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any"
+                          [(ngModel)]="filterSettings.height_offsets_mm['empty'][channel.id]"
+                          (ngModelChange)="onFilterChanged()"
+                          [disabled]="measurementActive || isAutofocusZeroCell('empty', channel.id)"
+                          [attr.aria-label]="'Üres szűrő, ' + channel.label + ' magasság-eltolás'">
+                        <span>mm</span>
+                      </span>
+                    </td>
+                  </tr>
+                  <tr *ngFor="let filter of filterSettings.filters">
+                    <th scope="row">{{ filter.name || 'Névtelen szűrő' }}</th>
+                    <td *ngFor="let channel of heightOffsetChannels">
+                      <span class="height-offset-input">
+                        <input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any"
+                          [(ngModel)]="filterSettings.height_offsets_mm[filter.id][channel.id]"
+                          (ngModelChange)="onFilterChanged()" [disabled]="measurementActive"
+                          [attr.aria-label]="(filter.name || 'Névtelen szűrő') + ', ' + channel.label + ' magasság-eltolás'">
+                        <span>mm</span>
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="settings-note">Megengedett tartomány: {{ maxHeightOffsetDownMm }}–{{ maxHeightOffsetUpMm }} mm.</p>
+            <p *ngIf="filterError" class="settings-error">{{ filterError }}</p>
+            <p *ngIf="savingFilterSettings" class="settings-note">Automatikus mentés…</p>
+            <p *ngIf="filterSaved && !savingFilterSettings" class="settings-success">Automatikusan mentve.</p>
           </section>
 
           <section *ngSwitchCase="'camera'">

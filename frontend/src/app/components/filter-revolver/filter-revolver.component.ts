@@ -12,7 +12,10 @@ import { FilterDefinition, FilterSettings } from '../../models/filter-settings.m
 export class FilterRevolverComponent {
   @Input() settings: FilterSettings = {
     filters: [],
-    slots: [null, null, null, null, null, null]
+    slots: [null, null, null, null, null, null],
+    height_offsets_mm: {
+      empty: { uv255: 0, uv310: 0, uv365: 0, vis: 0 }
+    }
   };
   @Input() activePosition: number | null = null;
   @Input() size = 270;

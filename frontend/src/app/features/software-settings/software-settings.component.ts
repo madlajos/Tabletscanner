@@ -19,7 +19,12 @@ import {
 import { AdvancedLampSettings, LampSettings, UvLampSettings } from '../../models/light.models';
 import { LampSettingsService } from '../../services/lamp-settings.service';
 import { FilterSettingsService } from '../../services/filter-settings.service';
-import { FilterDefinition, FilterSettings } from '../../models/filter-settings.models';
+import {
+  FilterDefinition,
+  FilterSettings,
+  HeightOffsetChannel,
+  HeightOffsetRow
+} from '../../models/filter-settings.models';
 import { MotionSettingsService } from '../../services/motion-settings.service';
 import { SharedService } from '../../shared.service';
 import { FilterRevolverComponent } from '../../components/filter-revolver/filter-revolver.component';
@@ -109,8 +114,18 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   readonly fixedAdvancedSelectors: Record<UvChannel | 'vis', string> = {
     uv255: 'P2', uv310: 'P3', uv365: 'P1', vis: 'P0'
   };
+  readonly heightOffsetChannels: ReadonlyArray<{ id: HeightOffsetChannel; label: string }> = [
+    { id: 'uv255', label: '255 nm' },
+    { id: 'uv310', label: '310 nm' },
+    { id: 'uv365', label: '365 nm' },
+    { id: 'vis', label: 'VIS' }
+  ];
   advancedSelectors: Record<UvChannel | 'vis', string> = { ...this.fixedAdvancedSelectors };
-  filterSettings: FilterSettings = { filters: [], slots: [null, null, null, null, null, null] };
+  filterSettings: FilterSettings = {
+    filters: [],
+    slots: [null, null, null, null, null, null],
+    height_offsets_mm: { empty: this.createEmptyHeightOffsetRow() }
+  };
 
   constructor(
     private readonly lampSettingsService: LampSettingsService,
@@ -321,13 +336,14 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   }
 
   addFilter(): void {
+    const id = this.createFilterId();
     this.filterSettings.filters.push({
-      id: this.createFilterId(),
+      id,
       name: '',
       wavelength_range: '',
-      height_offset_mm: 0,
       color: '#ffffff'
     });
+    this.filterSettings.height_offsets_mm[id] = this.createEmptyHeightOffsetRow();
     this.filterSaved = false;
   }
 
@@ -336,6 +352,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     this.filterSettings.filters.splice(index, 1);
     if (removedId) {
       this.filterSettings.slots = this.filterSettings.slots.map(slot => slot === removedId ? null : slot);
+      delete this.filterSettings.height_offsets_mm[removedId];
     }
     this.onFilterChanged();
   }
@@ -372,14 +389,17 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     return this.filterSettings.filters.find(filter => filter.id === filterId);
   }
 
+  isAutofocusZeroCell(filterKey: string, channel: HeightOffsetChannel): boolean {
+    return filterKey === 'empty' && channel === 'vis';
+  }
+
   private persistFilterSettings(): Observable<boolean> {
     this.filterError = '';
     this.filterSaved = false;
     const normalizedFilters = this.filterSettings.filters.map(filter => ({
       ...filter,
       name: filter.name.trim(),
-      wavelength_range: filter.wavelength_range.trim(),
-      height_offset_mm: Number(filter.height_offset_mm)
+      wavelength_range: filter.wavelength_range.trim()
     }));
     const names = new Set<string>();
     for (const filter of normalizedFilters) {
@@ -391,15 +411,32 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
         this.filterError = 'A szűrők neve legyen egyedi.';
         return of(false);
       }
-      if (
-        !Number.isFinite(filter.height_offset_mm)
-        || filter.height_offset_mm < this.maxHeightOffsetDownMm
-        || filter.height_offset_mm > this.maxHeightOffsetUpMm
-      ) {
-        this.filterError = `A magasság-eltolás ${this.maxHeightOffsetDownMm} és ${this.maxHeightOffsetUpMm} mm közötti szám lehet.`;
+      names.add(normalizedName);
+    }
+
+    const normalizedHeightOffsets: Record<string, HeightOffsetRow> = {};
+    for (const key of ['empty', ...normalizedFilters.map(filter => filter.id)]) {
+      const sourceRow = this.filterSettings.height_offsets_mm[key];
+      if (!sourceRow) {
+        this.filterError = 'Az egyik szűrő magasság-eltolás sora hiányzik.';
         return of(false);
       }
-      names.add(normalizedName);
+      const normalizedRow = {} as HeightOffsetRow;
+      for (const channel of this.heightOffsetChannels) {
+        const value = key === 'empty' && channel.id === 'vis'
+          ? 0
+          : Number(sourceRow[channel.id]);
+        if (
+          !Number.isFinite(value)
+          || value < this.maxHeightOffsetDownMm
+          || value > this.maxHeightOffsetUpMm
+        ) {
+          this.filterError = `A magasság-eltolás ${this.maxHeightOffsetDownMm} és ${this.maxHeightOffsetUpMm} mm közötti szám lehet.`;
+          return of(false);
+        }
+        normalizedRow[channel.id] = value;
+      }
+      normalizedHeightOffsets[key] = normalizedRow;
     }
 
     const validIds = new Set(normalizedFilters.map(filter => filter.id));
@@ -410,7 +447,8 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
 
     const payload: FilterSettings = {
       filters: normalizedFilters,
-      slots: [null, ...this.filterSettings.slots.slice(1)]
+      slots: [null, ...this.filterSettings.slots.slice(1)],
+      height_offsets_mm: normalizedHeightOffsets
     };
     this.savingFilterSettings = true;
     return this.filterSettingsService.update(payload).pipe(
@@ -429,29 +467,26 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   }
 
   onAdvancedChanged(): void {
-    this.advancedError = '';
     this.advancedSaved = false;
-    if (!this.hasValidHeightOffsetLimits()) {
-      this.advancedError = 'A felfelé határ pozitív, a lefelé határ negatív szám legyen.';
-      return;
-    }
-    if (!this.hasValidTrayGeometry()) {
-      this.advancedError = 'Az első tabletta és a 10×10-es kiosztás minden koordinátája maradjon a gép mozgástartományában.';
-      return;
-    }
-    const filtersOutsideLimits = this.filterSettings.filters.some(filter => {
-      const offset = Number(filter.height_offset_mm);
-      return offset < Number(this.maxHeightOffsetDownMm) || offset > Number(this.maxHeightOffsetUpMm);
-    });
-    if (filtersOutsideLimits) {
-      this.advancedError = 'A megadott határokon kívül eső szűrő-magasságokat előbb módosítsa.';
+    this.advancedError = this.getAdvancedValidationError() || '';
+
+    // Emit for invalid changes too: this resets any pending debounce started
+    // by the preceding valid keystroke. persistAdvancedSettings validates
+    // again and will not send an invalid payload.
+    this.advancedSaveRequests$.next();
+    if (this.advancedError) {
       return;
     }
     this.advancedDirty = true;
-    this.advancedSaveRequests$.next();
   }
 
   private persistAdvancedSettings(): Observable<boolean> {
+    const validationError = this.getAdvancedValidationError();
+    if (validationError) {
+      this.advancedError = validationError;
+      return of(false);
+    }
+
     const output_selectors = Object.fromEntries(
       Object.entries(this.advancedSelectors).map(([channel, value]) => [channel, value.trim().toUpperCase()])
     ) as AdvancedLampSettings['output_selectors'];
@@ -489,7 +524,9 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       }),
       map(() => true),
       catchError(error => {
-        this.advancedError = error?.error?.error || 'A haladó lámpabeállítások mentése sikertelen.';
+        this.advancedError = error?.error?.code === 'E1204'
+          ? 'A 10×10-es tálca koordinátáinak az X/Y mozgástartományon belül kell maradniuk.'
+          : 'A haladó beállítások mentése sikertelen.';
         this.savingAdvancedSettings = false;
         return of(false);
       })
@@ -587,6 +624,10 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     return `filter-${Date.now()}-${this.nextFilterId++}`;
   }
 
+  private createEmptyHeightOffsetRow(): HeightOffsetRow {
+    return { uv255: 0, uv310: 0, uv365: 0, vis: 0 };
+  }
+
   private isValidPercentage(value: unknown): boolean {
     const number = Number(value);
     return Number.isFinite(number) && number >= 10 && number <= 100;
@@ -612,5 +653,25 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       && x >= 0 && y >= 0 && z >= 0 && z <= 30 && spacing > 0
       && x + 9 * spacing <= 175.5
       && y + 9 * spacing <= 175.5;
+  }
+
+  private getAdvancedValidationError(): string | null {
+    if (!this.hasValidHeightOffsetLimits()) {
+      return 'A felfelé határ pozitív, a lefelé határ negatív szám legyen.';
+    }
+    if (!this.hasValidTrayGeometry()) {
+      return 'Az első tabletta és a 10×10-es kiosztás minden koordinátája maradjon a gép mozgástartományában.';
+    }
+    const offsetsOutsideLimits = Object.values(this.filterSettings.height_offsets_mm)
+      .some(row => Object.values(row).some(value => {
+        const offset = Number(value);
+        return !Number.isFinite(offset)
+          || offset < Number(this.maxHeightOffsetDownMm)
+          || offset > Number(this.maxHeightOffsetUpMm);
+      }));
+    if (offsetsOutsideLimits) {
+      return 'A megadott határokon kívül eső magasság-eltolásokat előbb módosítsa.';
+    }
+    return null;
   }
 }

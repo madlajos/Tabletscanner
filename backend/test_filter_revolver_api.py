@@ -9,6 +9,8 @@ import filter_revolver
 import globals
 import motioncontrols
 import porthandler
+import height_offset_control
+import settings_manager
 from virtual_octopus import VirtualOctopusSerial
 
 
@@ -48,6 +50,8 @@ class FilterRevolverApiTests(unittest.TestCase):
         globals.homed_axes = set()
         globals.filter_revolver_homed = False
         globals.filter_revolver_position = None
+        height_offset_control.invalidate_reference()
+        settings_manager.set_settings({})
         self.client = backend_app.app.test_client()
 
     def tearDown(self):
@@ -59,6 +63,8 @@ class FilterRevolverApiTests(unittest.TestCase):
         globals.homed_axes = set()
         globals.filter_revolver_homed = False
         globals.filter_revolver_position = None
+        height_offset_control.invalidate_reference()
+        settings_manager.set_settings({})
 
     def test_status_and_rotation_require_homing(self):
         status = self.client.get('/api/filter-revolver/status')
@@ -211,6 +217,115 @@ class FilterRevolverApiTests(unittest.TestCase):
         self.assertEqual('down', response.get_json()['direction'])
         self.assertEqual(2, response.get_json()['steps'])
         self.assertEqual(60.0, self.device._position['A'])
+
+    def test_filter_change_applies_active_combination_after_manual_autofocus(self):
+        globals.toolhead_homed = True
+        globals.homed_axes = {'x', 'y', 'z', 'a'}
+        globals.filter_revolver_homed = True
+        globals.filter_revolver_position = 1
+        globals.last_toolhead_pos = {'x': 5.0, 'y': 5.0, 'z': 10.0}
+        height_offset_control.record_reference(10.0)
+        settings_manager.set_settings({
+            'filter_settings': {
+                'filters': [{
+                    'id': 'green', 'name': 'Green',
+                    'wavelength_range': '500-570', 'color': '#00ff00',
+                }],
+                'slots': [None, 'green', None, None, None, None],
+                'height_offsets_mm': {
+                    'empty': {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                    'green': {'uv255': 2.0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                },
+            },
+        })
+
+        with patch.object(backend_app.light_controller, 'status', return_value={'active_channel': 'uv255'}):
+            response = self.client.post('/api/filter-revolver/select', json={'position': 2})
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(12.0, response.get_json()['height_offset']['target_z'])
+        self.assertEqual(
+            ['G90', 'G1 Z12.0000', 'M400'],
+            self.device.command_history[-3:],
+        )
+
+    def test_manual_autofocus_selects_empty_filter_and_vis_before_routine(self):
+        globals.toolhead_homed = True
+        globals.homed_axes = {'x', 'y', 'z', 'a'}
+        globals.filter_revolver_homed = True
+        globals.filter_revolver_position = 2
+        globals.last_toolhead_pos = {'x': 5.0, 'y': 5.0, 'z': 10.0}
+        settings_manager.set_settings({
+            'lamp_settings': {
+                'channels': {},
+                'output_selectors': dict(settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS),
+            },
+        })
+
+        def autofocus_result(*_args, **_kwargs):
+            globals.last_toolhead_pos['z'] = 11.25
+            return {'status': 'OK'}
+
+        with patch.object(backend_app.autofocus_main, 'autofocus_coarse', side_effect=autofocus_result):
+            response = self.client.post('/api/autofocus_coarse', json={'skip_empty_check': True})
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, globals.filter_revolver_position)
+        self.assertEqual('vis', backend_app.light_controller.status()['active_channel'])
+        self.assertTrue(response.get_json()['autofocus_reference']['available'])
+        self.assertEqual(11.25, response.get_json()['autofocus_reference']['reference_z'])
+        filter_move_index = self.device.command_history.index('G1 A60 F5400')
+        first_light_index = next(
+            index for index, command in enumerate(self.device.command_history)
+            if command.startswith('M106')
+        )
+        self.assertLess(filter_move_index, first_light_index)
+
+    def test_light_change_applies_current_filter_offset_after_autofocus(self):
+        globals.toolhead_homed = True
+        globals.homed_axes = {'x', 'y', 'z', 'a'}
+        globals.filter_revolver_homed = True
+        globals.filter_revolver_position = 2
+        globals.last_toolhead_pos = {'x': 5.0, 'y': 5.0, 'z': 10.0}
+        height_offset_control.record_reference(10.0)
+        settings_manager.set_settings({
+            'lamp_settings': {
+                'output_selectors': dict(settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS),
+                'channels': {
+                    channel: {
+                        'dim_percent': 50,
+                        'full_percent': 100,
+                        'dim_timeout_seconds': 30,
+                        'full_timeout_seconds': 5,
+                    }
+                    for channel in settings_manager.UV_LAMP_CHANNELS
+                },
+            },
+            'filter_settings': {
+                'filters': [{
+                    'id': 'green', 'name': 'Green',
+                    'wavelength_range': '500-570', 'color': '#00ff00',
+                }],
+                'slots': [None, 'green', None, None, None, None],
+                'height_offsets_mm': {
+                    'empty': {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                    'green': {'uv255': -1.5, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                },
+            },
+        })
+
+        response = self.client.post(
+            '/api/lights/activate',
+            json={'channel': 'uv255', 'mode': 'dimmed'},
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(-1.5, response.get_json()['height_offset']['offset_mm'])
+        self.assertEqual(8.5, globals.last_toolhead_pos['z'])
+        self.assertEqual(
+            ['G90', 'G1 Z8.5000', 'M400'],
+            self.device.command_history[-3:],
+        )
 
 
 if __name__ == '__main__':

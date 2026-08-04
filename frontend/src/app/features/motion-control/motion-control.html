@@ -122,7 +122,7 @@
         (click)="autoFocusCoarse()" 
         [class.autofocusing]="isAutofocusing"
         [class.autofocused]="autofocusDone"
-        [disabled]="!isConnected || measurementActive || !(xHomed && yHomed && zHomed)">
+        [disabled]="!isConnected || measurementActive || !(xHomed && yHomed && zHomed) || !filterRevolverStatus.homed">
         <img src="assets/SVG/auto_focus.svg" alt="Autofocus" class="home-icon" />
       </button>
 
@@ -188,7 +188,7 @@
           <tbody>
             <tr><th>Név:</th><td>{{ activeFilter?.name || 'Üres' }}</td></tr>
             <tr><th>λ:</th><td>{{ activeFilter ? activeFilter.wavelength_range + ' nm' : '—' }}</td></tr>
-            <tr><th>ΔZ:</th><td>{{ activeFilter ? activeFilter.height_offset_mm + ' mm' : '—' }}</td></tr>
+            <tr><th>ΔZ:</th><td>{{ activeHeightOffset === null ? '—' : activeHeightOffset + ' mm' }}</td></tr>
           </tbody>
         </table>
 

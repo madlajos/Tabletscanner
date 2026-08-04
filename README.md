@@ -150,7 +150,7 @@ safety constraints.
 ### Four-channel illumination configuration
 
 The Octopus illumination controller has four logical channels: `uv255`, `uv310`, `uv365`, and
-`vis`. The approved firmware and schema-v3 settings lock these to `P2/HE0`, `P3/HE1`, `P1/FAN1`,
+`vis`. The approved firmware and schema-v8 settings lock these to `P2/HE0`, `P3/HE1`, `P1/FAN1`,
 and `P0/FAN0` respectively; **Beállítások → Haladó** displays the mapping for verification.
 Configure dimmed/full percentages and their UV safety timeouts in
 **Beállítások → Lámpa**. UV channels use one click for dimmed and double click for full output;
@@ -162,8 +162,12 @@ The first row is fixed to VIS with empty filter slot 1 for autofocus, while its 
 remain operator-configurable. Live camera limits and increments validate those values before
 capture. Filter positions are stored in output metadata.
 
-The six revolver positions and reusable filter definitions (name, wavelength range, height offset,
-and display color) can be configured under **Beállítások → Szűrőváltó**. After the A axis is
+The six revolver positions and reusable filter definitions (name, wavelength range, and display
+color) can be configured under **Beállítások → Szűrőváltó**. The **Tálca** page stores a separate
+height offset for every configured-filter/illumination combination, plus the physical empty-filter
+row. Empty filter with VIS is the fixed 0 mm reference. Automatic Z corrections remain disabled
+until the manual autofocus button completes successfully; that routine first selects the empty
+filter and VIS. Any subsequent manual motion invalidates the autofocus reference. After the A axis is
 homed—either by the regular full homing operation or separately from the Home button's
 right-click menu—the Vezérlőpult can move the physical revolver one 60° slot at a time. The UI
 updates its active filter only after the controller acknowledges the completed move.

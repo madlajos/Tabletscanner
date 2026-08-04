@@ -13,6 +13,8 @@ from cameracontrol import (apply_camera_settings,
 import porthandler
 import motioncontrols
 import filter_revolver
+import height_offset_control
+from height_offset_control import HeightOffsetCommandError
 import os
 import sys
 import math
@@ -38,6 +40,7 @@ from settings_manager import (
     validate_lamp_output_selectors,
     validate_lamp_settings,
     validate_motion_simulation_settings,
+    TrayGeometryError,
     UV_LAMP_CHANNELS,
 )
 from light_control import (
@@ -176,6 +179,7 @@ def _reset_motion_reference_state():
     globals.filter_revolver_homed = False
     globals.filter_revolver_position = None
     globals.last_toolhead_pos = {'x': None, 'y': None, 'z': None}
+    height_offset_control.invalidate_reference()
 
 
 def _is_serial_disconnect(exc):
@@ -435,6 +439,7 @@ def disable_steppers():
     try:
         if not motioncontrols.disable_steppers(ser):
             return jsonify({'error': 'Controller did not acknowledge motor-off command', 'popup': True}), 504
+        height_offset_control.invalidate_reference()
         return jsonify({'status': 'success'}), 200
     except (OSError, PermissionError):
         return _handle_motion_usb_disconnect(ser, 'disable steppers')
@@ -450,6 +455,7 @@ def api_home_toolhead():
     if any(axis not in ('x', 'y', 'z', 'a') for axis in axes):
         return jsonify({'ok': False, 'error': 'Invalid homing axis.'}), 400
     requested_axes = axes or ['z', 'y', 'x', 'a']
+    height_offset_control.invalidate_reference()
 
     ser = globals.motion_platform
     if not ser or not getattr(ser, 'is_open', False):
@@ -557,6 +563,15 @@ def _filter_revolver_status():
     }
 
 
+def _apply_selected_height_offset(motion_platform):
+    """Apply the active matrix cell when manual autofocus established zero."""
+    return height_offset_control.apply_active_combination(
+        motion_platform,
+        get_settings().get('filter_settings', default_filter_settings()),
+        light_controller.status()['active_channel'],
+    )
+
+
 @app.route('/api/filter-revolver/status', methods=['GET'])
 def filter_revolver_status():
     """Return the acknowledged runtime position of the physical filter revolver."""
@@ -604,8 +619,12 @@ def rotate_filter_revolver():
             globals.filter_revolver_position,
             direction,
         )
+        height_offset = _apply_selected_height_offset(motion_platform)
         globals.motion_busy = False
-        return jsonify(_filter_revolver_status()), 200
+        return jsonify({
+            **_filter_revolver_status(),
+            'height_offset': height_offset,
+        }), 200
     except filter_revolver.FilterRevolverCommandError as error:
         globals.homed_axes.discard('a')
         globals.filter_revolver_homed = False
@@ -623,6 +642,15 @@ def rotate_filter_revolver():
             'code': ErrorCode.GENERIC,
             'popup': True,
         }), 409
+    except HeightOffsetCommandError as error:
+        app.logger.warning('Filter changed, but automatic height correction failed: %s', error)
+        globals.motion_busy = False
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.MOTION_HEIGHT_OFFSET_FAILED,
+            'popup': True,
+            **_filter_revolver_status(),
+        }), 422
     except (OSError, PermissionError):
         return _handle_motion_usb_disconnect(motion_platform, 'filter revolver rotation')
     finally:
@@ -686,11 +714,13 @@ def select_filter_revolver_position():
                 globals.filter_revolver_position,
                 direction,
             )
+        height_offset = _apply_selected_height_offset(motion_platform)
         globals.motion_busy = False
         return jsonify({
             **_filter_revolver_status(),
             'direction': direction,
             'steps': steps,
+            'height_offset': height_offset,
         }), 200
     except filter_revolver.FilterRevolverCommandError as error:
         globals.homed_axes.discard('a')
@@ -709,6 +739,15 @@ def select_filter_revolver_position():
             'code': ErrorCode.GENERIC,
             'popup': True,
         }), 409
+    except HeightOffsetCommandError as error:
+        app.logger.warning('Filter changed, but automatic height correction failed: %s', error)
+        globals.motion_busy = False
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.MOTION_HEIGHT_OFFSET_FAILED,
+            'popup': True,
+            **_filter_revolver_status(),
+        }), 422
     except (OSError, PermissionError):
         return _handle_motion_usb_disconnect(motion_platform, 'filter revolver selection')
     finally:
@@ -1297,6 +1336,7 @@ def move_toolhead_relative():
 
         # Update cached position after successful relative move
         globals.last_toolhead_pos[axis] = clamped
+        height_offset_control.invalidate_reference()
 
         return jsonify({
             'status': 'success',
@@ -1327,65 +1367,113 @@ def move_toolhead_absolute():
     
 @app.route('/api/autofocus_coarse', methods=['POST'])
 def autofocus_coarse():
+    motion_platform = globals.motion_platform
+    if not motion_platform or not getattr(motion_platform, 'is_open', False):
+        return jsonify({
+            'status': 'error',
+            'message': 'Motion platform not connected',
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True,
+        }), 503
+
+    with porthandler.motion_lock:
+        if globals.motion_busy:
+            return jsonify({
+                'status': 'error',
+                'message': 'Motion platform is busy.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        if not globals.toolhead_homed or not globals.filter_revolver_homed:
+            return jsonify({
+                'status': 'error',
+                'message': 'Home the motion platform and filter revolver before autofocus.',
+                'code': ErrorCode.GENERIC,
+                'popup': True,
+            }), 409
+        globals.motion_busy = True
+
     try:
         # Always clear abort flag so manual AF is not blocked by a previous auto-measurement stop
         globals.autofocus_abort = False
 
-        motion_platform = globals.motion_platform
-        if not motion_platform or not getattr(motion_platform, 'is_open', False):
-            return jsonify({
-                'status': 'error',
-                'message': 'Motion platform not connected',
-                'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
-                'popup': True
-            }), 503
-
-        # --- UV-light exposure safeguard ---
-        # When the UV light is active, run an under/over-exposure gate
-        # before starting the (blocking) autofocus sweep.
-        if light_controller.status()['active_channel'] in UV_LAMP_CHANNELS:
-            cam = globals.camera
-            if cam and cam.IsOpen():
-                from cameracontrol import grab_and_convert_frame
-                try:
-                    with globals.grab_lock:
-                        frame_bgr = grab_and_convert_frame(cam, timeout_ms=3000)
-                    exp_result = under_over.exposure_gate_from_frame(frame_bgr)
-                    exp_code = exp_result.get('code')  # None when OK, "E2302"/"E2303" on error
-                    exp_metrics = {k: v for k, v in exp_result.items() if k not in ('status', 'code')}
-                    app.logger.info(
-                        f"[BAR-LIGHT GATE] status={exp_result['status']} code={exp_code} "
-                        f"p95={exp_metrics.get('p95', 0):.1f} dr={exp_metrics.get('dr', 0):.1f} "
-                        f"white={exp_metrics.get('white', 0):.3f}"
-                    )
-                    if exp_result['status'] != 'OK':
-                        return jsonify({
-                            'status': 'ERROR',
-                            'code': exp_code,
-                            **exp_metrics,
-                        })
-                except Exception as gate_err:
-                    app.logger.warning(f"Bar-light exposure gate failed, proceeding: {gate_err}")
+        # Manual autofocus defines the one fixed zero combination. Select the
+        # acknowledged empty revolver slot first, then enforce VIS through the
+        # four-channel interlock before the camera routine starts.
+        direction, steps = filter_revolver.shortest_path(
+            globals.filter_revolver_position,
+            1,
+        )
+        for _ in range(steps):
+            globals.filter_revolver_position = filter_revolver.rotate_one_slot(
+                motion_platform,
+                globals.filter_revolver_position,
+                direction,
+            )
+        light_controller.activate('vis')
+        height_offset_control.invalidate_reference()
 
         data = request.get_json(silent=True) or {}
         skip_empty = bool(data.get('skip_empty_check', False))
         resp = autofocus_main.autofocus_coarse(motion_platform, do_frame_touch_check=False, skip_empty_check=skip_empty)
+        if resp.get('status') == 'OK':
+            reference_z = height_offset_control.record_reference(
+                getattr(globals, 'last_toolhead_pos', {}).get('z')
+            )
+            resp['autofocus_reference'] = height_offset_control.status()
+            app.logger.info('Manual autofocus height-offset reference set to Z=%.4f.', reference_z)
+        else:
+            height_offset_control.invalidate_reference()
         return jsonify(resp)
+    except filter_revolver.FilterRevolverCommandError as error:
+        globals.homed_axes.discard('a')
+        globals.filter_revolver_homed = False
+        globals.filter_revolver_position = None
+        height_offset_control.invalidate_reference()
+        return jsonify({
+            'status': 'error',
+            'message': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 504
+    except LightConfigurationError as error:
+        height_offset_control.invalidate_reference()
+        return jsonify({
+            'status': 'error',
+            'message': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 400
+    except LightCommandError as error:
+        height_offset_control.invalidate_reference()
+        return jsonify({
+            'status': 'error',
+            'message': str(error),
+            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+            'popup': True,
+        }), 503
     except (OSError, PermissionError) as e:
+        height_offset_control.invalidate_reference()
         return _handle_motion_usb_disconnect(motion_platform, "autofocus")
     except Exception as e:
+        height_offset_control.invalidate_reference()
         app.logger.exception("autofocus_coarse failed")  # logs full traceback
         return jsonify({
             'status': 'error',
             'message': str(e),
             'trace': traceback.format_exc()
         }), 500
+    finally:
+        globals.motion_busy = False
 
 
 @app.route('/api/lights/status', methods=['GET'])
 def get_lights_status():
     try:
-        return jsonify(light_controller.status()), 200
+        return jsonify({
+            **light_controller.status(),
+            'height_offset_reference': height_offset_control.status(),
+        }), 200
     except Exception as error:
         app.logger.exception('Failed to retrieve four-channel light status')
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
@@ -1393,19 +1481,50 @@ def get_lights_status():
 
 @app.route('/api/lights/activate', methods=['POST'])
 def activate_light():
+    owns_motion = False
     try:
         data = request.get_json(silent=True) or {}
+        with porthandler.motion_lock:
+            if globals.motion_busy:
+                return jsonify({
+                    'error': 'Motion platform is busy.',
+                    'code': ErrorCode.GENERIC,
+                    'popup': True,
+                }), 409
+            globals.motion_busy = True
+            owns_motion = True
         status = light_controller.activate(data.get('channel'), data.get('mode'))
-        return jsonify(status), 200
+        height_offset = _apply_selected_height_offset(
+            porthandler.motion_platform or globals.motion_platform
+        )
+        return jsonify({
+            **status,
+            'height_offset': height_offset,
+            'height_offset_reference': height_offset_control.status(),
+        }), 200
     except LampSettingsError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.LAMP_SETTINGS_MISSING, 'popup': True}), 400
     except LightConfigurationError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
     except LightCommandError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'popup': True}), 503
+    except HeightOffsetCommandError as error:
+        app.logger.warning('Light changed, but automatic height correction failed: %s', error)
+        try:
+            light_controller.off()
+        except Exception as off_error:
+            app.logger.warning('All-off after height-correction failure also failed: %s', off_error)
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.MOTION_HEIGHT_OFFSET_FAILED,
+            'popup': True,
+        }), 422
     except Exception as error:
         app.logger.exception('Failed to activate four-channel light')
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+    finally:
+        if owns_motion:
+            globals.motion_busy = False
 
 
 @app.route('/api/lights/off', methods=['POST'])
@@ -1555,6 +1674,7 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
     # Update cached position with the planned values
     for ax, val in planned.items():
         globals.last_toolhead_pos[ax] = float(val)
+    height_offset_control.invalidate_reference()
 
     return {
         'status': 'success',
@@ -3151,6 +3271,12 @@ def advanced_motion_settings():
                 'virtual': bool(device and getattr(device, 'is_virtual', False)),
             },
         }), 200
+    except TrayGeometryError:
+        return jsonify({
+            'error': 'A 10×10-es tálca koordinátáinak az X/Y mozgástartományon belül kell maradniuk.',
+            'code': ErrorCode.MOTION_TRAY_OUT_OF_RANGE,
+            'popup': True,
+        }), 400
     except ValueError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
     except Exception as error:

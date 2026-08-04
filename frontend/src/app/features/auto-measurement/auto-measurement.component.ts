@@ -83,7 +83,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   private defaultGain = 0;
   private defaultGamma = 1;
   capturePlan: CapturePlanRow[] = [this.createCapturePlanRow('vis', 1)];
-  filterSettings: FilterSettings = { filters: [], slots: [null, null, null, null, null, null] };
+  filterSettings: FilterSettings = {
+    filters: [],
+    slots: [null, null, null, null, null, null],
+    height_offsets_mm: { empty: { uv255: 0, uv310: 0, uv365: 0, vis: 0 } }
+  };
   exposureRange?: CameraParameterRange;
   gainRange?: CameraParameterRange;
   gammaRange?: CameraParameterRange;

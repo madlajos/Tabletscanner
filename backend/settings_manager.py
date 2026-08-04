@@ -23,13 +23,14 @@ def get_base_path():
     return os.path.dirname(__file__)
 
 DEFAULT_SETTINGS_PATH = os.path.join(get_base_path(), 'settings.json')
-SETTINGS_SCHEMA_VERSION = 7
+SETTINGS_SCHEMA_VERSION = 8
 UV_LAMP_CHANNELS = ('uv255', 'uv310', 'uv365')
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 FILTER_POSITIONS = (1, 2, 3, 4, 5, 6)
 FILTER_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
 FILTER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
 MAX_CONFIGURED_FILTERS = 100
+EMPTY_FILTER_KEY = 'empty'
 DEFAULT_MAX_HEIGHT_OFFSET_UP_MM = 5.0
 DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM = -5.0
 ADVANCED_LAMP_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
@@ -61,6 +62,10 @@ Z_TRAVEL_MAX_MM = 30.0
 # clamped to 175 mm; retain this sub-millimetre edge allowance so migration
 # doesn't invalidate installations using the established 10.6/18.3 geometry.
 TRAY_EDGE_CALIBRATION_TOLERANCE_MM = 0.5
+
+
+class TrayGeometryError(ValueError):
+    """Raised when the configured 10 x 10 tray exceeds the motion envelope."""
 
 
 def _finite_number(value, default):
@@ -145,7 +150,13 @@ def validate_capture_plan(value):
 
 def default_filter_settings():
     """Return the empty six-position filter-revolver configuration."""
-    return {'filters': [], 'slots': [None] * len(FILTER_POSITIONS)}
+    return {
+        'filters': [],
+        'slots': [None] * len(FILTER_POSITIONS),
+        'height_offsets_mm': {
+            EMPTY_FILTER_KEY: {channel: 0.0 for channel in LIGHT_CHANNELS},
+        },
+    }
 
 
 def validate_filter_settings(
@@ -154,12 +165,15 @@ def validate_filter_settings(
     max_height_offset_down_mm=-100.0,
 ):
     """Validate filter definitions and the six selected revolver slots."""
-    if not isinstance(payload, dict) or set(payload) != {'filters', 'slots'}:
-        raise ValueError('Filter settings must contain filters and slots.')
+    if not isinstance(payload, dict) or set(payload) != {'filters', 'slots', 'height_offsets_mm'}:
+        raise ValueError('Filter settings must contain filters, slots, and height_offsets_mm.')
     filters = payload['filters']
     slots = payload['slots']
+    height_offsets = payload['height_offsets_mm']
     if not isinstance(filters, list) or not isinstance(slots, list) or len(slots) != len(FILTER_POSITIONS):
         raise ValueError('Filter settings must contain six slots.')
+    if not isinstance(height_offsets, dict):
+        raise ValueError('Filter height offsets must be an object.')
     if len(filters) > MAX_CONFIGURED_FILTERS:
         raise ValueError(f'At most {MAX_CONFIGURED_FILTERS} filters can be configured.')
 
@@ -168,29 +182,24 @@ def validate_filter_settings(
     normalized_names = set()
     for definition in filters:
         if not isinstance(definition, dict) or set(definition) != {
-            'id', 'name', 'wavelength_range', 'height_offset_mm', 'color'
+            'id', 'name', 'wavelength_range', 'color'
         }:
-            raise ValueError('Each filter must include id, name, wavelength_range, height_offset_mm, and color.')
+            raise ValueError('Each filter must include id, name, wavelength_range, and color.')
         filter_id = definition['id'].strip() if isinstance(definition['id'], str) else ''
         name = definition['name'].strip() if isinstance(definition['name'], str) else ''
         wavelength_range = definition['wavelength_range'].strip() if isinstance(definition['wavelength_range'], str) else ''
-        height_offset_mm = _finite_number(definition['height_offset_mm'], None)
         color = definition['color'].strip() if isinstance(definition['color'], str) else ''
         normalized_name = name.casefold()
-        if not FILTER_ID_PATTERN.fullmatch(filter_id) or filter_id in ids:
+        if (
+            not FILTER_ID_PATTERN.fullmatch(filter_id)
+            or filter_id == EMPTY_FILTER_KEY
+            or filter_id in ids
+        ):
             raise ValueError('Filter IDs must be unique identifiers.')
         if not name or len(name) > 100 or normalized_name in normalized_names:
             raise ValueError('Filter names must be unique and no longer than 100 characters.')
         if not wavelength_range or len(wavelength_range) > 100:
             raise ValueError('Filter wavelength range is required and must be no longer than 100 characters.')
-        if (
-            height_offset_mm is None
-            or not max_height_offset_down_mm <= height_offset_mm <= max_height_offset_up_mm
-        ):
-            raise ValueError(
-                'Filter height offset must be between '
-                f'{max_height_offset_down_mm:g} and {max_height_offset_up_mm:g} mm.'
-            )
         if not FILTER_COLOR_PATTERN.fullmatch(color):
             raise ValueError('Filter color must be a six-digit hexadecimal color.')
         ids.add(filter_id)
@@ -199,7 +208,6 @@ def validate_filter_settings(
             'id': filter_id,
             'name': name,
             'wavelength_range': wavelength_range,
-            'height_offset_mm': height_offset_mm,
             'color': color.lower(),
         })
 
@@ -210,7 +218,34 @@ def validate_filter_settings(
         normalized_slots.append(slot)
     # Slot 1 is the physical no-filter position used by autofocus.
     normalized_slots[0] = None
-    return {'filters': normalized_filters, 'slots': normalized_slots}
+
+    expected_offset_keys = {EMPTY_FILTER_KEY, *ids}
+    if set(height_offsets) != expected_offset_keys:
+        raise ValueError('Height offsets must contain the empty position and every configured filter exactly once.')
+    normalized_height_offsets = {}
+    for filter_key in expected_offset_keys:
+        row = height_offsets[filter_key]
+        if not isinstance(row, dict) or set(row) != set(LIGHT_CHANNELS):
+            raise ValueError('Each height-offset row must include uv255, uv310, uv365, and vis.')
+        normalized_row = {}
+        for channel in LIGHT_CHANNELS:
+            value = _finite_number(row[channel], None)
+            if value is None or not max_height_offset_down_mm <= value <= max_height_offset_up_mm:
+                raise ValueError(
+                    'Each height offset must be between '
+                    f'{max_height_offset_down_mm:g} and {max_height_offset_up_mm:g} mm.'
+                )
+            normalized_row[channel] = value
+        normalized_height_offsets[filter_key] = normalized_row
+
+    # Manual autofocus always establishes its reference with VIS and the
+    # physical empty slot. That combination is the immutable zero point.
+    normalized_height_offsets[EMPTY_FILTER_KEY]['vis'] = 0.0
+    return {
+        'filters': normalized_filters,
+        'slots': normalized_slots,
+        'height_offsets_mm': normalized_height_offsets,
+    }
 
 
 def validate_lamp_output_selectors(payload):
@@ -274,7 +309,9 @@ def validate_motion_simulation_settings(payload):
     last_y = first_y + (TRAY_GRID_SIZE - 1) * spacing
     tray_limit = XY_TRAVEL_MAX_MM + TRAY_EDGE_CALIBRATION_TOLERANCE_MM
     if last_x > tray_limit or last_y > tray_limit:
-        raise ValueError('The 10 x 10 tray coordinates must stay within the X/Y travel limits.')
+        raise TrayGeometryError(
+            'The 10 x 10 tray coordinates must stay within the X/Y travel limits.'
+        )
     return {
         'use_virtual_com_port': enabled,
         'max_height_offset_up_mm': max_up,
@@ -292,6 +329,8 @@ def migrate_settings(settings):
     Schema v2 made camera settings global and introduced the four-channel lamp
     model. Schema v3 installs the selector order verified on the physical
     Octopus controller so stale packaged settings cannot rotate wavelengths.
+    Schema v8 expands the former per-filter height value into a
+    filter-by-wavelength matrix whose empty-filter/VIS cell is the fixed zero.
     """
     if not isinstance(settings, dict):
         raise ValueError('Settings root must be a JSON object.')
@@ -463,6 +502,44 @@ def migrate_settings(settings):
             enriched_plan.append(enriched_row)
         auto_measurement['capture_plan'] = enriched_plan
         migrated['auto_measurement_settings'] = auto_measurement
+
+    if current_version < 8:
+        legacy_filter_settings = migrated.get('filter_settings')
+        if not isinstance(legacy_filter_settings, dict):
+            legacy_filter_settings = {'filters': [], 'slots': [None] * len(FILTER_POSITIONS)}
+        legacy_filters = legacy_filter_settings.get('filters')
+        if not isinstance(legacy_filters, list):
+            legacy_filters = []
+
+        migrated_filters = []
+        height_offsets = {
+            EMPTY_FILTER_KEY: {channel: 0.0 for channel in LIGHT_CHANNELS},
+        }
+        for definition in legacy_filters:
+            if not isinstance(definition, dict):
+                migrated_filters.append(definition)
+                continue
+            migrated_definition = copy.deepcopy(definition)
+            legacy_offset = _finite_number(
+                migrated_definition.pop('height_offset_mm', None),
+                0.0,
+            )
+            migrated_filters.append(migrated_definition)
+            filter_id = migrated_definition.get('id')
+            if isinstance(filter_id, str) and filter_id:
+                # Preserve the old calibration on every wavelength until the
+                # operator refines the new per-combination values.
+                height_offsets[filter_id] = {
+                    channel: legacy_offset for channel in LIGHT_CHANNELS
+                }
+
+        migrated['filter_settings'] = {
+            'filters': migrated_filters,
+            'slots': copy.deepcopy(
+                legacy_filter_settings.get('slots', [None] * len(FILTER_POSITIONS))
+            ),
+            'height_offsets_mm': height_offsets,
+        }
 
     lamp_settings = migrated.get('lamp_settings')
     if not isinstance(lamp_settings, dict):

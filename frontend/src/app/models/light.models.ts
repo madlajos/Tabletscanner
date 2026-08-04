@@ -27,6 +27,18 @@ export interface LightStatus {
   active_mode: LightActivationMode;
   channels: Record<LightChannel, boolean>;
   auto_turned_off: LightChannel[];
+  height_offset?: {
+    applied: boolean;
+    reason?: 'autofocus_required' | 'no_active_light';
+    offset_mm?: number;
+    target_z?: number;
+    moved?: boolean;
+  };
+  height_offset_reference?: {
+    available: boolean;
+    reference_z: number | null;
+    applied_offset_mm: number;
+  };
 }
 
 export interface CapturePlanRow {

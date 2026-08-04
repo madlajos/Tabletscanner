@@ -1,9 +1,9 @@
 {
-    "settings_schema_version": 8,
+    "settings_schema_version": 7,
     "camera_params": {
-        "ExposureTime": 200000.0,
+        "ExposureTime": 40000.0,
         "Gamma": 1.0,
-        "Gain": 0.0
+        "Gain": 3.0
     },
     "other_settings": {
         "objective": "1.0x",
@@ -31,19 +31,19 @@
                 "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 10.0
+                "full_timeout_seconds": 5.0
             },
             "uv310": {
                 "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 10.0
+                "full_timeout_seconds": 5.0
             },
             "uv365": {
                 "dim_percent": 70.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 100.0
+                "full_timeout_seconds": 5.0
             }
         },
         "output_selectors": {
@@ -68,30 +68,35 @@
                 "id": "244bd032-e932-4425-9e8c-1915d099cf0a",
                 "name": "Zöld",
                 "wavelength_range": "500-550",
+                "height_offset_mm": 2.0,
                 "color": "#005205"
             },
             {
                 "id": "7447fe07-3a99-4542-9d10-1e7082f0e9e7",
                 "name": "Piros",
                 "wavelength_range": "600-650",
+                "height_offset_mm": -4.5,
                 "color": "#750000"
             },
             {
                 "id": "9569ff7e-0e15-4ef3-b0a8-6994fb84b631",
                 "name": "Kék",
                 "wavelength_range": "450-500",
+                "height_offset_mm": 3.0,
                 "color": "#00034d"
             },
             {
                 "id": "07641f64-d518-4657-9799-c699ee4c8f24",
                 "name": "255nm",
                 "wavelength_range": "300-350",
+                "height_offset_mm": 5.0,
                 "color": "#000000"
             },
             {
                 "id": "7f4c7a34-1660-4a66-99d5-c380c0c04c66",
                 "name": "365nm",
                 "wavelength_range": "350-400",
+                "height_offset_mm": 3.0,
                 "color": "#000000"
             }
         ],
@@ -102,45 +107,7 @@
             "9569ff7e-0e15-4ef3-b0a8-6994fb84b631",
             "07641f64-d518-4657-9799-c699ee4c8f24",
             "7f4c7a34-1660-4a66-99d5-c380c0c04c66"
-        ],
-        "height_offsets_mm": {
-            "7447fe07-3a99-4542-9d10-1e7082f0e9e7": {
-                "uv255": 0.0,
-                "uv310": 0.0,
-                "uv365": 0.0,
-                "vis": -4.5
-            },
-            "244bd032-e932-4425-9e8c-1915d099cf0a": {
-                "uv255": 0.0,
-                "uv310": 0.0,
-                "uv365": 0.0,
-                "vis": -1.5
-            },
-            "07641f64-d518-4657-9799-c699ee4c8f24": {
-                "uv255": 0.0,
-                "uv310": 0.0,
-                "uv365": 0.0,
-                "vis": 5.0
-            },
-            "9569ff7e-0e15-4ef3-b0a8-6994fb84b631": {
-                "uv255": 0.0,
-                "uv310": 0.0,
-                "uv365": 0.0,
-                "vis": 1.0
-            },
-            "7f4c7a34-1660-4a66-99d5-c380c0c04c66": {
-                "uv255": 0.0,
-                "uv310": 0.0,
-                "uv365": 0.0,
-                "vis": 3.0
-            },
-            "empty": {
-                "uv255": 0.0,
-                "uv310": 0.0,
-                "uv365": 0.0,
-                "vis": 0.0
-            }
-        }
+        ]
     },
     "camera_image_settings": {
         "override_enabled": false,

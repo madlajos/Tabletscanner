@@ -9,6 +9,13 @@ import unittest
 import settings_manager
 
 
+def height_offset_matrix(*filter_ids, value=0):
+    return {
+        key: {channel: value for channel in settings_manager.LIGHT_CHANNELS}
+        for key in (settings_manager.EMPTY_FILTER_KEY, *filter_ids)
+    }
+
+
 class SettingsMigrationTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -37,7 +44,7 @@ class SettingsMigrationTests(unittest.TestCase):
 
         settings = settings_manager.load_settings(self.settings_path)
 
-        self.assertEqual(7, settings['settings_schema_version'])
+        self.assertEqual(8, settings['settings_schema_version'])
         self.assertEqual({'ExposureTime': 123456.0, 'Gain': 4.0, 'Gamma': 1.2}, settings['camera_params'])
         self.assertNotIn('camera_params_dome', settings)
         self.assertNotIn('camera_params_bar', settings)
@@ -78,7 +85,7 @@ class SettingsMigrationTests(unittest.TestCase):
 
         migrated = settings_manager.load_settings(self.settings_path)
 
-        self.assertEqual(7, migrated['settings_schema_version'])
+        self.assertEqual(8, migrated['settings_schema_version'])
         self.assertEqual(
             settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS,
             migrated['lamp_settings']['output_selectors'],
@@ -99,7 +106,7 @@ class SettingsMigrationTests(unittest.TestCase):
         self.write_json(v3)
 
         migrated = settings_manager.load_settings(self.settings_path)
-        self.assertEqual(7, migrated['settings_schema_version'])
+        self.assertEqual(8, migrated['settings_schema_version'])
         self.assertEqual(
             [{'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 50000.0, 'gain': 0.0, 'gamma': 1.0}],
             migrated['auto_measurement_settings']['capture_plan'],
@@ -189,12 +196,17 @@ class SettingsMigrationTests(unittest.TestCase):
 
     def test_filter_settings_validation_normalizes_and_checks_slot_references(self):
         payload = {
-            'filters': [{'id': 'uv-310', 'name': 'UV 310', 'wavelength_range': '300–320', 'height_offset_mm': 1.5, 'color': '#12AB34'}],
+            'filters': [{'id': 'uv-310', 'name': 'UV 310', 'wavelength_range': '300–320', 'color': '#12AB34'}],
             'slots': [None, 'uv-310', None, None, None, None],
+            'height_offsets_mm': height_offset_matrix('uv-310', value=1.5),
         }
         self.assertEqual({
-            'filters': [{'id': 'uv-310', 'name': 'UV 310', 'wavelength_range': '300–320', 'height_offset_mm': 1.5, 'color': '#12ab34'}],
+            'filters': [{'id': 'uv-310', 'name': 'UV 310', 'wavelength_range': '300–320', 'color': '#12ab34'}],
             'slots': [None, 'uv-310', None, None, None, None],
+            'height_offsets_mm': {
+                **height_offset_matrix('uv-310', value=1.5),
+                'empty': {'uv255': 1.5, 'uv310': 1.5, 'uv365': 1.5, 'vis': 0.0},
+            },
         }, settings_manager.validate_filter_settings(payload))
         with self.assertRaises(ValueError):
             settings_manager.validate_filter_settings({**payload, 'slots': ['missing', None, None, None, None, None]})
@@ -215,8 +227,9 @@ class SettingsMigrationTests(unittest.TestCase):
     def test_filter_settings_update_persists_without_losing_other_categories(self):
         settings_manager.set_settings({'camera_params': {'Gamma': 1.0}})
         filter_settings = {
-            'filters': [{'id': 'vis', 'name': 'VIS', 'wavelength_range': '400–700', 'height_offset_mm': 0, 'color': '#ffffff'}],
+            'filters': [{'id': 'vis', 'name': 'VIS', 'wavelength_range': '400–700', 'color': '#ffffff'}],
             'slots': [None, 'vis', None, None, None, None],
+            'height_offsets_mm': height_offset_matrix('vis'),
         }
 
         self.assertTrue(settings_manager.update_filter_settings(filter_settings, self.settings_path))
@@ -286,10 +299,10 @@ class SettingsMigrationTests(unittest.TestCase):
                 'id': 'green',
                 'name': 'Zöld',
                 'wavelength_range': '500–570',
-                'height_offset_mm': 5,
                 'color': '#00ff00',
             }],
             'slots': [None, 'green', None, None, None, None],
+            'height_offsets_mm': height_offset_matrix('green', value=5),
         }
         self.assertEqual(
             5.0,
@@ -297,17 +310,44 @@ class SettingsMigrationTests(unittest.TestCase):
                 payload,
                 max_height_offset_up_mm=5,
                 max_height_offset_down_mm=-4,
-            )['filters'][0]['height_offset_mm'],
+            )['height_offsets_mm']['green']['uv255'],
         )
         with self.assertRaises(ValueError):
             settings_manager.validate_filter_settings(
                 {
                     **payload,
-                    'filters': [{**payload['filters'][0], 'height_offset_mm': -4.1}],
+                    'height_offsets_mm': {
+                        **payload['height_offsets_mm'],
+                        'green': {**payload['height_offsets_mm']['green'], 'uv255': -4.1},
+                    },
                 },
                 max_height_offset_up_mm=5,
                 max_height_offset_down_mm=-4,
             )
+
+    def test_schema_v7_expands_filter_offsets_per_wavelength(self):
+        migrated, changed = settings_manager.migrate_settings({
+            'settings_schema_version': 7,
+            'filter_settings': {
+                'filters': [{
+                    'id': 'green',
+                    'name': 'Zöld',
+                    'wavelength_range': '500–570',
+                    'height_offset_mm': 1.25,
+                    'color': '#00ff00',
+                }],
+                'slots': [None, 'green', None, None, None, None],
+            },
+        })
+
+        self.assertTrue(changed)
+        self.assertEqual(8, migrated['settings_schema_version'])
+        self.assertNotIn('height_offset_mm', migrated['filter_settings']['filters'][0])
+        self.assertEqual(
+            {channel: 1.25 for channel in settings_manager.LIGHT_CHANNELS},
+            migrated['filter_settings']['height_offsets_mm']['green'],
+        )
+        self.assertEqual(0.0, migrated['filter_settings']['height_offsets_mm']['empty']['vis'])
 
 
 if __name__ == '__main__':
