@@ -1,7 +1,7 @@
 {
-    "settings_schema_version": 9,
+    "settings_schema_version": 8,
     "camera_params": {
-        "ExposureTime": 10000.0,
+        "ExposureTime": 50000.0,
         "Gamma": 1.0,
         "Gain": 0.0
     },
@@ -31,19 +31,19 @@
                 "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 5.0
+                "full_timeout_seconds": 30.0
             },
             "uv310": {
                 "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 5.0
+                "full_timeout_seconds": 10.0
             },
             "uv365": {
                 "dim_percent": 70.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 5.0
+                "full_timeout_seconds": 100.0
             }
         },
         "output_selectors": {
@@ -148,10 +148,5 @@
         "height": 2840,
         "offset_x": 4,
         "offset_y": 4
-    },
-    "autofocus_settings": {
-        "channel": "uv365",
-        "brightness": "full",
-        "filter_position": 1
     }
 }

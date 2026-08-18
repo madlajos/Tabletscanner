@@ -287,8 +287,9 @@ Tasks:
       desynchronization.
 - [ ] Replace `_turn_on_dome_light`, `_turn_on_uv_dome_light`, and `_turn_off_all_lights` internals
       with controller calls, then remove the old helpers once all callers are migrated.
-- [ ] Use `vis` as the reference illumination for autofocus, empty-tablet checks, contour
-      detection, and background subtraction unless a later optical requirement says otherwise.
+- [ ] Use the validated **Fókusz** light/filter selection for autofocus. Keep `vis` for the
+      separate empty-tablet and background/contour fallback paths unless another optical
+      requirement says otherwise.
 - [ ] Apply the existing UV exposure gate to each UV capture, not to VIS.
 
 Acceptance:
@@ -367,7 +368,8 @@ Tasks:
 - [ ] Preserve disabling during disconnect, measurement, homing where necessary, and autofocus.
 - [ ] Poll or subscribe to repeatable backend status so timeout changes are reflected in every
       button without racing another consumer.
-- [ ] Keep VIS as the automatically selected light for manual autofocus when no channel is on.
+- [ ] Select the saved autofocus light and brightness mode for manual autofocus; default to
+      full-brightness VIS for migrated settings.
 - [ ] When a channel activation fails, leave the previous/backend-reported visual state rather
       than optimistically displaying success.
 
@@ -376,7 +378,8 @@ Acceptance:
 - Buttons show the backend-confirmed active channel, UV dimmed/full mode, and auto-off state.
 - Activating one button deactivates all others.
 - UI contains no hardware G-code or Octopus pin/header knowledge.
-- Manual autofocus uses VIS and does not restore removed per-light camera settings.
+- Manual autofocus uses the saved light/filter selection and does not restore removed per-light
+  camera settings.
 
 ### Phase 5 — rework collapsible scanner settings
 
@@ -422,10 +425,11 @@ Tasks:
       the logo and above the logo's separator line.
 - [ ] Implement the popup as a separate standalone modal/dialog component, not inline in
       `AppComponent`.
-- [ ] Add left-side type navigation with entries `Szűrőváltó`, `Lámpa`, and `Tálca`; select the
+- [ ] Add left-side type navigation with entries including `Szűrőváltó`, `Lámpa`, and `Fókusz`; select the
       first type by default.
-- [ ] Keep `Szűrőváltó` and `Tálca` as placeholders for now. Implement `Lámpa` as a live settings
-      page, loaded from and saved through the typed lamp-settings API.
+- [ ] Implement `Fókusz` as a live settings page for autofocus illumination/brightness, populated
+      filter-wheel selection, and the filter/light height-offset matrix. Implement `Lámpa` through
+      the typed lamp-settings API.
 - [ ] In `Lámpa`, render one row each for 255 nm, 310 nm, 365 nm, and VIS with these columns:
       `Hullámhossz`, `Tompított fényerő`, `Teljes Fényerő`, `Tompított lekapcsolási idő`, and
       `Teljes fényerő lekapcsolási idő`.
@@ -511,8 +515,9 @@ Tasks:
       wavelength/filter metadata, and turn the channel off in `finally`.
 - [ ] Until D8 is changed, request `dimmed` mode for UV capture-plan rows and normal full mode for
       VIS rows. Full-power unattended UV capture must not be introduced implicitly.
-- [ ] Use temporary VIS illumination for autofocus and contour/background-mask creation even if
-      VIS is not a requested saved row; do not save an extra VIS image unless it is in the plan.
+- [ ] Use the validated **Fókusz** selection for autofocus. Temporary VIS may still be used by the
+      separate contour/background fallback paths; do not save an extra VIS image unless it is in
+      the plan.
 - [ ] Turn all channels off between rows unless the approved hardware protocol explicitly proves
       a safe optimized transition.
 - [ ] Include wavelength and filter position in sanitized filenames and EXIF metadata, but treat

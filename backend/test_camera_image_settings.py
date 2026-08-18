@@ -84,7 +84,7 @@ class CameraImageSettingsTests(unittest.TestCase):
             },
         })
         self.assertTrue(changed)
-        self.assertEqual(8, migrated['settings_schema_version'])
+        self.assertEqual(9, migrated['settings_schema_version'])
         self.assertEqual({
             'override_enabled': False,
             'width': 2048,

@@ -33,6 +33,27 @@ def record_reference(z_position) -> float:
     return reference_z
 
 
+def record_combination_reference(z_position, configured_offset_mm) -> float:
+    """Rebase a focused filter/light combination onto the height-matrix zero.
+
+    Matrix offsets are calibrated relative to empty-filter/VIS. When autofocus
+    uses a different combination, its focused Z is therefore ``zero + offset``.
+    Store the derived zero so subsequent filter/light changes continue to use
+    the existing matrix correctly.
+    """
+    try:
+        focused_z = float(z_position)
+        applied_offset = float(configured_offset_mm)
+    except (TypeError, ValueError) as error:
+        raise ValueError('Autofocus did not produce a valid Z reference.') from error
+    if not math.isfinite(focused_z) or not math.isfinite(applied_offset):
+        raise ValueError('Autofocus did not produce a finite Z reference.')
+
+    reference_z = record_reference(focused_z - applied_offset)
+    globals.autofocus_applied_offset_mm = applied_offset
+    return reference_z
+
+
 def status() -> dict:
     reference_z = getattr(globals, 'autofocus_reference_z', None)
     return {

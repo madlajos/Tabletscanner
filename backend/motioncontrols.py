@@ -1,5 +1,4 @@
 import porthandler
-import time
 import re
 import globals
 from flask import jsonify
@@ -108,78 +107,22 @@ def get_toolhead_position(ser, timeout: float = 0.3, allow_busy: bool = False) -
     """
     Sends M114 and returns {"x":..., "y":..., "z":...} with a hard overall timeout.
     """
-    # Quick status probe to drain/flush noisy buffers when NOT busy.
-    if not globals.motion_busy or allow_busy:
-        try:
-            # Clear any stale bytes first to avoid mixing with the M105 we send now.
-            try:
-                if hasattr(ser, "reset_input_buffer"):
-                    ser.reset_input_buffer()
-                else:
-                    iw = getattr(ser, "in_waiting", 0) or 0
-                    if iw:
-                        ser.read(iw)
-            except Exception:
-                pass
-
-            buf = bytearray()
-            deadline = time.monotonic() + 0.15
-            with porthandler.motion_lock:
-                ser.write(b'M105\n')
-
-            # Read briefly; typical reply: b"ok T:25.00 /0.00 @:0\n"
-            while time.monotonic() < deadline:
-                iw = getattr(ser, "in_waiting", 0) or 0
-                if iw:
-                    chunk = ser.read(min(iw, 256))
-                    if chunk:
-                        buf += chunk
-                    # Stop once we see 'ok' or a newline; we don't need the temp value
-                    if b"ok" in buf.lower() or b"\n" in buf:
-                        break
-                else:
-                    time.sleep(0.01)
-
-            # Only log if the reply looks truly unexpected (no 'ok' seen)
-            if buf and b"ok" not in buf.lower():
-                log.debug(f"M105 unexpected reply: {buf[:64]!r}")
-        except Exception as e:
-            log.debug(f"M105 probe error (ignored): {e}")
-
-        # Hard flush again so the upcoming M114 parse isn't polluted by M105
-        try:
-            if hasattr(ser, "reset_input_buffer"):
-                ser.reset_input_buffer()
-            else:
-                iw = getattr(ser, "in_waiting", 0) or 0
-                if iw:
-                    ser.read(iw)
-        except Exception:
-            pass
-    else:
+    if globals.motion_busy and not allow_busy:
         # During long ops (e.g. homing), avoid issuing M114; let caller use cache.
         raise RuntimeError("Motion platform busy")
 
-    # Query current position.
-    with porthandler.motion_lock:
-        ser.write(b'M114\n')
+    # The shared command reader owns the lock until Marlin's acknowledgement,
+    # so connection polling cannot consume part of this M114 response.
+    acknowledged, reply = porthandler.write_and_wait(
+        ser,
+        'M114',
+        timeout=timeout,
+        expect=b'ok',
+    )
+    if not acknowledged:
+        log.debug('M114 was not acknowledged: %r', reply[:128])
 
-    end = time.monotonic() + timeout
-    buf = bytearray()
-
-    while time.monotonic() < end:
-        iw = getattr(ser, "in_waiting", 0) or 0
-        if iw:
-            chunk = ser.read(min(iw, 256))
-            if chunk:
-                buf += chunk
-                # Heuristic: break once a typical M114 line is complete.
-                if (b"X:" in buf and b"Y:" in buf and b"Z:" in buf) and (b"\n" in buf or b"ok" in buf.lower()):
-                    break
-        else:
-            time.sleep(0.01)
-
-    s = buf.decode("ascii", "ignore")
+    s = reply.decode("ascii", "ignore")
 
     # Try regex first if available.
     try:

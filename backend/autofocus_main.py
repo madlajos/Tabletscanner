@@ -1131,7 +1131,7 @@ def measure_score(
 def autofocus_coarse(
     motion_platform,
     z_min=0.0,
-    z_max=30.0,
+    z_max=40.0,
     frame_scale=0.1,
     edge_ring_width=5,
     coarse_step=2.0,

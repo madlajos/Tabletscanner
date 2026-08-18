@@ -84,7 +84,7 @@ def _ok(**extra):
     return d
 
 
-def calculate_median_and_span(motion_platform, z_max=30, frame_scale=0.1, grab_timeout_ms=2000, needed=False):
+def calculate_median_and_span(motion_platform, z_max=40, frame_scale=0.1, grab_timeout_ms=2000, needed=False):
     # start
     if needed is True:
         current_z = 0.0

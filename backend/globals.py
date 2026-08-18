@@ -39,6 +39,6 @@ color_values = None  # Reference color values from calc_color (used by autofocus
 motion_limits = {
     "x": (0.0, 175.0),
     "y": (0.0, 175.0),
-    "z": (0.0, 30.0),
+    "z": (0.0, 40.0),
 }
 

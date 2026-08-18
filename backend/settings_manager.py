@@ -23,14 +23,16 @@ def get_base_path():
     return os.path.dirname(__file__)
 
 DEFAULT_SETTINGS_PATH = os.path.join(get_base_path(), 'settings.json')
-SETTINGS_SCHEMA_VERSION = 8
+SETTINGS_SCHEMA_VERSION = 9
 UV_LAMP_CHANNELS = ('uv255', 'uv310', 'uv365')
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
+AUTOFOCUS_BRIGHTNESS_MODES = ('dimmed', 'full')
 FILTER_POSITIONS = (1, 2, 3, 4, 5, 6)
 FILTER_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
 FILTER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
 MAX_CONFIGURED_FILTERS = 100
 EMPTY_FILTER_KEY = 'empty'
+VIS_INCOMPATIBLE_FILTER_NAMES = frozenset(('255nm', '265nm', '365nm'))
 DEFAULT_MAX_HEIGHT_OFFSET_UP_MM = 5.0
 DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM = -5.0
 ADVANCED_LAMP_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
@@ -57,7 +59,7 @@ DEFAULT_CAMERA_IMAGE_WIDTH = 4000
 DEFAULT_CAMERA_IMAGE_HEIGHT = 4000
 TRAY_GRID_SIZE = 10
 XY_TRAVEL_MAX_MM = 175.0
-Z_TRAVEL_MAX_MM = 30.0
+Z_TRAVEL_MAX_MM = 40.0
 # The existing calibrated tray reaches Y=175.3 mm. Motion commands are still
 # clamped to 175 mm; retain this sub-millimetre edge allowance so migration
 # doesn't invalidate installations using the established 10.6/18.3 geometry.
@@ -148,6 +150,55 @@ def validate_capture_plan(value):
     return normalized_rows
 
 
+def default_autofocus_settings():
+    """Return the legacy-safe manual/automatic autofocus hardware selection."""
+    return {
+        'channel': 'vis',
+        'brightness': 'full',
+        'filter_position': 1,
+    }
+
+
+def validate_autofocus_settings(payload, filter_settings=None):
+    """Validate the configured autofocus illumination and physical filter slot."""
+    required_fields = {'channel', 'brightness', 'filter_position'}
+    if not isinstance(payload, dict) or set(payload) != required_fields:
+        raise ValueError(
+            'Autofocus settings must contain channel, brightness, and filter_position.'
+        )
+
+    channel = payload['channel']
+    brightness = payload['brightness']
+    filter_position = payload['filter_position']
+    if channel not in LIGHT_CHANNELS:
+        raise ValueError('Autofocus settings contain an unknown light channel.')
+    if brightness not in AUTOFOCUS_BRIGHTNESS_MODES:
+        raise ValueError('Autofocus brightness must be dimmed or full.')
+    if channel == 'vis' and brightness != 'full':
+        raise ValueError('VIS autofocus illumination is available only at full brightness.')
+    if (
+        isinstance(filter_position, bool)
+        or not isinstance(filter_position, int)
+        or filter_position not in FILTER_POSITIONS
+    ):
+        raise ValueError('Autofocus filter position must be an integer from 1 to 6.')
+
+    if filter_settings is not None:
+        slots = filter_settings.get('slots') if isinstance(filter_settings, dict) else None
+        if not isinstance(slots, list) or len(slots) != len(FILTER_POSITIONS):
+            raise ValueError('Filter settings must contain six slots.')
+        # Slot 1 is the fixed empty reference. Every other selectable position
+        # must currently contain a configured filter on the physical wheel.
+        if filter_position != 1 and slots[filter_position - 1] is None:
+            raise ValueError('The selected autofocus filter position is empty.')
+
+    return {
+        'channel': channel,
+        'brightness': brightness,
+        'filter_position': filter_position,
+    }
+
+
 def default_filter_settings():
     """Return the empty six-position filter-revolver configuration."""
     return {
@@ -223,13 +274,23 @@ def validate_filter_settings(
     if set(height_offsets) != expected_offset_keys:
         raise ValueError('Height offsets must contain the empty position and every configured filter exactly once.')
     normalized_height_offsets = {}
+    vis_incompatible_filter_ids = {
+        definition['id']
+        for definition in normalized_filters
+        if re.sub(r'[\s_-]+', '', definition['name']).casefold()
+        in VIS_INCOMPATIBLE_FILTER_NAMES
+    }
     for filter_key in expected_offset_keys:
         row = height_offsets[filter_key]
         if not isinstance(row, dict) or set(row) != set(LIGHT_CHANNELS):
             raise ValueError('Each height-offset row must include uv255, uv310, uv365, and vis.')
         normalized_row = {}
         for channel in LIGHT_CHANNELS:
-            value = _finite_number(row[channel], None)
+            value = (
+                0.0
+                if channel == 'vis' and filter_key in vis_incompatible_filter_ids
+                else _finite_number(row[channel], None)
+            )
             if value is None or not max_height_offset_down_mm <= value <= max_height_offset_up_mm:
                 raise ValueError(
                     'Each height offset must be between '
@@ -238,8 +299,8 @@ def validate_filter_settings(
             normalized_row[channel] = value
         normalized_height_offsets[filter_key] = normalized_row
 
-    # Manual autofocus always establishes its reference with VIS and the
-    # physical empty slot. That combination is the immutable zero point.
+    # The height matrix remains calibrated against physical empty-filter/VIS,
+    # even when autofocus uses another configured combination.
     normalized_height_offsets[EMPTY_FILTER_KEY]['vis'] = 0.0
     return {
         'filters': normalized_filters,
@@ -302,7 +363,7 @@ def validate_motion_simulation_settings(payload):
     if first_y is None or not 0 <= first_y <= XY_TRAVEL_MAX_MM:
         raise ValueError('First tablet Y must be between 0 and 175 mm.')
     if first_z is None or not 0 <= first_z <= Z_TRAVEL_MAX_MM:
-        raise ValueError('First tablet Z must be between 0 and 30 mm.')
+        raise ValueError('First tablet Z must be between 0 and 40 mm.')
     if spacing is None or spacing <= 0:
         raise ValueError('Tablet spacing must be a positive number.')
     last_x = first_x + (TRAY_GRID_SIZE - 1) * spacing
@@ -331,6 +392,7 @@ def migrate_settings(settings):
     Octopus controller so stale packaged settings cannot rotate wavelengths.
     Schema v8 expands the former per-filter height value into a
     filter-by-wavelength matrix whose empty-filter/VIS cell is the fixed zero.
+    Schema v9 adds a validated autofocus light/brightness/filter selection.
     """
     if not isinstance(settings, dict):
         raise ValueError('Settings root must be a JSON object.')
@@ -358,6 +420,9 @@ def migrate_settings(settings):
             changed = True
         if lamp_settings.get('output_selectors') != OCTOPUS_LIGHT_OUTPUT_SELECTORS:
             lamp_settings['output_selectors'] = copy.deepcopy(OCTOPUS_LIGHT_OUTPUT_SELECTORS)
+            changed = True
+        if not isinstance(migrated.get('autofocus_settings'), dict):
+            migrated['autofocus_settings'] = default_autofocus_settings()
             changed = True
         return migrated, changed
     if not isinstance(current_version, int) or current_version < 1 or current_version > SETTINGS_SCHEMA_VERSION:
@@ -541,6 +606,9 @@ def migrate_settings(settings):
             'height_offsets_mm': height_offsets,
         }
 
+    if current_version < 9:
+        migrated['autofocus_settings'] = default_autofocus_settings()
+
     lamp_settings = migrated.get('lamp_settings')
     if not isinstance(lamp_settings, dict):
         lamp_settings = {}
@@ -651,6 +719,22 @@ def update_filter_settings(filter_settings, settings_path=DEFAULT_SETTINGS_PATH)
         missing = object()
         previous_settings = _cached_settings.get('filter_settings', missing)
         _cached_settings['filter_settings'] = copy.deepcopy(filter_settings)
+        previous_autofocus_settings = _cached_settings.get('autofocus_settings', missing)
+        autofocus_settings = (
+            default_autofocus_settings()
+            if previous_autofocus_settings is missing
+            else copy.deepcopy(previous_autofocus_settings)
+        )
+        try:
+            _cached_settings['autofocus_settings'] = validate_autofocus_settings(
+                autofocus_settings,
+                filter_settings,
+            )
+        except ValueError:
+            # Removing the selected wheel entry must not leave autofocus aimed
+            # at an empty physical slot. Fall back to the established safe
+            # empty-filter/VIS selection in the same atomic settings write.
+            _cached_settings['autofocus_settings'] = default_autofocus_settings()
         try:
             _write_settings_atomic(settings_path, _cached_settings)
             logging.info("Filter settings saved successfully.")
@@ -660,7 +744,31 @@ def update_filter_settings(filter_settings, settings_path=DEFAULT_SETTINGS_PATH)
                 _cached_settings.pop('filter_settings', None)
             else:
                 _cached_settings['filter_settings'] = previous_settings
+            if previous_autofocus_settings is missing:
+                _cached_settings.pop('autofocus_settings', None)
+            else:
+                _cached_settings['autofocus_settings'] = previous_autofocus_settings
             logging.error("Failed to save filter settings: %s", error)
+            return False
+
+
+def update_autofocus_settings(autofocus_settings, settings_path=DEFAULT_SETTINGS_PATH):
+    """Persist validated autofocus settings while holding the settings lock."""
+    global _cached_settings
+    with _settings_lock:
+        missing = object()
+        previous_settings = _cached_settings.get('autofocus_settings', missing)
+        _cached_settings['autofocus_settings'] = copy.deepcopy(autofocus_settings)
+        try:
+            _write_settings_atomic(settings_path, _cached_settings)
+            logging.info('Autofocus settings saved successfully.')
+            return True
+        except Exception as error:
+            if previous_settings is missing:
+                _cached_settings.pop('autofocus_settings', None)
+            else:
+                _cached_settings['autofocus_settings'] = previous_settings
+            logging.error('Failed to save autofocus settings: %s', error)
             return False
 
 

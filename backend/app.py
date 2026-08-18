@@ -33,9 +33,12 @@ from settings_manager import (
     save_settings,
     update_lamp_output_selectors,
     update_filter_settings,
+    update_autofocus_settings,
     get_settings,
     validate_capture_plan,
+    default_autofocus_settings,
     default_filter_settings,
+    validate_autofocus_settings,
     validate_filter_settings,
     validate_lamp_output_selectors,
     validate_lamp_settings,
@@ -356,24 +359,12 @@ def get_serial_device_status(device_name):
                 'virtual': bool(getattr(ser, 'is_virtual', False)),
             }), 200
 
-        # Non-blocking quick probe under the lock so we don't corrupt
-        # concurrent serial operations (e.g. homing, moves).
+        # Deadline-bounded probe that consumes the complete M105 line under
+        # the serial lock. Partial replies must not leak into M114 or motion.
         try:
-            buf = bytearray()
-            deadline = time.monotonic() + 0.15
-            with porthandler.motion_lock:
-                ser.write(b'M105\n')
-                while time.monotonic() < deadline:
-                    iw = getattr(ser, 'in_waiting', 0) or 0
-                    if not iw:
-                        break
-                    chunk = ser.read(min(iw, 64))
-                    if chunk:
-                        buf += chunk
-                        if b"ok" in buf.lower():
-                            break
-            if buf and b"ok" not in buf.lower():
-                app.logger.debug(f"M105 non-ok reply: {buf[:64]!r}")
+            acknowledged, reply = porthandler.probe_motion_controller(ser, timeout=0.3)
+            if not acknowledged:
+                app.logger.debug('M105 probe was not acknowledged: %r', reply[:64])
         except (OSError, PermissionError) as e:
             # USB disconnected or permission denied
             app.logger.warning(f"Motion platform disconnected (USB error): {e}")
@@ -563,11 +554,70 @@ def _filter_revolver_status():
     }
 
 
+def _current_filter_settings():
+    """Return the validated filter-wheel settings using the active Z limits."""
+    max_up, max_down = _height_offset_limits()
+    return validate_filter_settings(
+        get_settings().get('filter_settings', default_filter_settings()),
+        max_height_offset_up_mm=max_up,
+        max_height_offset_down_mm=max_down,
+    )
+
+
+def _current_autofocus_settings(filter_settings=None):
+    """Return autofocus settings validated against populated wheel slots."""
+    if filter_settings is None:
+        filter_settings = _current_filter_settings()
+    return validate_autofocus_settings(
+        get_settings().get('autofocus_settings', default_autofocus_settings()),
+        filter_settings,
+    )
+
+
+def _move_filter_revolver_to_position(motion_platform, target_position):
+    """Move to one validated slot without changing higher-level busy ownership."""
+    if not globals.toolhead_homed or not globals.filter_revolver_homed:
+        raise RuntimeError('Home the motion platform and filter revolver first.')
+    direction, steps = filter_revolver.shortest_path(
+        globals.filter_revolver_position,
+        target_position,
+    )
+    for _ in range(steps):
+        globals.filter_revolver_position = filter_revolver.rotate_one_slot(
+            motion_platform,
+            globals.filter_revolver_position,
+            direction,
+        )
+
+
+def _select_configured_autofocus_hardware(motion_platform, manage_motion_busy=False):
+    """Select the saved filter/light combination and return validated settings."""
+    filter_settings = _current_filter_settings()
+    autofocus_settings = _current_autofocus_settings(filter_settings)
+    if manage_motion_busy:
+        _select_measurement_filter_position(
+            motion_platform,
+            autofocus_settings['filter_position'],
+        )
+    else:
+        _move_filter_revolver_to_position(
+            motion_platform,
+            autofocus_settings['filter_position'],
+        )
+    activation_mode = (
+        autofocus_settings['brightness']
+        if autofocus_settings['channel'] in UV_LAMP_CHANNELS
+        else None
+    )
+    light_controller.activate(autofocus_settings['channel'], activation_mode)
+    return autofocus_settings, filter_settings
+
+
 def _apply_selected_height_offset(motion_platform):
     """Apply the active matrix cell when manual autofocus established zero."""
     return height_offset_control.apply_active_combination(
         motion_platform,
-        get_settings().get('filter_settings', default_filter_settings()),
+        _current_filter_settings(),
         light_controller.status()['active_channel'],
     )
 
@@ -1397,30 +1447,28 @@ def autofocus_coarse():
         # Always clear abort flag so manual AF is not blocked by a previous auto-measurement stop
         globals.autofocus_abort = False
 
-        # Manual autofocus defines the one fixed zero combination. Select the
-        # acknowledged empty revolver slot first, then enforce VIS through the
-        # four-channel interlock before the camera routine starts.
-        direction, steps = filter_revolver.shortest_path(
-            globals.filter_revolver_position,
-            1,
+        # Select the acknowledged filter slot first, then activate the saved
+        # illumination through the four-channel interlock.
+        autofocus_settings, filter_settings = _select_configured_autofocus_hardware(
+            motion_platform
         )
-        for _ in range(steps):
-            globals.filter_revolver_position = filter_revolver.rotate_one_slot(
-                motion_platform,
-                globals.filter_revolver_position,
-                direction,
-            )
-        light_controller.activate('vis')
         height_offset_control.invalidate_reference()
 
         data = request.get_json(silent=True) or {}
         skip_empty = bool(data.get('skip_empty_check', False))
         resp = autofocus_main.autofocus_coarse(motion_platform, do_frame_touch_check=False, skip_empty_check=skip_empty)
         if resp.get('status') == 'OK':
-            reference_z = height_offset_control.record_reference(
-                getattr(globals, 'last_toolhead_pos', {}).get('z')
+            configured_offset = height_offset_control.configured_offset(
+                filter_settings,
+                autofocus_settings['filter_position'],
+                autofocus_settings['channel'],
+            )
+            reference_z = height_offset_control.record_combination_reference(
+                getattr(globals, 'last_toolhead_pos', {}).get('z'),
+                configured_offset,
             )
             resp['autofocus_reference'] = height_offset_control.status()
+            resp['autofocus_settings'] = autofocus_settings
             app.logger.info('Manual autofocus height-offset reference set to Z=%.4f.', reference_z)
         else:
             height_offset_control.invalidate_reference()
@@ -1452,6 +1500,14 @@ def autofocus_coarse():
             'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
             'popup': True,
         }), 503
+    except ValueError as error:
+        height_offset_control.invalidate_reference()
+        return jsonify({
+            'status': 'error',
+            'message': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 400
     except (OSError, PermissionError) as e:
         height_offset_control.invalidate_reference()
         return _handle_motion_usb_disconnect(motion_platform, "autofocus")
@@ -1827,15 +1883,9 @@ def _select_measurement_filter_position(motion_platform, target_position: int) -
     with porthandler.motion_lock:
         if not globals.toolhead_homed or not globals.filter_revolver_homed:
             raise RuntimeError('Home the motion platform and filter revolver before measurement.')
-        direction, steps = filter_revolver.shortest_path(
-            globals.filter_revolver_position, target_position
-        )
         globals.motion_busy = True
     try:
-        for _ in range(steps):
-            globals.filter_revolver_position = filter_revolver.rotate_one_slot(
-                motion_platform, globals.filter_revolver_position, direction
-            )
+        _move_filter_revolver_to_position(motion_platform, target_position)
     finally:
         globals.motion_busy = False
 
@@ -2267,15 +2317,23 @@ def auto_measurement_step():
         if should_autofocus:
             app.logger.info(f"Tablet {tablet_index}: Starting autofocus ({'coarse' if is_first_tablet else 'fine'})")
             
-            # The locked first plan row is the autofocus reference: VIS,
-            # empty filter slot 1, and operator-selected camera values.
+            # Autofocus uses its dedicated saved light/filter selection. The
+            # first plan row still supplies the operator-selected camera values.
+            autofocus_settings, _ = _select_configured_autofocus_hardware(
+                motion_platform,
+                manage_motion_busy=True,
+            )
             if capture_plan is not None:
-                _select_measurement_filter_position(motion_platform, 1)
                 _apply_capture_plan_camera_settings(capture_plan[0])
-                light_controller.activate('vis')
             else:
-                _turn_on_dome_light()
                 _apply_camera_settings_for_light('dome')
+            app.logger.info(
+                'Tablet %s: Autofocus using %s/%s with filter position %s',
+                tablet_index,
+                autofocus_settings['channel'],
+                autofocus_settings['brightness'],
+                autofocus_settings['filter_position'],
+            )
             time.sleep(0.3)  # Let light and camera settings stabilize
             
             if autofocus_enabled:
@@ -3213,6 +3271,29 @@ def filter_settings():
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
     except Exception as error:
         app.logger.exception('Failed to update filter settings')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
+
+
+@app.route('/api/settings/autofocus', methods=['GET', 'PUT'])
+def autofocus_settings():
+    """Read or persist the autofocus light, brightness, and populated filter slot."""
+    try:
+        filter_settings_data = _current_filter_settings()
+        if request.method == 'GET':
+            normalized_settings = _current_autofocus_settings(filter_settings_data)
+            return jsonify({'autofocus_settings': normalized_settings}), 200
+
+        normalized_settings = validate_autofocus_settings(
+            request.get_json(silent=True) or {},
+            filter_settings_data,
+        )
+        if not update_autofocus_settings(normalized_settings):
+            raise OSError('Failed to persist autofocus settings.')
+        return jsonify({'autofocus_settings': normalized_settings}), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to update autofocus settings')
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
 
 

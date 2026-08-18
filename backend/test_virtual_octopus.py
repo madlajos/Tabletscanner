@@ -9,6 +9,42 @@ import porthandler
 from virtual_octopus import VirtualOctopusSerial
 
 
+class InterByteGapSerial(VirtualOctopusSerial):
+    """Expose the first response byte, then one temporary zero-byte gap."""
+
+    def __init__(self):
+        super().__init__()
+        self._fragment_reply = False
+        self._first_byte_read = False
+        self._gap_pending = False
+
+    def write(self, data):
+        result = super().write(data)
+        command = bytes(data).decode('ascii', 'ignore').strip().upper()
+        if command == 'M105':
+            self._fragment_reply = True
+            self._first_byte_read = False
+            self._gap_pending = False
+        return result
+
+    @property
+    def in_waiting(self):
+        if self._gap_pending:
+            self._gap_pending = False
+            return 0
+        waiting = VirtualOctopusSerial.in_waiting.fget(self)
+        if self._fragment_reply and not self._first_byte_read and waiting:
+            return 1
+        return waiting
+
+    def read(self, size=1):
+        result = super().read(size)
+        if self._fragment_reply and not self._first_byte_read and result:
+            self._first_byte_read = True
+            self._gap_pending = True
+        return result
+
+
 class VirtualOctopusTests(unittest.TestCase):
     def tearDown(self):
         device = globals.motion_platform
@@ -43,7 +79,7 @@ class VirtualOctopusTests(unittest.TestCase):
         motioncontrols.move_relative(device, x=-2.5, y=-5, z=40)
         self.assertIn('G1 X-2.5 Y5.0 Z40', device.command_history)
         self.assertEqual(
-            {'x': 10.0, 'y': 170.0, 'z': 30.0},
+            {'x': 10.0, 'y': 170.0, 'z': 40.0},
             motioncontrols.get_toolhead_position(device),
         )
         self.assertEqual(5.0, device._position['Y'])
@@ -81,6 +117,15 @@ class VirtualOctopusTests(unittest.TestCase):
 
         with self.assertRaises(OSError):
             porthandler.write_and_wait(device, 'M105')
+
+    def test_m105_probe_waits_across_inter_byte_gap_and_drains_full_line(self):
+        device = InterByteGapSerial()
+
+        acknowledged, reply = porthandler.probe_motion_controller(device, timeout=0.3)
+
+        self.assertTrue(acknowledged)
+        self.assertEqual(b'ok T:25.00 /0.00 @:0\n', reply)
+        self.assertEqual(0, device.in_waiting)
 
     def test_failure_marker_ends_acknowledgement_wait(self):
         class RejectedCommandSerial(VirtualOctopusSerial):

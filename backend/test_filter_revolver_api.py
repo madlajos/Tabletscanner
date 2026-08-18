@@ -172,6 +172,34 @@ class FilterRevolverApiTests(unittest.TestCase):
         self.assertEqual(400, response.status_code)
         self.assertEqual([], self.device.command_history)
 
+    def test_autofocus_settings_api_accepts_only_populated_wheel_slots(self):
+        settings_manager.set_settings({
+            'filter_settings': {
+                'filters': [{
+                    'id': 'green', 'name': 'Green',
+                    'wavelength_range': '500-570', 'color': '#00ff00',
+                }],
+                'slots': [None, 'green', None, None, None, None],
+                'height_offsets_mm': {
+                    'empty': {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                    'green': {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                },
+            },
+        })
+        payload = {'channel': 'uv310', 'brightness': 'dimmed', 'filter_position': 2}
+
+        with patch.object(backend_app, 'update_autofocus_settings', return_value=True) as update:
+            accepted = self.client.put('/api/settings/autofocus', json=payload)
+            rejected = self.client.put(
+                '/api/settings/autofocus',
+                json={**payload, 'filter_position': 3},
+            )
+
+        self.assertEqual(200, accepted.status_code)
+        self.assertEqual(payload, accepted.get_json()['autofocus_settings'])
+        update.assert_called_once_with(payload)
+        self.assertEqual(400, rejected.status_code)
+
     def test_a_axis_homing_establishes_reference_and_allows_rotation(self):
         response = self.client.post('/api/home_toolhead', json={'axes': ['a']})
         status = self.client.get('/api/filter-revolver/status').get_json()
@@ -280,6 +308,66 @@ class FilterRevolverApiTests(unittest.TestCase):
             if command.startswith('M106')
         )
         self.assertLess(filter_move_index, first_light_index)
+
+    def test_manual_autofocus_uses_saved_filter_and_uv_mode_then_rebases_zero(self):
+        globals.toolhead_homed = True
+        globals.homed_axes = {'x', 'y', 'z', 'a'}
+        globals.filter_revolver_homed = True
+        globals.filter_revolver_position = 1
+        globals.last_toolhead_pos = {'x': 5.0, 'y': 5.0, 'z': 10.0}
+        settings_manager.set_settings({
+            'lamp_settings': {
+                'channels': {
+                    channel: {
+                        'dim_percent': 50,
+                        'full_percent': 100,
+                        'dim_timeout_seconds': 30,
+                        'full_timeout_seconds': 5,
+                    }
+                    for channel in settings_manager.UV_LAMP_CHANNELS
+                },
+                'output_selectors': dict(settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS),
+            },
+            'filter_settings': {
+                'filters': [{
+                    'id': 'green', 'name': 'Green',
+                    'wavelength_range': '500-570', 'color': '#00ff00',
+                }],
+                'slots': [None, 'green', None, None, None, None],
+                'height_offsets_mm': {
+                    'empty': {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                    'green': {'uv255': 0, 'uv310': 0, 'uv365': 2.0, 'vis': 0},
+                },
+            },
+            'autofocus_settings': {
+                'channel': 'uv365',
+                'brightness': 'full',
+                'filter_position': 2,
+            },
+        })
+
+        def autofocus_result(*_args, **_kwargs):
+            globals.last_toolhead_pos['z'] = 11.25
+            return {'status': 'OK'}
+
+        with patch.object(backend_app.autofocus_main, 'autofocus_coarse', side_effect=autofocus_result):
+            response = self.client.post('/api/autofocus_coarse', json={'skip_empty_check': True})
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, globals.filter_revolver_position)
+        self.assertEqual('uv365', backend_app.light_controller.status()['active_channel'])
+        self.assertEqual('full', backend_app.light_controller.status()['active_mode'])
+        self.assertEqual('M106 P1 S255', next(
+            command for command in reversed(self.device.command_history)
+            if command.startswith('M106 P1')
+        ))
+        reference = response.get_json()['autofocus_reference']
+        self.assertEqual(9.25, reference['reference_z'])
+        self.assertEqual(2.0, reference['applied_offset_mm'])
+        self.assertEqual(
+            settings_manager.get_settings()['autofocus_settings'],
+            response.get_json()['autofocus_settings'],
+        )
 
     def test_light_change_applies_current_filter_offset_after_autofocus(self):
         globals.toolhead_homed = True

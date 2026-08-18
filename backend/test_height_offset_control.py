@@ -64,6 +64,22 @@ class HeightOffsetControlTests(unittest.TestCase):
             'moved': True,
         }, result)
 
+    def test_selected_autofocus_combination_is_rebased_to_matrix_zero(self):
+        reference_z = height_offset_control.record_combination_reference(12.5, 2.5)
+
+        result = height_offset_control.apply_active_combination(
+            self.device, filter_settings(2.5), 'uv255'
+        )
+
+        self.assertEqual(10.0, reference_z)
+        self.assertEqual(2.5, height_offset_control.status()['applied_offset_mm'])
+        self.assertEqual({
+            'applied': True,
+            'offset_mm': 2.5,
+            'target_z': 12.5,
+            'moved': True,
+        }, result)
+
     def test_target_outside_travel_is_rejected_without_motion(self):
         height_offset_control.record_reference(29.0)
 

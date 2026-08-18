@@ -30,8 +30,14 @@ import { SharedService } from '../../shared.service';
 import { FilterRevolverComponent } from '../../components/filter-revolver/filter-revolver.component';
 import { CameraImageSettingsService } from '../../services/camera-image-settings.service';
 import { CameraImageSettings, CameraIntegerLimit } from '../../models/camera-image-settings.models';
+import { AutofocusSettingsService } from '../../services/autofocus-settings.service';
+import {
+  AutofocusFilterOption,
+  AutofocusLightOption,
+  AutofocusSettings
+} from '../../models/autofocus-settings.models';
 
-type SettingsType = 'filter' | 'lamp' | 'camera' | 'tray' | 'advanced';
+type SettingsType = 'filter' | 'lamp' | 'camera' | 'focus' | 'advanced';
 type UvChannel = 'uv255' | 'uv310' | 'uv365';
 
 interface LampRow {
@@ -57,6 +63,15 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   savingFilterSettings = false;
   filterError = '';
   filterSaved = false;
+  loadingAutofocusSettings = false;
+  savingAutofocusSettings = false;
+  autofocusError = '';
+  autofocusSaved = false;
+  autofocusSettings: AutofocusSettings = {
+    channel: 'vis',
+    brightness: 'full',
+    filter_position: 1
+  };
   savingLampSettings = false;
   lampError = '';
   lampSaved = false;
@@ -84,15 +99,18 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   virtualConnectionLabel = '';
   private advancedSettingsLoaded = false;
   private filterSettingsLoaded = false;
+  private autofocusSettingsLoaded = false;
   private lampSettingsLoaded = false;
   private cameraSettingsLoaded = false;
   private nextFilterId = 1;
   private readonly destroy$ = new Subject<void>();
   private readonly filterSaveRequests$ = new Subject<void>();
+  private readonly autofocusSaveRequests$ = new Subject<void>();
   private readonly lampSaveRequests$ = new Subject<void>();
   private readonly advancedSaveRequests$ = new Subject<void>();
   private readonly cameraSaveRequests$ = new Subject<void>();
   private filterDirty = false;
+  private autofocusDirty = false;
   private lampDirty = false;
   private advancedDirty = false;
   private measurementSubscription?: Subscription;
@@ -101,7 +119,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     { id: 'filter', label: 'Szűrőváltó', icon: 'tune' },
     { id: 'lamp', label: 'Lámpa', icon: 'lightbulb' },
     { id: 'camera', label: 'Kamera', icon: 'photo_camera' },
-    { id: 'tray', label: 'Tálca', icon: 'table_restaurant' },
+    { id: 'focus', label: 'Fókusz', icon: 'center_focus_strong' },
     { id: 'advanced', label: 'Haladó', icon: 'build' }
   ];
 
@@ -120,6 +138,15 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     { id: 'uv365', label: '365 nm' },
     { id: 'vis', label: 'VIS' }
   ];
+  readonly autofocusLightOptions: ReadonlyArray<AutofocusLightOption> = [
+    { channel: 'uv255', brightness: 'dimmed', label: '255 nm – tompított fényerő' },
+    { channel: 'uv255', brightness: 'full', label: '255 nm – teljes fényerő' },
+    { channel: 'uv310', brightness: 'dimmed', label: '310 nm – tompított fényerő' },
+    { channel: 'uv310', brightness: 'full', label: '310 nm – teljes fényerő' },
+    { channel: 'uv365', brightness: 'dimmed', label: '365 nm – tompított fényerő' },
+    { channel: 'uv365', brightness: 'full', label: '365 nm – teljes fényerő' },
+    { channel: 'vis', brightness: 'full', label: 'VIS – teljes fényerő' }
+  ];
   advancedSelectors: Record<UvChannel | 'vis', string> = { ...this.fixedAdvancedSelectors };
   filterSettings: FilterSettings = {
     filters: [],
@@ -132,6 +159,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     private readonly filterSettingsService: FilterSettingsService,
     private readonly motionSettingsService: MotionSettingsService,
     private readonly cameraImageSettingsService: CameraImageSettingsService,
+    private readonly autofocusSettingsService: AutofocusSettingsService,
     private readonly sharedService: SharedService
   ) {}
 
@@ -151,6 +179,11 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       concatMap(() => this.persistAdvancedSettings()),
       takeUntil(this.destroy$)
     ).subscribe();
+    this.autofocusSaveRequests$.pipe(
+      debounceTime(500),
+      concatMap(() => this.persistAutofocusSettings()),
+      takeUntil(this.destroy$)
+    ).subscribe();
     this.cameraSaveRequests$.pipe(
       debounceTime(500),
       concatMap(() => this.persistCameraSettings()),
@@ -160,6 +193,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       this.measurementActive = active;
     });
     this.loadFilterSettings();
+    this.loadAutofocusSettings();
     this.loadAdvancedSettings();
   }
 
@@ -176,6 +210,14 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     }
     if (type === 'filter' && !this.loadingFilterSettings && !this.hasLoadedFilterSettings()) {
       this.loadFilterSettings();
+    }
+    if (type === 'focus') {
+      if (!this.loadingFilterSettings && !this.hasLoadedFilterSettings()) {
+        this.loadFilterSettings();
+      }
+      if (!this.loadingAutofocusSettings && !this.autofocusSettingsLoaded) {
+        this.loadAutofocusSettings();
+      }
     }
     if (type === 'camera' && !this.loadingCameraSettings && !this.cameraSettingsLoaded) {
       this.loadCameraSettings();
@@ -349,10 +391,16 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
 
   removeFilter(index: number): void {
     const removedId = this.filterSettings.filters[index]?.id;
+    const selectedAutofocusFilterId = this.filterSettings.slots[
+      this.autofocusSettings.filter_position - 1
+    ];
     this.filterSettings.filters.splice(index, 1);
     if (removedId) {
       this.filterSettings.slots = this.filterSettings.slots.map(slot => slot === removedId ? null : slot);
       delete this.filterSettings.height_offsets_mm[removedId];
+      if (selectedAutofocusFilterId === removedId) {
+        this.resetAutofocusFilterToEmpty();
+      }
     }
     this.onFilterChanged();
   }
@@ -369,6 +417,9 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     const slots = [...this.filterSettings.slots];
     slots[index] = filterId;
     this.filterSettings = { ...this.filterSettings, slots };
+    if (this.autofocusSettings.filter_position === index + 1 && filterId === null) {
+      this.resetAutofocusFilterToEmpty();
+    }
     this.onFilterChanged();
   }
 
@@ -389,8 +440,107 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     return this.filterSettings.filters.find(filter => filter.id === filterId);
   }
 
+  get autofocusLightSelection(): string {
+    return `${this.autofocusSettings.channel}:${this.autofocusSettings.brightness}`;
+  }
+
+  get autofocusFilterOptions(): AutofocusFilterOption[] {
+    const options: AutofocusFilterOption[] = [{ position: 1, label: '1 – Üres' }];
+    for (let index = 1; index < this.filterSettings.slots.length; index++) {
+      const filterId = this.filterSettings.slots[index];
+      const filter = this.filterForSlot(filterId);
+      if (filter) {
+        options.push({
+          position: (index + 1) as AutofocusFilterOption['position'],
+          label: `${index + 1} – ${filter.name}`
+        });
+      }
+    }
+
+    if (!options.some(option => option.position === this.autofocusSettings.filter_position)) {
+      options.push({
+        position: this.autofocusSettings.filter_position,
+        label: `${this.autofocusSettings.filter_position} – Nincs beállított szűrő`,
+        unavailable: true
+      });
+    }
+    return options.sort((a, b) => a.position - b.position);
+  }
+
+  onAutofocusLightChanged(selection: string): void {
+    const option = this.autofocusLightOptions.find(
+      candidate => `${candidate.channel}:${candidate.brightness}` === selection
+    );
+    if (!option) return;
+    this.autofocusSettings = {
+      ...this.autofocusSettings,
+      channel: option.channel,
+      brightness: option.brightness
+    };
+    this.onAutofocusChanged();
+  }
+
+  onAutofocusChanged(): void {
+    this.autofocusError = '';
+    this.autofocusSaved = false;
+    this.autofocusDirty = true;
+    this.autofocusSaveRequests$.next();
+  }
+
+  private resetAutofocusFilterToEmpty(): void {
+    this.autofocusSettings = { ...this.autofocusSettings, filter_position: 1 };
+    this.onAutofocusChanged();
+  }
+
+  private persistAutofocusSettings(): Observable<boolean> {
+    const selectedFilter = this.autofocusFilterOptions.find(
+      option => option.position === this.autofocusSettings.filter_position
+    );
+    if (!selectedFilter || selectedFilter.unavailable) {
+      this.autofocusError = 'Az autofókuszhoz válasszon a szűrőváltón jelenleg beállított szűrőt.';
+      return of(false);
+    }
+    if (!this.autofocusLightOptions.some(
+      option => option.channel === this.autofocusSettings.channel
+        && option.brightness === this.autofocusSettings.brightness
+    )) {
+      this.autofocusError = 'Az autofókusz megvilágítása érvénytelen.';
+      return of(false);
+    }
+
+    this.savingAutofocusSettings = true;
+    return this.autofocusSettingsService.update({ ...this.autofocusSettings }).pipe(
+      tap(response => {
+        this.autofocusSettings = { ...response.autofocus_settings };
+        this.autofocusSaved = true;
+        this.autofocusDirty = false;
+        this.savingAutofocusSettings = false;
+      }),
+      map(() => true),
+      catchError(error => {
+        this.autofocusError = error?.error?.error || 'Az autofókusz-beállítások mentése sikertelen.';
+        this.savingAutofocusSettings = false;
+        return of(false);
+      })
+    );
+  }
+
   isAutofocusZeroCell(filterKey: string, channel: HeightOffsetChannel): boolean {
     return filterKey === 'empty' && channel === 'vis';
+  }
+
+  isUnavailableHeightOffsetCombination(
+    filter: FilterDefinition,
+    channel: HeightOffsetChannel
+  ): boolean {
+    if (channel !== 'vis') return false;
+    const normalizedName = filter.name
+      .trim()
+      .toLocaleLowerCase('hu-HU')
+      .replace(/[\s_-]+/g, '');
+    return normalizedName === '255nm'
+      || normalizedName === '265nm'
+      || normalizedName === '365nm';
   }
 
   private persistFilterSettings(): Observable<boolean> {
@@ -422,10 +572,16 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
         return of(false);
       }
       const normalizedRow = {} as HeightOffsetRow;
+      const filter = normalizedFilters.find(candidate => candidate.id === key);
       for (const channel of this.heightOffsetChannels) {
-        const value = key === 'empty' && channel.id === 'vis'
+        const unavailable = !!filter
+          && this.isUnavailableHeightOffsetCombination(filter, channel.id);
+        const value = key === 'empty' && channel.id === 'vis' || unavailable
           ? 0
           : Number(sourceRow[channel.id]);
+        if (unavailable) {
+          sourceRow[channel.id] = 0;
+        }
         if (
           !Number.isFinite(value)
           || value < this.maxHeightOffsetDownMm
@@ -568,6 +724,22 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     });
   }
 
+  private loadAutofocusSettings(): void {
+    this.loadingAutofocusSettings = true;
+    this.autofocusError = '';
+    this.autofocusSettingsService.get().subscribe({
+      next: response => {
+        this.autofocusSettings = { ...response.autofocus_settings };
+        this.autofocusSettingsLoaded = true;
+        this.loadingAutofocusSettings = false;
+      },
+      error: error => {
+        this.autofocusError = error?.error?.error || 'Az autofókusz-beállítások betöltése sikertelen.';
+        this.loadingAutofocusSettings = false;
+      }
+    });
+  }
+
   private loadAdvancedSettings(): void {
     this.loadingAdvancedSettings = true;
     this.advancedError = '';
@@ -650,7 +822,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     const z = Number(this.firstTabletZMm);
     const spacing = Number(this.tabletSpacingMm);
     return [x, y, z, spacing].every(Number.isFinite)
-      && x >= 0 && y >= 0 && z >= 0 && z <= 30 && spacing > 0
+      && x >= 0 && y >= 0 && z >= 0 && z <= 40 && spacing > 0
       && x + 9 * spacing <= 175.5
       && y + 9 * spacing <= 175.5;
   }

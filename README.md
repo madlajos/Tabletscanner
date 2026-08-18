@@ -143,14 +143,14 @@ driven tablet by tablet by the UI through `POST /api/auto_measurement/step`, rat
 durable backend job queue. Progress and reconnect state therefore currently live in the Angular
 component.
 
-The configured tray is a 10×10 grid. Motion limits are currently 0–175 mm on X/Y and 0–30 mm on
+The configured tray is a 10×10 grid. Motion limits are currently 0–175 mm on X/Y and 0–40 mm on
 Z. Treat those limits, homing order, lamp timeouts, and light-interlock behavior as hardware
 safety constraints.
 
 ### Four-channel illumination configuration
 
 The Octopus illumination controller has four logical channels: `uv255`, `uv310`, `uv365`, and
-`vis`. The approved firmware and schema-v8 settings lock these to `P2/HE0`, `P3/HE1`, `P1/FAN1`,
+`vis`. The approved firmware and schema-v9 settings lock these to `P2/HE0`, `P3/HE1`, `P1/FAN1`,
 and `P0/FAN0` respectively; **Beállítások → Haladó** displays the mapping for verification.
 Configure dimmed/full percentages and their UV safety timeouts in
 **Beállítások → Lámpa**. UV channels use one click for dimmed and double click for full output;
@@ -158,16 +158,18 @@ VIS is a single-click 100% channel without a thermal timeout.
 
 Automatic measurement requires a non-empty `capture_plan`; legacy `lamp_top`/`lamp_side` payloads
 are rejected. Each plan row records a wavelength, filter position, exposure time, gain, and gamma.
-The first row is fixed to VIS with empty filter slot 1 for autofocus, while its three camera values
-remain operator-configurable. Live camera limits and increments validate those values before
-capture. Filter positions are stored in output metadata.
+The first row remains fixed to VIS with empty filter slot 1 for capture, and its three camera values
+also supply autofocus. The autofocus illumination, UV brightness mode, and populated filter-wheel
+slot are selected separately under **Beállítások → Fókusz**. Live camera limits and increments
+validate the camera values before capture. Filter positions are stored in output metadata.
 
 The six revolver positions and reusable filter definitions (name, wavelength range, and display
-color) can be configured under **Beállítások → Szűrőváltó**. The **Tálca** page stores a separate
-height offset for every configured-filter/illumination combination, plus the physical empty-filter
-row. Empty filter with VIS is the fixed 0 mm reference. Automatic Z corrections remain disabled
-until the manual autofocus button completes successfully; that routine first selects the empty
-filter and VIS. Any subsequent manual motion invalidates the autofocus reference. After the A axis is
+color) can be configured under **Beállítások → Szűrőváltó**. The **Fókusz** page stores the autofocus
+light/filter selection and a separate height offset for every configured-filter/illumination
+combination, plus the physical empty-filter row. Empty filter with VIS remains the fixed 0 mm
+calibration reference; autofocus performed with another combination is rebased to that zero.
+Automatic Z corrections remain disabled until the manual autofocus button completes successfully.
+Any subsequent manual motion invalidates the autofocus reference. After the A axis is
 homed—either by the regular full homing operation or separately from the Home button's
 right-click menu—the Vezérlőpult can move the physical revolver one 60° slot at a time. The UI
 updates its active filter only after the controller acknowledges the completed move.

@@ -1521,7 +1521,7 @@
 #define Z_MIN_POS 0
 #define X_MAX_POS X_BED_SIZE
 #define Y_MAX_POS Y_BED_SIZE
-#define Z_MAX_POS 30
+#define Z_MAX_POS 40
 #define I_MIN_POS 0
 #define I_MAX_POS 360
 //#define J_MIN_POS 0

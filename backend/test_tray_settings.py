@@ -54,7 +54,7 @@ class TraySettingsTests(unittest.TestCase):
             },
         })
         self.assertTrue(changed)
-        self.assertEqual(8, migrated['settings_schema_version'])
+        self.assertEqual(9, migrated['settings_schema_version'])
         self.assertEqual(3, migrated['advanced_settings']['first_tablet_x_mm'])
         self.assertEqual(18, migrated['advanced_settings']['tablet_spacing_mm'])
         self.assertNotIn('first_tablet_x', migrated['auto_measurement_settings'])

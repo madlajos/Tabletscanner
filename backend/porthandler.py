@@ -290,6 +290,23 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
     return False, bytes(buf)
 
 
+def probe_motion_controller(ser, timeout=0.3):
+    """Send M105 and consume its complete response line under ``motion_lock``.
+
+    Marlin commonly replies with ``ok T:...\n``. Waiting only until the two
+    acknowledgement bytes arrive can leave the temperature suffix in the
+    buffer, where it corrupts the next command response. A newline is therefore
+    the completion marker; the completed line must also contain ``ok``.
+    """
+    completed, reply = write_and_wait(
+        ser,
+        'M105',
+        timeout=timeout,
+        expect=b'\n',
+    )
+    return completed and b'ok' in reply.lower(), reply
+
+
 def write_and_wait_motion(ser, command, timeout=30.0):
     """
     Convenience wrapper for motion commands (G0/G1/G28/M400) that need

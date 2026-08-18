@@ -44,7 +44,7 @@ class SettingsMigrationTests(unittest.TestCase):
 
         settings = settings_manager.load_settings(self.settings_path)
 
-        self.assertEqual(8, settings['settings_schema_version'])
+        self.assertEqual(9, settings['settings_schema_version'])
         self.assertEqual({'ExposureTime': 123456.0, 'Gain': 4.0, 'Gamma': 1.2}, settings['camera_params'])
         self.assertNotIn('camera_params_dome', settings)
         self.assertNotIn('camera_params_bar', settings)
@@ -85,7 +85,7 @@ class SettingsMigrationTests(unittest.TestCase):
 
         migrated = settings_manager.load_settings(self.settings_path)
 
-        self.assertEqual(8, migrated['settings_schema_version'])
+        self.assertEqual(9, migrated['settings_schema_version'])
         self.assertEqual(
             settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS,
             migrated['lamp_settings']['output_selectors'],
@@ -106,7 +106,7 @@ class SettingsMigrationTests(unittest.TestCase):
         self.write_json(v3)
 
         migrated = settings_manager.load_settings(self.settings_path)
-        self.assertEqual(8, migrated['settings_schema_version'])
+        self.assertEqual(9, migrated['settings_schema_version'])
         self.assertEqual(
             [{'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 50000.0, 'gain': 0.0, 'gamma': 1.0}],
             migrated['auto_measurement_settings']['capture_plan'],
@@ -194,6 +194,32 @@ class SettingsMigrationTests(unittest.TestCase):
             ]),
         )
 
+    def test_autofocus_settings_validate_light_mode_and_populated_filter(self):
+        filters = {
+            'filters': [{
+                'id': 'green', 'name': 'Zöld',
+                'wavelength_range': '500–570', 'color': '#00ff00',
+            }],
+            'slots': [None, 'green', None, None, None, None],
+            'height_offsets_mm': height_offset_matrix('green'),
+        }
+        payload = {'channel': 'uv310', 'brightness': 'dimmed', 'filter_position': 2}
+
+        self.assertEqual(
+            payload,
+            settings_manager.validate_autofocus_settings(payload, filters),
+        )
+        with self.assertRaises(ValueError):
+            settings_manager.validate_autofocus_settings(
+                {'channel': 'vis', 'brightness': 'dimmed', 'filter_position': 2},
+                filters,
+            )
+        with self.assertRaises(ValueError):
+            settings_manager.validate_autofocus_settings(
+                {**payload, 'filter_position': 3},
+                filters,
+            )
+
     def test_filter_settings_validation_normalizes_and_checks_slot_references(self):
         payload = {
             'filters': [{'id': 'uv-310', 'name': 'UV 310', 'wavelength_range': '300–320', 'color': '#12AB34'}],
@@ -224,6 +250,26 @@ class SettingsMigrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings_manager.validate_filter_settings(duplicate_name)
 
+    def test_vis_offsets_are_zeroed_for_uv_filter_rows(self):
+        filters = [
+            {'id': 'f255', 'name': '255 nm', 'wavelength_range': '250–260', 'color': '#000000'},
+            {'id': 'f365', 'name': '365nm', 'wavelength_range': '350–400', 'color': '#111111'},
+        ]
+        payload = {
+            'filters': filters,
+            'slots': [None, 'f255', 'f365', None, None, None],
+            'height_offsets_mm': {
+                **height_offset_matrix('f255', 'f365'),
+                'f255': {**height_offset_matrix('f255')['f255'], 'vis': 4.5},
+                'f365': {**height_offset_matrix('f365')['f365'], 'vis': -3.0},
+            },
+        }
+
+        normalized = settings_manager.validate_filter_settings(payload)
+
+        self.assertEqual(0.0, normalized['height_offsets_mm']['f255']['vis'])
+        self.assertEqual(0.0, normalized['height_offsets_mm']['f365']['vis'])
+
     def test_filter_settings_update_persists_without_losing_other_categories(self):
         settings_manager.set_settings({'camera_params': {'Gamma': 1.0}})
         filter_settings = {
@@ -235,6 +281,37 @@ class SettingsMigrationTests(unittest.TestCase):
         self.assertTrue(settings_manager.update_filter_settings(filter_settings, self.settings_path))
         self.assertEqual({'Gamma': 1.0}, settings_manager.get_settings()['camera_params'])
         self.assertEqual(filter_settings, self.read_json()['filter_settings'])
+
+    def test_removing_selected_autofocus_filter_resets_to_safe_default(self):
+        settings_manager.set_settings({
+            'autofocus_settings': {
+                'channel': 'uv255',
+                'brightness': 'full',
+                'filter_position': 2,
+            },
+        })
+        empty_filters = settings_manager.default_filter_settings()
+
+        self.assertTrue(settings_manager.update_filter_settings(empty_filters, self.settings_path))
+        self.assertEqual(
+            settings_manager.default_autofocus_settings(),
+            settings_manager.get_settings()['autofocus_settings'],
+        )
+
+    def test_autofocus_settings_update_preserves_other_categories(self):
+        settings_manager.set_settings({'camera_params': {'Gamma': 1.0}})
+        autofocus_settings = {
+            'channel': 'uv365',
+            'brightness': 'dimmed',
+            'filter_position': 4,
+        }
+
+        self.assertTrue(settings_manager.update_autofocus_settings(
+            autofocus_settings,
+            self.settings_path,
+        ))
+        self.assertEqual({'Gamma': 1.0}, settings_manager.get_settings()['camera_params'])
+        self.assertEqual(autofocus_settings, self.read_json()['autofocus_settings'])
 
     def test_lamp_output_selector_validation_normalizes_values(self):
         payload = {'output_selectors': {
@@ -267,7 +344,7 @@ class SettingsMigrationTests(unittest.TestCase):
             'max_height_offset_down_mm': -4,
             'first_tablet_x_mm': 2.9,
             'first_tablet_y_mm': 10.6,
-            'first_tablet_z_mm': 20,
+            'first_tablet_z_mm': 40,
             'tablet_spacing_mm': 18.3,
         }
         self.assertEqual(
@@ -277,7 +354,7 @@ class SettingsMigrationTests(unittest.TestCase):
                 'max_height_offset_down_mm': -4.0,
                 'first_tablet_x_mm': 2.9,
                 'first_tablet_y_mm': 10.6,
-                'first_tablet_z_mm': 20.0,
+                'first_tablet_z_mm': 40.0,
                 'tablet_spacing_mm': 18.3,
             },
             settings_manager.validate_motion_simulation_settings(payload),
@@ -291,6 +368,11 @@ class SettingsMigrationTests(unittest.TestCase):
             settings_manager.validate_motion_simulation_settings({
                 **payload,
                 'max_height_offset_down_mm': 4,
+            })
+        with self.assertRaises(ValueError):
+            settings_manager.validate_motion_simulation_settings({
+                **payload,
+                'first_tablet_z_mm': 40.1,
             })
 
     def test_filter_height_offset_uses_configured_limits(self):
@@ -341,13 +423,30 @@ class SettingsMigrationTests(unittest.TestCase):
         })
 
         self.assertTrue(changed)
-        self.assertEqual(8, migrated['settings_schema_version'])
+        self.assertEqual(9, migrated['settings_schema_version'])
         self.assertNotIn('height_offset_mm', migrated['filter_settings']['filters'][0])
         self.assertEqual(
             {channel: 1.25 for channel in settings_manager.LIGHT_CHANNELS},
             migrated['filter_settings']['height_offsets_mm']['green'],
         )
         self.assertEqual(0.0, migrated['filter_settings']['height_offsets_mm']['empty']['vis'])
+
+    def test_schema_v8_adds_safe_autofocus_defaults(self):
+        migrated, changed = settings_manager.migrate_settings({
+            'settings_schema_version': 8,
+            'filter_settings': {
+                'filters': [],
+                'slots': [None] * 6,
+                'height_offsets_mm': height_offset_matrix(),
+            },
+        })
+
+        self.assertTrue(changed)
+        self.assertEqual(9, migrated['settings_schema_version'])
+        self.assertEqual(
+            settings_manager.default_autofocus_settings(),
+            migrated['autofocus_settings'],
+        )
 
 
 if __name__ == '__main__':

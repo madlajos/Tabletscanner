@@ -91,7 +91,7 @@ carefully because normal application use can modify the tracked JSON files.
   write timeout, USB `0483:5740`, `M115`, and the mapping marker
   `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK`.
 - Preserve backend clamping and cached position updates. Current limits are X/Y 0–175 mm and Z
-  0–30 mm. UI limits are not an adequate safety boundary.
+  0–40 mm. UI limits are not an adequate safety boundary.
 - Respect `globals.motion_busy`; status polling must not interleave commands with homing,
   autofocus, or long motion. The flag currently covers homing incompletely and is not a complete
   operation-ownership mechanism; extend coordination deliberately when touching these flows.
