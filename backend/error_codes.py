@@ -40,6 +40,10 @@ class ErrorCode:
     PE_CHANNEL_BAD_SPACE = "E2102"
     PE_CHANNEL_BAD_CHAN = "E2103"
     PE_CHANNEL_CONV_FAIL = "E2104"
+    PE_PSEUDO_IMAGE_COUNT = "E2150"
+    PE_PSEUDO_IMAGE_FORMAT = "E2151"
+    PE_PSEUDO_IMAGE_SIZE = "E2152"
+    PE_PSEUDO_IMAGE_SELECTOR = "E2153"
     PE_THRESH_NO_IMAGES = "E2201"
     PE_THRESH_NOT_SINGLE = "E2202"
     PE_HIST_NO_IMAGES = "E2301"
@@ -210,6 +214,9 @@ class ErrorCode:
     PE_CIRC_BAD_KSIZE = "E3605"
     PE_CIRC_NULL_IMG = "E3606"
     PE_CIRC_BAD_SHAPE = "E3607"
+    PE_CIRC_BAD_RADIUS_MULTIPLIER = "E3608"
+    PE_CIRC_BAD_MASK_BACKGROUND = "E3609"
+    PE_CIRC_BAD_DETECT_SCALE = "E3610"
 
 def load_error_messages():
     file_path = os.path.join(os.path.dirname(__file__), "error_messages.json")

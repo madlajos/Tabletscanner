@@ -46,5 +46,15 @@
   "E3006": "Recept I/O hiba",
   "E3007": "Recept nem található",
   "E3008": "Érvénytelen recept formátum",
+  "E3601": "Nincsenek feldolgozandó képek.",
+  "E3602": "Érvénytelen polaritás (dark, bright vagy both szükséges).",
+  "E3603": "A sugár értékeknek egész számnak kell lenniük.",
+  "E3604": "Érvénytelen sugár tartomány (min > 0, max > 0, min <= max).",
+  "E3605": "Az elmosás kernel méretnek páratlan pozitív számnak kell lennie.",
+  "E3606": "Üres kép a kör detektálás bemeneteként.",
+  "E3607": "Nem támogatott képformátum.",
+  "E3608": "Az érvénytelen sugárszorzó 0-nál nagyobb érték kell legyen.",
+  "E3609": "Érvénytelen maszk háttérszín (black vagy white szükséges).",
+  "E3610": "A detektálási méretaránynak 0-nál nagyobb értéknek kell lennie.",
   "GENERIC": "Váratlan hiba lépett fel"
 }

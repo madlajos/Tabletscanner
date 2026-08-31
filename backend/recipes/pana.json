@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "name": "pana",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "72f4a976-4258-402b-a340-bbf512ad4a5e",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "C:/Users/Lilla/Desktop/IMG_0001 másolat1.jpg"
+      },
+      "order": 0,
+      "enabled": true
+    },
+    {
+      "instance_id": "529b3601-720d-4f50-bef9-9d3d1f4016ca",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "channel": "GRAY",
+        "space": "GRAY"
+      },
+      "order": 1,
+      "enabled": true
+    },
+    {
+      "instance_id": "0b3729df-606b-4791-a8bd-69c02f2f94df",
+      "step_def_id": "apply_blur",
+      "param_values": {
+        "ksize": 21,
+        "method": "gaussian",
+        "sigma": 0,
+        "sigma_color": 75,
+        "sigma_space": 75
+      },
+      "order": 2,
+      "enabled": true
+    },
+    {
+      "instance_id": "8ca2d2c6-1f17-4f0e-b403-79014b16466d",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "C:/Users/Lilla/Desktop/IMG_0001 másolat1.jpg"
+      },
+      "order": 3,
+      "enabled": true
+    },
+    {
+      "instance_id": "c90bc48e-5324-4028-bf42-0f01ebc10642",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "channel": "GRAY",
+        "space": "GRAY"
+      },
+      "order": 4,
+      "enabled": true
+    },
+    {
+      "instance_id": "e8b2201a-916b-4c74-b85a-87521742cedf",
+      "step_def_id": "apply_blur",
+      "param_values": {
+        "ksize": 21,
+        "method": "gaussian",
+        "sigma": 0,
+        "sigma_color": 75,
+        "sigma_space": 75
+      },
+      "order": 5,
+      "enabled": true
+    },
+    {
+      "instance_id": "92f7df15-04bd-48da-88fb-89b8608b9d4a",
+      "step_def_id": "reference_crop",
+      "param_values": {
+        "crop_size": 5,
+        "reference_square_overrides": "{\"0\":[{\"x\":505,\"y\":272,\"size\":5,\"name\":\"\"},{\"x\":971,\"y\":313,\"size\":5,\"name\":\"\"},{\"x\":760,\"y\":311,\"size\":5,\"name\":\"\"},{\"x\":1062,\"y\":395,\"size\":5,\"name\":\"\"}]}",
+        "reference_squares": "[{\"x\":505,\"y\":272,\"size\":5,\"name\":\"\"},{\"x\":971,\"y\":313,\"size\":5,\"name\":\"\"},{\"x\":760,\"y\":311,\"size\":5,\"name\":\"\"},{\"x\":1062,\"y\":395,\"size\":5,\"name\":\"\"}]",
+        "show_references": false
+      },
+      "order": 6,
+      "enabled": true
+    },
+    {
+      "instance_id": "a57577b6-2ea1-46ef-9788-68703f5cfdd5",
+      "step_def_id": "reference_sequence",
+      "param_values": {
+        "component": "GRAY",
+        "direction": "ascending"
+      },
+      "order": 7,
+      "enabled": true
+    },
+    {
+      "instance_id": "e507c253-34ec-495c-ac13-9ad6bb0776fa",
+      "step_def_id": "branch_merge",
+      "param_values": {},
+      "order": 8,
+      "enabled": true
+    },
+    {
+      "instance_id": "bbdeba31-d0d4-4cc7-9e90-09d58267655f",
+      "step_def_id": "kmeans_cluster",
+      "param_values": {
+        "attempts": 3,
+        "background": "black",
+        "color_space": "BGR",
+        "epsilon": 1,
+        "init_mode": "reference_fixed",
+        "k": 4,
+        "max_iter": 30,
+        "output_mode": "palette",
+        "reference_source": "92f7df15-04bd-48da-88fb-89b8608b9d4a",
+        "sort_by_brightness": true
+      },
+      "order": 9,
+      "enabled": true
+    },
+    {
+      "instance_id": "f2519a60-5f94-45c4-8389-818cdc62f809",
+      "step_def_id": "cluster_reference_map",
+      "param_values": {
+        "selected_labels": "1,2,3,4",
+        "reference_label": "2",
+        "center_mode": "cluster_median",
+        "map_multiplier": 0.55,
+        "colormap": "jet",
+        "invert": false
+      },
+      "order": 10,
+      "enabled": true
+    }
+  ],
+  "connections": [
+    {
+      "from_instance_id": "72f4a976-4258-402b-a340-bbf512ad4a5e",
+      "kind": "merge",
+      "to_instance_id": "e507c253-34ec-495c-ac13-9ad6bb0776fa"
+    }
+  ],
+  "branch_names": {},
+  "created_at": "2026-07-29T13:18:58.925728+00:00",
+  "modified_at": "2026-07-29T21:25:39.772673+00:00"
+}

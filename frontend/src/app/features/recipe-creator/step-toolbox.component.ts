@@ -39,7 +39,7 @@ const CATEGORY_ORDER = ['io', 'adjustment', 'filter', 'analysis', 'detection'];
       class="toolbox-scroll"
       cdkDropList
       id="toolbox-list"
-      [cdkDropListConnectedTo]="['pipeline-list']"
+      [cdkDropListConnectedTo]="pipelineDropListIds"
       [cdkDropListSortingDisabled]="true"
     >
       @for (group of categoryGroups; track group.label) {
@@ -196,6 +196,10 @@ const CATEGORY_ORDER = ['io', 'adjustment', 'filter', 'analysis', 'detection'];
 export class StepToolboxComponent implements OnInit, OnDestroy {
   categoryGroups: CategoryGroup[] = [];
   previewStepId: string | null = null;
+  pipelineDropListIds = [
+    'pipeline-list',
+    ...Array.from({ length: 32 }, (_, i) => `pipeline-branch-${i + 1}`),
+  ];
   private sub?: Subscription;
 
   constructor(private pipelineState: PipelineStateService) {}

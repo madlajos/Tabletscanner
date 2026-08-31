@@ -13,7 +13,8 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
     """
     errors: List[StepError] = []
 
-    if not doc.steps:
+    enabled_steps = [(i, step) for i, step in enumerate(doc.steps) if step.enabled]
+    if not enabled_steps:
         errors.append(StepError(
             step_index=-1, step_def_id="",
             error_code="E3001",
@@ -22,15 +23,17 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
         return errors
 
     # Check first step is load_image
-    first = doc.steps[0]
+    first_index, first = enabled_steps[0]
     if first.step_def_id != "load_image":
         errors.append(StepError(
-            step_index=0, step_def_id=first.step_def_id,
+            step_index=first_index, step_def_id=first.step_def_id,
             error_code="E3001",
             message="Az első lépésnek 'Kép betöltése' típusúnak kell lennie.",
         ))
 
     for i, step_inst in enumerate(doc.steps):
+        if not step_inst.enabled:
+            continue
         defn = STEP_DEFINITIONS.get(step_inst.step_def_id)
         if defn is None:
             errors.append(StepError(
@@ -42,7 +45,7 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
 
         # Validate required preceding steps
         if defn.required_preceding_steps:
-            preceding_ids = {s.step_def_id for s in doc.steps[:i]}
+            preceding_ids = {s.step_def_id for s in doc.steps[:i] if s.enabled}
             for req_id in defn.required_preceding_steps:
                 if req_id not in preceding_ids:
                     req_defn = STEP_DEFINITIONS.get(req_id)
@@ -56,7 +59,7 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
 
         # Validate secondary inputs (must also precede)
         if defn.secondary_inputs:
-            preceding_ids = preceding_ids if defn.required_preceding_steps else {s.step_def_id for s in doc.steps[:i]}
+            preceding_ids = preceding_ids if defn.required_preceding_steps else {s.step_def_id for s in doc.steps[:i] if s.enabled}
             for sec_id in defn.secondary_inputs:
                 if sec_id not in preceding_ids:
                     sec_defn = STEP_DEFINITIONS.get(sec_id)
@@ -71,7 +74,7 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
         # Validate color_thresh specific requirements
         if step_inst.step_def_id == "color_thresh":
             # Find the preceding select_channel step
-            preceding_steps = {s.step_def_id: s for s in doc.steps[:i]}
+            preceding_steps = {s.step_def_id: s for s in doc.steps[:i] if s.enabled}
             if "select_channel" in preceding_steps:
                 select_channel_step = preceding_steps["select_channel"]
                 channel = select_channel_step.param_values.get("channel", "")
@@ -88,11 +91,11 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
         param_errors = _validate_params(i, step_inst, defn)
         errors.extend(param_errors)
 
-    has_fit = any(s.step_def_id == "fit_curve" for s in doc.steps)
-    has_predict = any(s.step_def_id == "predict_node" for s in doc.steps)
+    has_fit = any(s.enabled and s.step_def_id == "fit_curve" for s in doc.steps)
+    has_predict = any(s.enabled and s.step_def_id == "predict_node" for s in doc.steps)
     if has_fit and has_predict:
         for i, step_inst in enumerate(doc.steps):
-            if step_inst.step_def_id in ("fit_curve", "predict_node"):
+            if step_inst.enabled and step_inst.step_def_id in ("fit_curve", "predict_node"):
                 errors.append(StepError(
                     step_index=i,
                     step_def_id=step_inst.step_def_id,

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "name": "crop_panaR",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "8e6812fb-f4e7-4001-a646-1711be4b32ae",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/Lilla/Desktop/P_VIS_fin/Canon650D/UV255/R",
+        "file_order": ""
+      },
+      "order": 0,
+      "enabled": true
+    },
+    {
+      "instance_id": "d5f12e88-55a6-4862-9b81-b85315f86aea",
+      "step_def_id": "mask_rect_roi",
+      "param_values": {
+        "roi_type": "rect",
+        "roi_x": 1909,
+        "roi_y": 644,
+        "roi_width": 1252,
+        "roi_height": 1856,
+        "roi_cx": 0,
+        "roi_cy": 0,
+        "roi_rx": 0,
+        "roi_ry": 0,
+        "roi_angle": 0,
+        "roi_points": "[]",
+        "output_mode": "crop",
+        "apply_mask": true,
+        "shape_only": false,
+        "shape_outline_color": "fehér",
+        "shape_outline_thickness": 2,
+        "background_color": "fekete",
+        "invert_mask": false,
+        "roi_overrides": "{\"0\":{\"roi_angle\":-32.8,\"roi_type\":\"rect\",\"roi_x\":1898,\"roi_y\":675,\"roi_width\":1252,\"roi_height\":1856},\"1\":{\"roi_angle\":-30.1,\"roi_type\":\"rect\",\"roi_x\":1687,\"roi_y\":857,\"roi_width\":1252,\"roi_height\":1856},\"2\":{\"roi_angle\":-32.7,\"roi_type\":\"rect\",\"roi_x\":1804,\"roi_y\":873,\"roi_width\":1252,\"roi_height\":1856},\"3\":{\"roi_angle\":-33.7,\"roi_type\":\"rect\",\"roi_x\":1827,\"roi_y\":1008,\"roi_width\":1252,\"roi_height\":1856},\"4\":{\"roi_angle\":-35.8,\"roi_type\":\"rect\",\"roi_x\":2056,\"roi_y\":878,\"roi_width\":1252,\"roi_height\":1856},\"5\":{\"roi_angle\":-39.1,\"roi_type\":\"rect\",\"roi_x\":2109,\"roi_y\":780,\"roi_width\":1252,\"roi_height\":1856},\"6\":{\"roi_angle\":-36.3,\"roi_type\":\"rect\",\"roi_x\":1909,\"roi_y\":644,\"roi_width\":1252,\"roi_height\":1856}}"
+      },
+      "order": 1,
+      "enabled": true
+    },
+    {
+      "instance_id": "05276764-096e-42e7-b31f-0846270d29b4",
+      "step_def_id": "brightness_contrast",
+      "param_values": {
+        "brightness": -37,
+        "contrast": 2
+      },
+      "order": 2,
+      "enabled": true
+    },
+    {
+      "instance_id": "35683876-cae1-43d4-a0e8-fe2d31f8ff3a",
+      "step_def_id": "save_images",
+      "param_values": {
+        "output_folder": "C:/Users/Lilla/Desktop/P_VIS_fin/Canon650D/UV255/R/crop/crop2",
+        "name_prefix": "",
+        "name_suffix": ""
+      },
+      "order": 3,
+      "enabled": true
+    }
+  ],
+  "connections": [],
+  "created_at": "2026-07-20T00:48:41.631633+00:00",
+  "modified_at": "2026-07-20T00:48:41.631633+00:00"
+}

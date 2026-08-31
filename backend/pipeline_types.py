@@ -100,6 +100,7 @@ class StepInstance:
     step_def_id: str
     param_values: Dict[str, Any] = field(default_factory=dict)
     order: int = 0
+    enabled: bool = True
 
     @staticmethod
     def create(step_def_id: str, param_values: Optional[Dict] = None, order: int = 0):
@@ -108,6 +109,7 @@ class StepInstance:
             step_def_id=step_def_id,
             param_values=param_values or {},
             order=order,
+            enabled=True,
         )
 
     def to_dict(self) -> dict:
@@ -116,6 +118,7 @@ class StepInstance:
             "step_def_id": self.step_def_id,
             "param_values": self.param_values,
             "order": self.order,
+            "enabled": self.enabled,
         }
 
     @staticmethod
@@ -125,6 +128,7 @@ class StepInstance:
             step_def_id=d["step_def_id"],
             param_values=d.get("param_values", {}),
             order=d.get("order", 0),
+            enabled=d.get("enabled", True) is not False,
         )
 
 
@@ -135,6 +139,8 @@ class PipelineDocument:
     name: str = ""
     description: str = ""
     steps: List[StepInstance] = field(default_factory=list)
+    connections: List[Dict[str, Any]] = field(default_factory=list)
+    branch_names: Dict[str, str] = field(default_factory=dict)
     created_at: str = ""
     modified_at: str = ""
 
@@ -144,6 +150,8 @@ class PipelineDocument:
             "name": self.name,
             "description": self.description,
             "steps": [s.to_dict() for s in self.steps],
+            "connections": self.connections,
+            "branch_names": self.branch_names,
             "created_at": self.created_at,
             "modified_at": self.modified_at,
         }
@@ -156,6 +164,8 @@ class PipelineDocument:
             name=d.get("name", ""),
             description=d.get("description", ""),
             steps=steps,
+            connections=d.get("connections", []),
+            branch_names=d.get("branch_names", {}),
             created_at=d.get("created_at", ""),
             modified_at=d.get("modified_at", ""),
         )

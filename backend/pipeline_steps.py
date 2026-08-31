@@ -21,6 +21,7 @@ from pipeline_types import (
 from proc_elements import (
     load_image as _pe_load_image,
     select_channel as _pe_select_channel,
+    create_pseudo_image as _pe_create_pseudo_image,
     apply_threshold as _pe_apply_threshold,
     calculate_histograms as _pe_calculate_histograms,
     apply_range_mask as _pe_apply_range_mask,
@@ -38,12 +39,18 @@ from proc_elements import (
     robust_stretch_gamma as _pe_robust_stretch_gamma,
     advanced_illumin_corr as _pe_advanced_illumin_corr,
     mask_roi as _pe_mask_roi,
+    reference_crop as _pe_reference_crop,
+    reference_color_align as _pe_reference_color_align,
+    reference_sequence as _pe_reference_sequence,
+    scale_bar_overlay as _pe_scale_bar_overlay,
     resize_images as _pe_resize_images,
     detect_particles as _pe_detect_particles,
     histogram_pca as _pe_histogram_pca,
     detect_circles as _pe_detect_circles,
     characterize_particles as _pe_characterize_particles,
     color_threshold as _pe_color_threshold,
+    kmeans_cluster as _pe_kmeans_cluster,
+    cluster_reference_map as _pe_cluster_reference_map,
 )
 
 # ---------------------------------------------------------------------------
@@ -57,6 +64,33 @@ STEP_EXECUTORS: dict[str, callable] = {}
 def _register(defn: StepDefinition, executor):
     STEP_DEFINITIONS[defn.id] = defn
     STEP_EXECUTORS[defn.id] = executor
+
+
+def _parse_float_sequence_param(raw_value, default_values, param_name, allowed_lengths=None):
+    if raw_value is None or raw_value == "":
+        return tuple(default_values), None
+
+    if isinstance(raw_value, (list, tuple)):
+        raw_items = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return tuple(default_values), None
+        text = text.strip("[]()")
+        raw_items = [part.strip() for part in text.split(",") if part.strip()]
+
+    try:
+        values = tuple(float(item) for item in raw_items)
+    except (TypeError, ValueError):
+        return None, "E2605"
+
+    if allowed_lengths is None:
+        allowed_lengths = (len(default_values),)
+
+    if len(values) not in allowed_lengths:
+        return None, "E2602" if param_name == "initial_centroids" else "E2605"
+
+    return values, None
 
 
 # ---------------------------------------------------------------------------
@@ -89,17 +123,25 @@ def _exec_load_image(data: dict, params: dict) -> dict:
         data = create_data()
         data["error"] = "E2002"
         return data
-    result = _pe_load_image(path)
-    # Apply custom image order if specified
+    single_idx = params.get("_single_image_index", -1)
+    thumb_dim = params.get("_thumbnail_max_dim", 0)
+    # When reordering is active, we need all images to reorder, then trim in engine
     order_str = params.get("file_order", "")
+    if order_str and single_idx >= 0:
+        # Load all images for reordering, engine will trim afterwards
+        result = _pe_load_image(path, thumbnail_max_dim=thumb_dim)
+    else:
+        result = _pe_load_image(path, single_image_index=single_idx, thumbnail_max_dim=thumb_dim)
+    # Apply custom image order if specified
     if order_str and result.get("images") and not result.get("error"):
         try:
             indices = [int(x.strip()) for x in order_str.split(",") if x.strip()]
-            n = len(result["images"])
+            n = len(result["paths"])
             # Validate indices
             if indices and all(0 <= i < n for i in indices) and len(indices) == n:
-                result["images"] = [result["images"][i] for i in indices]
                 result["paths"] = [result["paths"][i] for i in indices]
+                if not result.get("_single_image_loaded"):
+                    result["images"] = [result["images"][i] for i in indices]
         except (ValueError, IndexError):
             pass  # Ignore invalid order, keep original
     return result
@@ -277,6 +319,60 @@ _register(_save_array_def, _exec_save_array)
 
 
 # ---------------------------------------------------------------------------
+# 1/d. Branch Merge  (preview/pass-through helper)
+# ---------------------------------------------------------------------------
+_branch_merge_def = StepDefinition(
+    id="branch_merge",
+    name="Agak osszevonasa",
+    category="io",
+    description="Ket feldolgozasi ag osszehasonlitasa es osszevonasa. A fo kepet valtozatlanul tovabbadja, az elonezetben osztott nezetet ad.",
+    icon="merge_type",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[],
+    side_output_types={"branch_merge_preview": "SCALAR"},
+)
+
+
+def _exec_branch_merge(data: dict, params: dict) -> dict:
+    if not isinstance(data, dict):
+        return data
+
+    results = data.setdefault("results", {})
+    meta = data.setdefault("meta", {})
+    branch_sources = params.get("_branch_reference_sources")
+    if isinstance(branch_sources, list):
+        meta["branch_reference_sources"] = branch_sources
+
+    # Keep the current branch's image stream, but import auxiliary outputs from
+    # every explicitly connected branch. This is what carries ROI/range masks
+    # into downstream processing such as k-means clustering.
+    mask_result_keys = {"masks", "roi_masks", "range_masks", "region_masks"}
+    for branch_data in params.get("_branch_merge_inputs", []):
+        if not isinstance(branch_data, dict):
+            continue
+        for key, value in (branch_data.get("results") or {}).items():
+            if key in mask_result_keys:
+                results[key] = value
+            else:
+                results.setdefault(key, value)
+        for key, value in (branch_data.get("meta") or {}).items():
+            if key == "active_masks":
+                meta[key] = value
+            else:
+                meta.setdefault(key, value)
+
+    preview = params.get("_branch_merge_preview")
+    if isinstance(preview, dict):
+        results["branch_merge_preview"] = preview
+    data.setdefault("history", []).append("branch_merge")
+    return data
+
+
+_register(_branch_merge_def, _exec_branch_merge)
+
+
+# ---------------------------------------------------------------------------
 # 2. Select Channel  (select_channel.py)
 # ---------------------------------------------------------------------------
 _select_channel_def = StepDefinition(
@@ -306,6 +402,54 @@ def _exec_select_channel(data: dict, params: dict) -> dict:
 
 
 _register(_select_channel_def, _exec_select_channel)
+
+
+# ---------------------------------------------------------------------------
+# 2/b. Pseudo image from two loaded images
+# ---------------------------------------------------------------------------
+_pseudo_image_sources = [f"1-{channel}" for channel in ("B", "G", "R", "GRAY")]
+
+_pseudo_image_def = StepDefinition(
+    id="pseudo_image",
+    name="Pszeudokép képekből",
+    category="adjustment",
+    description="Tetszőleges számú betöltött kép választott csatornáiból egy új színes képet állít elő.",
+    icon="filter_vintage",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="blue_source", label="Kimeneti kék csatorna", type="enum",
+                    default="1-B", options=_pseudo_image_sources),
+        ParamSchema(name="green_source", label="Kimeneti zöld csatorna", type="enum",
+                    default="1-G", options=_pseudo_image_sources),
+        ParamSchema(name="red_source", label="Kimeneti piros csatorna", type="enum",
+                    default="1-R", options=_pseudo_image_sources),
+        ParamSchema(name="move_blue", label="Kék réteg mozgatása", type="bool", default=False),
+        ParamSchema(name="move_green", label="Zöld réteg mozgatása", type="bool", default=False),
+        ParamSchema(name="move_red", label="Piros réteg mozgatása", type="bool", default=False),
+        ParamSchema(name="offset_x", label="Közös X eltolás (px)", type="int",
+                    default=0, min=-5000, max=5000, step=1),
+        ParamSchema(name="offset_y", label="Közös Y eltolás (px)", type="int",
+                    default=0, min=-5000, max=5000, step=1),
+    ],
+)
+
+
+def _exec_pseudo_image(data: dict, params: dict) -> dict:
+    return _pe_create_pseudo_image(
+        data,
+        blue_source=params.get("blue_source", "1-B"),
+        green_source=params.get("green_source", "1-G"),
+        red_source=params.get("red_source", "1-R"),
+        move_blue=params.get("move_blue", False),
+        move_green=params.get("move_green", False),
+        move_red=params.get("move_red", False),
+        offset_x=params.get("offset_x", 0),
+        offset_y=params.get("offset_y", 0),
+    )
+
+
+_register(_pseudo_image_def, _exec_pseudo_image)
 
 
 # ---------------------------------------------------------------------------
@@ -1010,7 +1154,68 @@ _register(_advanced_illum_def, _exec_advanced_illum)
 
 
 # ---------------------------------------------------------------------------
-# 19. ROI Mask  (draw_roi.py)
+# 19. Scale Bar Overlay  (scale_bar.py)
+# ---------------------------------------------------------------------------
+_scale_bar_overlay_def = StepDefinition(
+    id="scale_bar_overlay",
+    name="Skála feliratozás",
+    category="adjustment",
+    description="Draggable scale bar overlay a képre, testre szabható betűtípussal, betűmérettel és pozícióval.",
+    icon="straighten",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="pixels_per_mm", label="Pixels per mm", type="float",
+                    default=0.0, min=0.0, max=100000.0, step=0.01,
+                    description="A kalibrált pixels/mm érték. Ha 0, a node nem rajzol skálát."),
+        ParamSchema(name="bar_length_mm", label="Skála hossza (mm)", type="float",
+                    default=0.0, min=0.0, max=100000.0, step=1,
+                    description="0 esetén automatikus, szép érték választódik a képméret és a kalibráció alapján."),
+        ParamSchema(name="label_unit", label="Felirat mértékegysége", type="enum",
+                default="mm", options=["mm", "cm", "um"],
+                description="A skála feliratának megjelenítési egysége."),
+        ParamSchema(name="position_x", label="Pozíció X", type="int",
+                    default=-1, min=-1, max=100000, step=1,
+                    description="A skáladoboz bal felső sarka. -1 esetén automatikusan jobb alsó sarokba kerül."),
+        ParamSchema(name="position_y", label="Pozíció Y", type="int",
+                    default=-1, min=-1, max=100000, step=1,
+                    description="A skáladoboz bal felső sarka. -1 esetén automatikusan jobb alsó sarokba kerül."),
+        ParamSchema(name="font_family", label="Betűtípus", type="enum",
+                    default="sans", options=["sans", "serif", "mono", "complex", "script"],
+                    description="A felirat rajzolásához használt OpenCV betűtípus."),
+        ParamSchema(name="font_size", label="Betűméret", type="int",
+                    default=24, min=8, max=120, step=1),
+        ParamSchema(name="font_thickness", label="Betűvastagság", type="int",
+                    default=1, min=1, max=8, step=1),
+        ParamSchema(name="bar_thickness", label="Skála vonal vastagság", type="int",
+                    default=3, min=1, max=12, step=1),
+        ParamSchema(name="box_padding", label="Keret belső margó", type="int",
+                    default=14, min=0, max=80, step=1),
+        ParamSchema(name="text_gap", label="Felirat távolság", type="int",
+                    default=8, min=0, max=50, step=1),
+        ParamSchema(name="background_opacity", label="Háttér átlátszóság", type="float",
+                    default=0.55, min=0.0, max=1.0, step=0.05),
+        ParamSchema(name="bar_color", label="Vonal színe", type="enum",
+                    default="white", options=["white", "black", "yellow"]),
+        ParamSchema(name="text_color", label="Felirat színe", type="enum",
+                    default="white", options=["white", "black", "yellow"]),
+        ParamSchema(name="background_color", label="Háttér színe", type="enum",
+                    default="black", options=["black", "white"]),
+        ParamSchema(name="show_background", label="Háttér megjelenítése", type="bool",
+                    default=True),
+    ],
+)
+
+
+def _exec_scale_bar_overlay(data: dict, params: dict) -> dict:
+    return _pe_scale_bar_overlay(data, **params)
+
+
+_register(_scale_bar_overlay_def, _exec_scale_bar_overlay)
+
+
+# ---------------------------------------------------------------------------
+# 20. ROI Mask  (draw_roi.py)
 # ---------------------------------------------------------------------------
 _mask_roi_def = StepDefinition(
     id="mask_rect_roi",
@@ -1022,7 +1227,7 @@ _mask_roi_def = StepDefinition(
     output_type=DataType.IMAGE,
     params=[
         ParamSchema(name="roi_type", label="ROI típusa", type="enum",
-                    default="rect", options=["rect", "ellipse", "polygon"]),
+                        default="rect", options=["rect", "ellipse", "circle", "polygon"]),
         # Rectangle params
         ParamSchema(name="roi_x", label="X kezdőpont", type="int",
                     default=0, min=0, max=100000, step=1),
@@ -1041,12 +1246,36 @@ _mask_roi_def = StepDefinition(
                     default=0, min=0, max=100000, step=1),
         ParamSchema(name="roi_ry", label="Sugár Y", type="int",
                     default=0, min=0, max=100000, step=1),
+        # Rotation angle (degrees, applies to rect and ellipse)
+        ParamSchema(name="roi_angle", label="Forgatás (°)", type="float",
+                    default=0.0, min=-180.0, max=180.0, step=0.1, required=False),
         # Polygon params (JSON string of [{x,y}, ...])
         ParamSchema(name="roi_points", label="Pontok (JSON)", type="string",
                     default="[]"),
+        ParamSchema(name="output_mode", label="Kimenet módja", type="enum",
+                default="mask", options=["mask", "crop"],
+                description="Mask mód: a ROI-n kívüli területet kezeli. Crop mód: az eredményt a ROI határoló téglalapjára vágja."),
+        ParamSchema(name="apply_mask", label="Alkalmaz maszkként", type="bool",
+                    default=True,
+                    description="Ha engedélyezve: a ROI-n kívüli terület lesz fekete/fehér."),
+        ParamSchema(name="shape_only", label="Csak körvonal", type="bool",
+            default=False,
+            description="Ha engedélyezve: a ROI csak körvonalként jelenik meg, kitöltés nélkül."),
+        ParamSchema(name="shape_outline_color", label="Körvonal színe", type="enum",
+                default="fehér", options=["fekete", "fehér"],
+                description="A körvonal színe csak körvonal mód esetén."),
+        ParamSchema(name="shape_outline_thickness", label="Körvonal vastagsága", type="int",
+                default=2, min=1, max=100, step=1,
+                description="A körvonal vastagsága pixelben csak körvonal mód esetén."),
         ParamSchema(name="background_color", label="Háttér színe", type="enum",
                     default="fekete", options=["fekete", "fehér"],
-                    description="A ROI-n kívüli terület színe"),
+                    description="A ROI-n kívüli terület színe (csak maszk mód esetén aktív)"),
+        ParamSchema(name="invert_mask", label="Maszk invertálása", type="bool",
+                    default=False,
+                    description="Ha engedélyezve: ROI-n belül háttér, ROI-n kívül eredeti kép (csak maszk mód esetén aktív)"),
+        ParamSchema(name="roi_overrides", label="Képenkénti ROI", type="string",
+                    default="{}",
+                    description="Képenkénti ROI felülírások (JSON, automatikusan kezelve)"),
     ],
     side_output_types={"roi_masks": "MASK"},
 )
@@ -1055,55 +1284,268 @@ _mask_roi_def = StepDefinition(
 def _exec_mask_roi(data: dict, params: dict) -> dict:
     import json as _json
     roi_type = params.get("roi_type", "rect")
+    roi_angle = float(params.get("roi_angle", 0.0))
 
-    if roi_type == "rect":
-        w = int(params.get("roi_width", 0))
-        h = int(params.get("roi_height", 0))
-        if w <= 0 or h <= 0:
-            return data  # No ROI defined
-        roi = {
-            "type": "rect",
-            "x": int(params.get("roi_x", 0)),
-            "y": int(params.get("roi_y", 0)),
-            "width": w,
-            "height": h,
-        }
-    elif roi_type == "ellipse":
-        rx = int(params.get("roi_rx", 0))
-        ry = int(params.get("roi_ry", 0))
-        if rx <= 0 or ry <= 0:
-            return data  # No ROI defined
-        roi = {
-            "type": "ellipse",
-            "cx": int(params.get("roi_cx", 0)),
-            "cy": int(params.get("roi_cy", 0)),
-            "rx": rx,
-            "ry": ry,
-        }
-    else:
-        pts_raw = params.get("roi_points", "[]")
-        try:
-            pts = _json.loads(pts_raw) if isinstance(pts_raw, str) else pts_raw
-        except Exception:
-            pts = []
-        if not pts or len(pts) < 3:
-            return data  # No ROI defined
-        roi = {
-            "type": "polygon",
-            "points": [{'x': int(p.get('x', 0)), 'y': int(p.get('y', 0))} for p in pts],
-        }
+    # Parse per-image overrides
+    overrides_raw = params.get("roi_overrides", "{}")
+    try:
+        overrides = _json.loads(overrides_raw) if isinstance(overrides_raw, str) else (overrides_raw or {})
+    except Exception:
+        overrides = {}
+
+    def _build_roi_from_params(p):
+        """Build a single ROI dict from a flat param dict."""
+        t = p.get("roi_type", roi_type)
+        angle = float(p.get("roi_angle", roi_angle))
+        if t == "rect":
+            w = int(p.get("roi_width", 0))
+            h = int(p.get("roi_height", 0))
+            if w <= 0 or h <= 0:
+                return None
+            return {
+                "type": "rect",
+                "x": int(p.get("roi_x", 0)),
+                "y": int(p.get("roi_y", 0)),
+                "width": w,
+                "height": h,
+                "angle": angle,
+            }
+        elif t in ("ellipse", "circle"):
+            rx = int(p.get("roi_rx", 0))
+            ry = int(p.get("roi_ry", 0))
+            if t == "circle":
+                r = int(p.get("roi_r", p.get("roi_radius", 0)))
+                if r > 0:
+                    rx = r
+                    ry = r
+                elif rx > 0 or ry > 0:
+                    r = max(rx, ry)
+                    rx = r
+                    ry = r
+            if rx <= 0 or ry <= 0:
+                return None
+            return {
+                "type": "ellipse",
+                "cx": int(p.get("roi_cx", 0)),
+                "cy": int(p.get("roi_cy", 0)),
+                "rx": rx,
+                "ry": ry,
+                "angle": angle,
+            }
+        else:
+            pts_raw = p.get("roi_points", "[]")
+            try:
+                pts = _json.loads(pts_raw) if isinstance(pts_raw, str) else pts_raw
+            except Exception:
+                pts = []
+            if not pts or len(pts) < 3:
+                return None
+            return {
+                "type": "polygon",
+                "points": [{'x': int(pt.get('x', 0)), 'y': int(pt.get('y', 0))} for pt in pts],
+                "angle": angle,
+            }
+
+    # Build default ROI from top-level params
+    default_roi = _build_roi_from_params(params)
+
+    # Build per-image ROI list
+    image_count = data.get("count", 0) if data else 0
+    single_img_idx = data.get("_single_image_index", -1) if data else -1
+    roi_list = []
+    for i in range(image_count):
+        # In single-image preview mode, use the original image index for override lookup
+        orig_idx = single_img_idx if (single_img_idx >= 0 and image_count == 1) else i
+        img_key = str(orig_idx)
+        if img_key in overrides and overrides[img_key]:
+            override_roi = _build_roi_from_params(overrides[img_key])
+            roi_list.append(override_roi if override_roi else default_roi)
+        else:
+            roi_list.append(default_roi)
+
+    # If no valid ROI at all, pass through
+    if not any(roi_list):
+        return data
 
     bg_color_str = params.get("background_color", "fekete")
     background_color = 255 if bg_color_str == "fehér" else 0
+    output_mode = params.get("output_mode", "mask")
+    apply_mask = params.get("apply_mask", True)
+    invert_mask = params.get("invert_mask", False)
+    shape_only = params.get("shape_only", False)
+    shape_outline_color = params.get("shape_outline_color", "fehér")
+    shape_outline_thickness = int(params.get("shape_outline_thickness", 2))
 
-    return _pe_mask_roi(data, roi=roi, background_color=background_color)
+    return _pe_mask_roi(data, roi_list=roi_list, background_color=background_color,
+                        apply_mask=apply_mask, invert_mask=invert_mask,
+                        shape_only=shape_only,
+                        shape_outline_color=shape_outline_color,
+                        shape_outline_thickness=shape_outline_thickness,
+                        output_mode=output_mode)
 
 
 _register(_mask_roi_def, _exec_mask_roi)
 
 
 # ---------------------------------------------------------------------------
-# 21. Resize Images  (resize_img.py)
+# 21. Reference Crop  (reference_crop.py)
+# ---------------------------------------------------------------------------
+_reference_crop_def = StepDefinition(
+    id="reference_crop",
+    name="Reference crop",
+    category="filter",
+    description="Tobb azonos meretu negyzet kijelolese es referencia kivagasok megjelenitese.",
+    icon="crop_free",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="crop_size", label="Negyzet merete", type="int",
+                    default=64, min=1, max=100000, step=1,
+                    description="A kijelolt referencia negyzetek oldalmérete pixelben."),
+        ParamSchema(name="show_references", label="Kivagott referenciak mutatasa", type="bool",
+                    default=False, required=False,
+                    description="Bekapcsolva az elonezet a kivagott referenciakat sorba rendezve mutatja."),
+        ParamSchema(name="reference_squares", label="Referencia negyzetek", type="string",
+                    default="[]", required=False,
+                    description="Kijelolt negyzetek JSON listaja, automatikusan kezeli a kepnezegeto."),
+        ParamSchema(name="reference_square_overrides", label="Kepenkenti referencia negyzetek", type="string",
+                    default="{}", required=False,
+                    description="Kepenkenti referencia negyzet felulirasok (JSON, automatikusan kezelve)."),
+    ],
+    side_output_types={
+        "reference_crops": "IMAGE",
+        "reference_crop_overlays": "IMAGE",
+        "reference_crop_squares": "SCALAR",
+    },
+)
+
+
+def _exec_reference_crop(data: dict, params: dict) -> dict:
+    import json as _json
+
+    raw = params.get("reference_squares", "[]")
+    try:
+        squares = _json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except Exception:
+        squares = []
+    overrides_raw = params.get("reference_square_overrides", "{}")
+    try:
+        square_overrides = _json.loads(overrides_raw) if isinstance(overrides_raw, str) else (overrides_raw or {})
+    except Exception:
+        square_overrides = {}
+
+    crop_size = int(params.get("crop_size", 64) or 64)
+    step_index = int(params.get("_step_index", -1))
+    return _pe_reference_crop(
+        data,
+        squares=squares,
+        square_overrides=square_overrides,
+        crop_size=crop_size,
+        show_overlay=True,
+        source_id=params.get("_step_instance_id", ""),
+        source_label=f"Reference crop #{step_index + 1}" if step_index >= 0 else "Reference crop",
+    )
+
+
+_register(_reference_crop_def, _exec_reference_crop)
+
+
+# ---------------------------------------------------------------------------
+# 22. Reference Color Alignment  (reference_color_align.py)
+# ---------------------------------------------------------------------------
+_reference_color_align_def = StepDefinition(
+    id="reference_color_align",
+    name="Referenciaszin-illesztes",
+    category="adjustment",
+    description="A fokepek robusztus LAB tonuspontjait a referencia cropok medianjaihoz illeszti.",
+    icon="colorize",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="reference_branch", label="Referencia crop ag", type="enum",
+                    # Branch ids are recipe-specific and are supplied dynamically
+                    # by the inspector, so they cannot be restricted here.
+                    default="auto", options=None,
+                    description="A kivalasztott ag Reference crop kivagasaihoz illeszti a node sajat aganak kepeit; agak osszevonasa nem szukseges."),
+        ParamSchema(name="mode", label="Illesztes modja", type="enum",
+                    default="location_scale", options=["location", "location_scale"],
+                    description="Csak tonusillesztes, illetve tonusfuggo LAB szinillesztes."),
+        ParamSchema(name="strength", label="Illesztes erossege", type="float",
+                    default=1.0, min=0.0, max=1.0, step=0.05,
+                    description="A szinkorrekcio erossege 0 es 1 kozott."),
+        ParamSchema(name="output_dark", label="Sotet referencia celértéke", type="float",
+                    default=0.0, min=0.0, max=254.0, step=1.0,
+                    description="Kompatibilitasi parameter; a celertket a referencia adja."),
+        ParamSchema(name="output_light", label="Vilagos referencia celértéke", type="float",
+                    default=255.0, min=1.0, max=255.0, step=1.0,
+                    description="Kompatibilitasi parameter; a celertket a referencia adja."),
+    ],
+    side_output_types={"reference_color_aligned_crops": "IMAGE"},
+    # Either a legacy reference_crop or branch data imported by branch_merge
+    # can supply the reference.
+    required_preceding_steps=[],
+)
+
+
+def _exec_reference_color_align(data: dict, params: dict) -> dict:
+    step_index = int(params.get("_step_index", -1))
+    return _pe_reference_color_align(
+        data,
+        reference_branch=params.get("reference_branch", "auto"),
+        mode=params.get("mode", "location_scale"),
+        strength=float(params.get("strength", 1.0)),
+        output_dark=float(params.get("output_dark", 0.0)),
+        output_light=float(params.get("output_light", 255.0)),
+        source_id=params.get("_step_instance_id", ""),
+        source_label=f"Referenciaszin-illesztes #{step_index + 1}" if step_index >= 0 else "Referenciaszin-illesztes",
+    )
+
+
+_register(_reference_color_align_def, _exec_reference_color_align)
+
+
+# ---------------------------------------------------------------------------
+# 23. Reference Sequence  (reference_sequence.py)
+# ---------------------------------------------------------------------------
+_reference_sequence_def = StepDefinition(
+    id="reference_sequence",
+    name="Reference sequence",
+    category="filter",
+    description="Referencia-kivagasok, vagy crop nelkul a teljes kepek sorba rendezese valasztott szinkomponens atlaga alapjan.",
+    icon="sort",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="component", label="Rendezes komponense", type="enum",
+                    default="GRAY",
+                    options=["GRAY", "R", "G", "B", "RGB_ALL", "H", "S", "V", "HSV_ALL", "L", "A", "LAB_B", "LAB_ALL"],
+                    description="Az a szin- vagy fenyessegkomponens, amelynek crop-atlaga alapjan tortenik a rendezes."),
+        ParamSchema(name="direction", label="Rendezes iranya", type="enum",
+                    default="ascending", options=["ascending", "descending"],
+                    description="Novekvo vagy csokkeno sorrend a komponens atlaga szerint."),
+    ],
+    side_output_types={
+        "reference_crops": "IMAGE",
+        "reference_sequence": "SCALAR",
+    },
+)
+
+
+def _exec_reference_sequence(data: dict, params: dict) -> dict:
+    return _pe_reference_sequence(
+        data,
+        component=params.get("component", "GRAY"),
+        direction=params.get("direction", "ascending"),
+        source_id=params.get("_step_instance_id", ""),
+        source_label=f"Reference sequence #{int(params.get('_step_index', -1)) + 1}" if int(params.get("_step_index", -1)) >= 0 else "Reference sequence",
+    )
+
+
+_register(_reference_sequence_def, _exec_reference_sequence)
+
+
+# ---------------------------------------------------------------------------
+# 23. Resize Images  (resize_img.py)
 # ---------------------------------------------------------------------------
 _resize_images_def = StepDefinition(
     id="resize_images",
@@ -1304,12 +1746,18 @@ _detect_circles_def = StepDefinition(
         ParamSchema(name="dp", label="Felbontás arány", type="float",
                     default=1.2, min=0.5, max=5.0, step=0.1,
                     description="Az akkumulátor felbontásának inverz aránya"),
-        ParamSchema(name="min_radius", label="Min. sugár", type="int",
-                    default=20, min=1, max=5000, step=1,
-                    description="Minimális kör sugár pixelben"),
-        ParamSchema(name="max_radius", label="Max. sugár", type="int",
-                    default=25, min=1, max=5000, step=1,
-                    description="Maximális kör sugár pixelben"),
+        ParamSchema(name="detect_scale", label="Detektálási méretarány", type="float",
+                    default=1.0, min=0.25, max=1.0, step=0.05,
+                    description="A kördetektálásra használt kép méretezési aránya. 1.0 = teljes méret, kisebb érték = gyorsabb futás, de finomhangolást igényelhet."),
+        ParamSchema(name="edge_threshold", label="Élküszöb", type="float",
+                    default=100.0, min=1.0, max=255.0, step=1.0,
+                    description="A Canny élkereső felső küszöbe. Kisebb érték érzékenyebb a halványabb, kevésbé éles élekre, de nagyobb méretarány mellett lassabb lehet."),
+        ParamSchema(name="min_diameter", label="Min. átmérő", type="int",
+                    default=40, min=1, max=10000, step=1,
+                    description="Minimális kör átmérő pixelben, a teljes felbontású képre értendő."),
+        ParamSchema(name="max_diameter", label="Max. átmérő", type="int",
+                    default=50, min=1, max=10000, step=1,
+                    description="Maximális kör átmérő pixelben, a teljes felbontású képre értendő."),
         ParamSchema(name="radius_multiplier", label="Sugár szorzó", type="float",
                     default=1.0, min=0.1, max=5.0, step=0.1,
                     description="A detektált körök sugarának szorzója (1.0 = nincs módosítás, 0.8 = 80%, 1.2 = 120%)"),
@@ -1334,24 +1782,26 @@ _detect_circles_def = StepDefinition(
 
 def _exec_detect_circles(data: dict, params: dict) -> dict:
     dp = float(params.get("dp", 1.2))
-    min_radius = int(params.get("min_radius", 20))
-    max_radius = int(params.get("max_radius", 25))
+    detect_scale = float(params.get("detect_scale", 1.0))
+    edge_threshold = float(params.get("edge_threshold", 100.0))
+    min_diameter = int(params.get("min_diameter", 40))
+    max_diameter = int(params.get("max_diameter", 50))
     radius_multiplier = float(params.get("radius_multiplier", 1.0))
     apply_mask = params.get("apply_mask", False)
     mask_background = params.get("mask_background", "black")
     invert_mask = params.get("invert_mask", False)
     polarity = params.get("polarity", "dark")
-    # These parameters use fixed defaults (not configurable from UI)
+    # These parameters keep stable defaults; only the edge threshold is exposed in the UI.
     min_dist = 20
     blur_ksize = 5
-    edge_threshold = 100
     accumulator_threshold = 20
     return _pe_detect_circles(
         data,
         dp=dp,
         min_dist=min_dist,
-        min_radius=min_radius,
-        max_radius=max_radius,
+        min_diameter=min_diameter,
+        max_diameter=max_diameter,
+        detect_scale=detect_scale,
         blur_ksize=blur_ksize,
         edge_threshold=edge_threshold,
         accumulator_threshold=accumulator_threshold,
@@ -1530,3 +1980,152 @@ def _exec_color_thresh(data: dict, params: dict) -> dict:
 
 
 _register(_color_thresh_def, _exec_color_thresh)
+
+
+# ---------------------------------------------------------------------------
+# 27. K-means Cluster (kmeans_cluster.py)
+# ---------------------------------------------------------------------------
+_kmeans_cluster_def = StepDefinition(
+    id="kmeans_cluster",
+    name="K-kozep klaszterezes",
+    category="analysis",
+    description="Pixelek k-kozep klaszterezese valasztott szinterben. A kimenet szinezett klaszterterkep.",
+    icon="hub",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="k", label="Klaszterek szama", type="int",
+                    default=3, min=2, max=32, step=1,
+                    description="A keresett klaszterek szama."),
+        ParamSchema(name="color_space", label="Szinter", type="enum",
+                    default="BGR", options=["BGR", "HSV", "LAB", "GRAY"],
+                    description="A pixeljellemzok szintere a k-kozep algoritmushoz."),
+        ParamSchema(name="init_mode", label="Referenciak hasznalata", type="enum",
+                    default="auto", options=["auto", "reference_fixed", "reference_seeded"],
+                    description="Automatikus: referencia nelkuli k-means. Fix referencia: pixelek besorolasa a referencia cropok atlagaihoz. Referenciaval inditott: k-means inditasa a referencia cropok alapjan."),
+        ParamSchema(name="reference_source", label="Referencia forras node", type="string",
+                    default="auto", required=False,
+                    description="Melyik Reference crop vagy Reference sequence node eredmenyet hasznalja. Auto eseten a pipeline aktualis referencia eredmenyet hasznalja."),
+        ParamSchema(name="attempts", label="Probalkozasok", type="int",
+                    default=3, min=1, max=20, step=1,
+                    description="Tobb inditas kozul a legjobb eredmenyt valasztja."),
+        ParamSchema(name="max_iter", label="Max. iteracio", type="int",
+                    default=30, min=1, max=300, step=1,
+                    description="A k-kozep optimalizalas maximalis iteracioszama."),
+        ParamSchema(name="epsilon", label="Pontossag", type="float",
+                    default=1.0, min=0.001, max=100.0, step=0.1,
+                    description="Leallasi kuszob az iteraciohoz."),
+        ParamSchema(name="sort_by_brightness", label="Rendezes fenyesseg szerint", type="bool",
+                    default=True,
+                    description="Bekapcsolva a klaszter indexek sotett-vilagos sorrendben stabilabbak."),
+        ParamSchema(name="output_mode", label="Kimeneti szinezes", type="enum",
+                    default="palette", options=["palette", "centroid"],
+                    description="Paletta: kontrasztos jeloloszinek. Centroid: a klaszter kozeppontjanak szine."),
+        ParamSchema(name="background", label="Hatter", type="enum",
+                    default="black", options=["black", "white", "original"],
+                    description="Maszkolt teruleten kivuli hatter szine."),
+    ],
+    side_output_types={
+        "kmeans_overlay_images": "IMAGE",
+        "kmeans_legend": "SCALAR",
+        "kmeans_label_maps": "MASK",
+        "kmeans_centers": "SCALAR",
+        "kmeans_counts": "SCALAR",
+        "kmeans_percentages": "SCALAR",
+        "kmeans_compactness": "SCALAR",
+        "kmeans_reference_info": "SCALAR",
+    },
+)
+
+
+def _exec_kmeans_cluster(data: dict, params: dict) -> dict:
+    return _pe_kmeans_cluster(
+        data,
+        k=int(params.get("k", 3)),
+        color_space=params.get("color_space", "BGR"),
+        init_mode=params.get("init_mode", "auto"),
+        reference_source=params.get("reference_source", "auto"),
+        attempts=int(params.get("attempts", 3)),
+        max_iter=int(params.get("max_iter", 30)),
+        epsilon=float(params.get("epsilon", 1.0)),
+        sort_by_brightness=bool(params.get("sort_by_brightness", True)),
+        output_mode=params.get("output_mode", "palette"),
+        background=params.get("background", "black"),
+        cluster_colors=params.get("cluster_colors", "{}"),
+    )
+
+
+_register(_kmeans_cluster_def, _exec_kmeans_cluster)
+
+
+# ---------------------------------------------------------------------------
+# 28. Label-based reference map
+# ---------------------------------------------------------------------------
+_cluster_map_def = StepDefinition(
+    id="cluster_reference_map",
+    name="Klaszter referencia map",
+    category="analysis",
+    description="A választott k-means klaszterből referenciát képez, majd a kijelölt klasztereken hasonlósági térképet készít.",
+    icon="map",
+    input_type=DataType.IMAGE,
+    output_type=DataType.IMAGE,
+    params=[
+        ParamSchema(name="selected_labels", label="Értékelt klaszterek", type="string", default="1",
+                    description="Azok a k-means klaszterek, amelyeken a térkép értéket kaphat."),
+        ParamSchema(name="reference_label", label="Referenciaklaszter", type="string", default="1",
+                    description="Kizárólag ennek a klaszternek a pixeleiből készül a referenciaérték."),
+        ParamSchema(name="center_mode", label="Klaszterközép számítása", type="enum",
+                    default="cluster_median",
+                    options=["min_max_midpoint", "cluster_median", "reference_mean", "reference_mean_half"],
+                    description="A kiválasztott klaszterrégió referenciaértékének számítása."),
+        ParamSchema(name="map_multiplier", label="Térkép szorzó", type="float", default=1.0,
+                    min=0.0, max=1.0, step=0.05,
+                    description="A JET színezés előtti hasonlósági érték szorzója. Kisebb érték lejjebb tolja a színeket."),
+        ParamSchema(name="accepted_components", label="Elfogadott térképek", type="string", default="[]",
+                    description="A pipával elfogadott komponensek mentett beállításai."),
+        ParamSchema(name="remainder_as_last", label="Maradék az utolsó komponens", type="bool", default=False,
+                    description="Az utolsó komponenst klaszterezés nélkül, a 100%-ból megmaradt értékként számítja."),
+        ParamSchema(name="remainder_name", label="Maradék neve", type="string", default="Maradék"),
+        ParamSchema(name="remainder_display_multiplier", label="Maradék megjelenítési szorzó", type="float",
+                    default=1.0, min=0.0, max=1.0, step=0.05,
+                    description="Csak a színezett előnézetet módosítja; a százalékos maradék értékét nem."),
+        ParamSchema(name="remainder_invert", label="Maradék színskála megfordítása", type="bool", default=False),
+        ParamSchema(name="colormap", label="Szinskala", type="enum", default="jet",
+                    options=["turbo", "jet", "viridis"]),
+        ParamSchema(name="invert", label="Szinskala megforditasa", type="bool", default=False),
+    ],
+    side_output_types={
+        "kmeans_labeled_images": "IMAGE",
+        "kmeans_overlay_images": "IMAGE",
+        "kmeans_legend": "SCALAR",
+        "cluster_map_images": "IMAGE",
+        "cluster_map_overlay_images": "IMAGE",
+        "cluster_map_raw": "SCALAR",
+        "cluster_map_component_images": "IMAGE",
+        "cluster_map_reference": "SCALAR",
+        "cluster_map_label_values": "SCALAR",
+        "cluster_map_selected_labels": "SCALAR",
+        "cluster_map_reference_label": "SCALAR",
+    },
+    required_preceding_steps=["kmeans_cluster"],
+)
+
+
+def _exec_cluster_map(data: dict, params: dict) -> dict:
+    return _pe_cluster_reference_map(
+        data,
+        selected_labels=params.get("selected_labels", "1"),
+        reference_label=params.get("reference_label", "1"),
+        center_mode=params.get("center_mode", "cluster_median"),
+        map_multiplier=float(params.get("map_multiplier", 1.0)),
+        accepted_components=params.get("accepted_components", "[]"),
+        remainder_as_last=bool(params.get("remainder_as_last", False)),
+        remainder_name=params.get("remainder_name", "Maradék"),
+        remainder_display_multiplier=float(params.get("remainder_display_multiplier", 1.0)),
+        remainder_invert=bool(params.get("remainder_invert", False)),
+        colormap=params.get("colormap", "jet"),
+        invert=bool(params.get("invert", False)),
+    )
+
+
+_register(_cluster_map_def, _exec_cluster_map)

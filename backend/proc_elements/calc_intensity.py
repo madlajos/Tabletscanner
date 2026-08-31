@@ -64,39 +64,70 @@ def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False
             data["error"] = "E2505"
             return data
 
-        if len(img.shape) != 2 or len(mask.shape) != 2:
+        is_rgb = len(img.shape) == 3
+        if not is_rgb and len(img.shape) != 2:
             data["error"] = "E2506"
             return data
 
-        if img.shape != mask.shape:
+        if len(mask.shape) != 2:
+            data["error"] = "E2506"
+            return data
+
+        if img.shape[:2] != mask.shape:
             data["error"] = "E2507"
             return data
 
-        pixels = img[mask > 0]
-
-        if pixels.size == 0:
-            stats.append(None)
-            continue
-
-        stat = {
-            "min": float(np.min(pixels)),
-            "max": float(np.max(pixels)),
-            "median": float(np.median(pixels)),
-            "mean": float(np.mean(pixels)),
-            "std": float(np.std(pixels)),
-            "pixel_count": int(pixels.size)
-        }
-
-        for p in percentiles:
-            key = f"p{int(p)}" if float(p).is_integer() else f"p{p}"
-            stat[key] = float(np.percentile(pixels, p))
-
-        if "p5" in stat and "p95" in stat:
-            stat["dynamic_range"] = stat["p95"] - stat["p5"]
+        if is_rgb:
+            channel_stats = []
+            for ch in range(img.shape[2]):
+                ch_pixels = img[:, :, ch][mask > 0]
+                if ch_pixels.size == 0:
+                    channel_stats.append(None)
+                    continue
+                st = {
+                    "min": float(np.min(ch_pixels)),
+                    "max": float(np.max(ch_pixels)),
+                    "median": float(np.median(ch_pixels)),
+                    "mean": float(np.mean(ch_pixels)),
+                    "std": float(np.std(ch_pixels)),
+                    "pixel_count": int(ch_pixels.size)
+                }
+                for p in percentiles:
+                    key = f"p{int(p)}" if float(p).is_integer() else f"p{p}"
+                    st[key] = float(np.percentile(ch_pixels, p))
+                if "p5" in st and "p95" in st:
+                    st["dynamic_range"] = st["p95"] - st["p5"]
+                else:
+                    st["dynamic_range"] = None
+                channel_stats.append(st)
+            stat = {"channels": channel_stats, "channel_count": img.shape[2]}
+            stats.append(stat)
         else:
-            stat["dynamic_range"] = None
+            pixels = img[mask > 0]
 
-        stats.append(stat)
+            if pixels.size == 0:
+                stats.append(None)
+                continue
+
+            stat = {
+                "min": float(np.min(pixels)),
+                "max": float(np.max(pixels)),
+                "median": float(np.median(pixels)),
+                "mean": float(np.mean(pixels)),
+                "std": float(np.std(pixels)),
+                "pixel_count": int(pixels.size)
+            }
+
+            for p in percentiles:
+                key = f"p{int(p)}" if float(p).is_integer() else f"p{p}"
+                stat[key] = float(np.percentile(pixels, p))
+
+            if "p5" in stat and "p95" in stat:
+                stat["dynamic_range"] = stat["p95"] - stat["p5"]
+            else:
+                stat["dynamic_range"] = None
+
+            stats.append(stat)
 
     data["results"]["intensity_stats"] = stats
     data["meta"]["intensity_stats"] = {

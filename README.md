@@ -98,6 +98,7 @@ On the UI side, `models/pipeline.models.ts`, `recipe.service.ts`, and
 | `backend/cameracontrol.py` | Camera connection, properties, acquisition, conversion, and streaming |
 | `backend/porthandler.py` | Serial discovery, locking, writes, acknowledgements, and timeouts |
 | `backend/motioncontrols.py` | Homing, position queries, and motion G-code helpers |
+| `backend/filter_capture_series.py` | BGR filter-series naming, slot resolution, and cooperative cancellation state |
 | `backend/autofocus_main.py` | Main autofocus and tablet-presence logic |
 | `backend/pipeline_*.py` | Pipeline domain model, catalog, validation, and execution |
 | `backend/proc_elements/` | Individual image-processing operations |
@@ -143,6 +144,14 @@ driven tablet by tablet by the UI through `POST /api/auto_measurement/step`, rat
 durable backend job queue. Progress and reconnect state therefore currently live in the Angular
 component.
 
+The manual **Automatikus BGR mérés** action under **Mentés helye** runs one acknowledged
+Kék→Zöld→Piros filter sequence through `POST /api/bgr-capture-series`. It applies the same
+autofocus-referenced Z-offset path as a manual filter selection and saves one shared-index JPEG
+set named from the selected folder. If that folder is completely empty, the configured manual
+autofocus workflow runs first and establishes the Z-offset reference. A second button press
+requests cooperative cancellation, including during autofocus, after the current safe hardware
+step.
+
 The configured tray is a 10×10 grid. Motion limits are currently 0–175 mm on X/Y and 0–40 mm on
 Z. Treat those limits, homing order, lamp timeouts, and light-interlock behavior as hardware
 safety constraints.
@@ -166,7 +175,7 @@ validate the camera values before capture. Filter positions are stored in output
 The six revolver positions and reusable filter definitions (name, wavelength range, and display
 color) can be configured under **Beállítások → Szűrőváltó**. The **Fókusz** page stores the autofocus
 light/filter selection and a separate height offset for every configured-filter/illumination
-combination, plus the physical empty-filter row. Empty filter with VIS remains the fixed 0 mm
+combination, plus the physical empty-filter row. The blue filter with VIS is the fixed 0 mm
 calibration reference; autofocus performed with another combination is rebased to that zero.
 Automatic Z corrections remain disabled until the manual autofocus button completes successfully.
 Any subsequent manual motion invalidates the autofocus reference. After the A axis is

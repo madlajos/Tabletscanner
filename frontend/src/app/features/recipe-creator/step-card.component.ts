@@ -11,12 +11,21 @@ import { StepInstance, StepDefinition } from '../../models/pipeline.models';
     <div
       class="step-card"
       [class.selected]="selected"
+      [class.compare-selected]="compareSelected"
       [class.has-error]="hasError"
-      (click)="select.emit()"
+      [class.merge-connect-source]="mergeConnectSource"
+      [class.merge-connect-target]="mergeConnectTarget"
+      [class.disabled-step]="step.enabled === false"
+      [attr.title]="step.enabled === false ? 'Kikapcsolva - jobb klikk a bekapcsoláshoz' : 'Jobb klikk a kikapcsoláshoz'"
+      (click)="select.emit($event)"
+      (dblclick)="compare.emit(); $event.stopPropagation()"
     >
       <div class="card-header">
         <mat-icon class="card-icon">{{ definition?.icon || 'extension' }}</mat-icon>
         <span class="card-name">{{ definition?.name || step.step_def_id }}</span>
+        @if (step.enabled === false) {
+          <mat-icon class="disabled-icon">power_off</mat-icon>
+        }
         <button class="card-delete" (click)="remove.emit(); $event.stopPropagation()" title="Törlés">
           <mat-icon>close</mat-icon>
         </button>
@@ -49,8 +58,44 @@ import { StepInstance, StepDefinition } from '../../models/pipeline.models';
       box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
     }
 
+    .step-card.compare-selected {
+      border-color: #a855f7;
+      background: #3b2947;
+      box-shadow:
+        0 0 0 2px rgba(168, 85, 247, 0.4),
+        0 0 14px rgba(168, 85, 247, 0.28);
+    }
+
     .step-card.has-error {
       border-color: #ef4444;
+    }
+
+    .step-card.merge-connect-source {
+      border-color: #22c55e;
+      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
+    }
+
+    .step-card.merge-connect-target {
+      border-color: #f59e0b;
+      box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.28);
+    }
+
+    .step-card.disabled-step {
+      opacity: 0.48;
+      filter: grayscale(1);
+      border-style: dashed;
+      background: #292929;
+    }
+
+    .step-card.disabled-step .card-name {
+      text-decoration: line-through;
+    }
+
+    .disabled-icon {
+      color: #ef4444;
+      font-size: 15px;
+      width: 15px;
+      height: 15px;
     }
 
     .card-header {
@@ -112,7 +157,11 @@ export class StepCardComponent {
   @Input() step!: StepInstance;
   @Input() definition?: StepDefinition;
   @Input() selected = false;
+  @Input() compareSelected = false;
   @Input() hasError = false;
-  @Output() select = new EventEmitter<void>();
+  @Input() mergeConnectSource = false;
+  @Input() mergeConnectTarget = false;
+  @Output() select = new EventEmitter<MouseEvent>();
+  @Output() compare = new EventEmitter<void>();
   @Output() remove = new EventEmitter<void>();
 }

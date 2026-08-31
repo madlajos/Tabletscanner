@@ -13,6 +13,7 @@ Each element operates on the shared data dict:
 """
 from proc_elements.load_img import create_data, load_image
 from proc_elements.select_channel import select_channel
+from proc_elements.pseudo_image import create_pseudo_image
 from proc_elements.apply_thresh import apply_threshold
 from proc_elements.generate_histogram import calculate_histograms
 from proc_elements.range_mask import apply_range_mask
@@ -30,9 +31,15 @@ from proc_elements.flat_field_corr import flat_field_correction
 from proc_elements.robust_stretch import robust_stretch_gamma
 from proc_elements.advanced_ill_corr import advanced_illumin_corr
 from proc_elements.draw_roi import mask_roi, mask_rect_roi
+from proc_elements.reference_crop import reference_crop
+from proc_elements.reference_color_align import reference_color_align
+from proc_elements.reference_sequence import reference_sequence
+from proc_elements.scale_bar import scale_bar_overlay
 from proc_elements.resize_img import resize_images
 from proc_elements.region_attr import detect_particles
 from proc_elements.create_pca import histogram_pca
 from proc_elements.detect_circ import detect_circles
 from proc_elements.filter_region import characterize_particles
 from proc_elements.color_thresh import color_threshold
+from proc_elements.kmeans_cluster import kmeans_cluster
+from proc_elements.cluster_map import cluster_reference_map

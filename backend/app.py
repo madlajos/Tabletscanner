@@ -84,6 +84,7 @@ import pipeline_validators
 import recipe_manager
 import calibration_manager
 from pipeline_types import PipelineDocument
+from proc_elements.scale_bar import scale_bar_overlay as _apply_scale_bar_overlay
 from image_metadata import build_capture_metadata
 
 
@@ -4312,7 +4313,12 @@ def preview_pipeline():
         return jsonify({'error': f'Érvénytelen dokumentum: {e}', 'code': ErrorCode.RECIPE_INVALID_FORMAT, 'popup': True}), 400
 
     single_idx = preview_image_index if single_image_only else -1
-    result = pipeline_engine.execute_pipeline(doc, up_to_step=preview_step, single_image_index=single_idx, omitted_indices=omitted_indices)
+    result = pipeline_engine.execute_pipeline(
+        doc,
+        up_to_step=preview_step,
+        single_image_index=single_idx,
+        omitted_indices=omitted_indices,
+    )
 
     if not result.success:
         error_list = [e.to_dict() for e in result.errors]
@@ -4542,8 +4548,8 @@ def get_step_images_montage():
         
         # Execute pipeline up to the specified step (for ALL images, not just one)
         try:
-            app.logger.info(f"Executing pipeline up to step {step_index}")
-            result = pipeline_engine.execute_pipeline(doc, up_to_step=step_index)
+            app.logger.info(f"Executing pipeline up to step {step_index} (thumbnail mode)")
+            result = pipeline_engine.execute_pipeline(doc, up_to_step=step_index, thumbnail_max_dim=400)
             app.logger.info(f"Pipeline execution result: success={result.success}, has_data={result.data is not None}")
         except Exception as e:
             app.logger.error(f"Pipeline execution failed: {str(e)}")
@@ -4630,7 +4636,7 @@ def get_step_images_montage():
             cv2.putText(montage, label, (text_x, text_y), font, font_scale, (200, 200, 200), thickness)
         
         # Encode as JPEG Base64
-        _, jpeg_data = cv2.imencode('.jpg', montage)
+        _, jpeg_data = cv2.imencode('.jpg', montage, [cv2.IMWRITE_JPEG_QUALITY, 85])
         b64_image = base64.b64encode(jpeg_data).decode('utf-8')
         
         app.logger.info(f"Montage generated successfully: {montage.shape[1]}x{montage.shape[0]}")
@@ -4813,6 +4819,12 @@ def pipeline_save_images():
     run_data = exec_result.data or {}
     images = run_data.get('images', [])
     original_paths = run_data.get('_original_paths', run_data.get('paths', []))
+
+    scale_bar_params = data.get('scale_bar_overlay')
+    if scale_bar_params and isinstance(scale_bar_params, dict) and images:
+        overlay_data = {'images': list(images)}
+        overlay_data = _apply_scale_bar_overlay(overlay_data, **scale_bar_params)
+        images = overlay_data.get('images', images)
 
     if not isinstance(images, list) or not images:
         return jsonify({'error': 'Nincs menthető kép a kimeneten.'}), 400

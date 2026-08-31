@@ -33,6 +33,10 @@ const STEP_IO_OVERRIDES: Record<string, StepIoOverride> = {
 
 @Injectable({ providedIn: 'root' })
 export class PipelineStateService {
+  private readonly HISTORY_LIMIT = 50;
+  private undoStack: PipelineDocument[] = [];
+  private redoStack: PipelineDocument[] = [];
+
   /** Step catalog loaded from backend. */
   private stepCatalogSubject = new BehaviorSubject<StepDefinition[]>([]);
   stepCatalog$ = this.stepCatalogSubject.asObservable();
@@ -61,9 +65,42 @@ export class PipelineStateService {
   private previewImageSubject = new BehaviorSubject<string | null>(null);
   previewImage$ = this.previewImageSubject.asObservable();
 
+  /** Optional overlay/result image shown beside the base preview. */
+  private previewImageOverrideSubject = new BehaviorSubject<string | null>(null);
+  previewImageOverride$ = this.previewImageOverrideSubject.asObservable();
+
+  /** Multi-panel dual-map preview (gray/RGB originals + N component results + optional sub-classification). */
+  private dualMapPreviewSubject = new BehaviorSubject<{
+    grayBase: string | null;
+    grayOverlays: string[];
+    rgbBase: string | null;
+    rgbOverlays: string[];
+    subBase: string | null;
+    subOverlays: string[];
+    subLabel: string;
+  } | null>(null);
+  dualMapPreview$ = this.dualMapPreviewSubject.asObservable();
+
+  setDualMapPreview(state: {
+    grayBase: string | null;
+    grayOverlays: string[];
+    rgbBase: string | null;
+    rgbOverlays: string[];
+    subBase: string | null;
+    subOverlays: string[];
+    subLabel: string;
+  } | null): void {
+    this.dualMapPreviewSubject.next(state);
+  }
+
   /** Whether preview image is grayscale. */
   private previewImageIsGrayscaleSubject = new BehaviorSubject<boolean>(false);
   previewImageIsGrayscale$ = this.previewImageIsGrayscaleSubject.asObservable();
+
+  /** Manually set the overlay/result image without replacing the base preview. */
+  setPreviewImageOverride(imageDataUrl: string | null, isGrayscale: boolean = false): void {
+    this.previewImageOverrideSubject.next(imageDataUrl);
+  }
 
   /** Side outputs from the pipeline execution (accumulated). */
   private sideOutputsSubject = new BehaviorSubject<Record<string, any>>({});
@@ -85,12 +122,26 @@ export class PipelineStateService {
   private imageDimsSubject = new BehaviorSubject<{ w: number; h: number }>({ w: 0, h: 0 });
   imageDims$ = this.imageDimsSubject.asObservable();
 
+  /** Current scalebar overlay configuration used for export/save. */
+  private scaleBarExportParamsSubject = new BehaviorSubject<Record<string, any> | null>(null);
+  scaleBarExportParams$ = this.scaleBarExportParamsSubject.asObservable();
+
   /** Emitted when pipeline changes (debounced for preview). */
   private pipelineChangedSubject = new Subject<void>();
 
   /** Emitted when a chart should be maximized in the preview area. */
   private maximizeGraphSubject = new Subject<{ data: any; omittedIndices: Set<number>; sourceStepIndex: number }>();
   maximizeGraph$ = this.maximizeGraphSubject.asObservable();
+
+  /** Emitted when expanded chart (scatter or PCA) should be shown. */
+  private expandedChartSubject = new Subject<{ data: any; type: 'scatter' | 'pca'; title: string }>();
+  expandedChart$ = this.expandedChartSubject.asObservable();
+
+  /** Double-clicked node whose input/output should be shown in split preview. */
+  private splitPreviewRequestSubject = new Subject<number>();
+  splitPreviewRequest$ = this.splitPreviewRequestSubject.asObservable();
+  private splitPreviewStepIndexSubject = new BehaviorSubject<number>(-1);
+  splitPreviewStepIndex$ = this.splitPreviewStepIndexSubject.asObservable();
 
   /** Recipe dirty flag. */
   private dirtySubject = new BehaviorSubject<boolean>(false);
@@ -102,18 +153,36 @@ export class PipelineStateService {
 
   /** Steps that aggregate across all images and must not use single-image mode. */
   private readonly AGGREGATING_STEPS = new Set([
-    'fit_curve', 'predict_node', 'add_sequence_values', 'histogram_pca',
+    'fit_curve', 'predict_node', 'add_sequence_values', 'histogram_pca', 'detect_circles',
+    'dual_map',   // needs all images to auto-detect gray/RGB pairs
   ]);
+
+  private shouldPreviewRoiOutput(step: StepInstance | null): boolean {
+    if (!step || step.step_def_id !== 'mask_rect_roi') return false;
+    return step.param_values?.['output_mode'] === 'crop' || step.param_values?.['apply_mask'] !== false;
+  }
 
   constructor(private recipeService: RecipeService) {
     // Auto-preview on pipeline change (debounced)
     this.pipelineChangedSubject.pipe(debounceTime(400)).subscribe(() => {
-      // Skip auto-preview for fit_curve and mask_rect_roi (manual play/apply button)
+      // Skip auto-preview for fit_curve (manual play/apply button)
       const idx = this.selectedStepIndexSubject.value;
       const pipeline = this.getPipeline();
       if (idx >= 0 && idx < pipeline.steps.length) {
         const defId = pipeline.steps[idx].step_def_id;
-        if (defId === 'fit_curve' || defId === 'mask_rect_roi') {
+        if (defId === 'fit_curve') {
+          return;
+        }
+        // For ROI step: show crop output too, but the editor overlay will be disabled on the preview side.
+        if (defId === 'mask_rect_roi') {
+          const roiStep = pipeline.steps[idx];
+          if (this.shouldPreviewRoiOutput(roiStep)) {
+            this.requestPreview();
+          } else if (idx > 0) {
+            this.requestPreviewForStep(idx - 1);
+          } else {
+            this.requestPreview();
+          }
           return;
         }
       }
@@ -215,7 +284,7 @@ export class PipelineStateService {
   moveStep(fromIndex: number, toIndex: number): void {
     const pipeline = this.getPipeline();
     if (fromIndex < 0 || fromIndex >= pipeline.steps.length) return;
-    if (toIndex < 0 || toIndex >= pipeline.steps.length) return;
+    if (toIndex < 0 || toIndex > pipeline.steps.length) return;
 
     const defn = this.getStepDefinition(pipeline.steps[fromIndex].step_def_id);
     const steps = [...pipeline.steps];
@@ -248,10 +317,6 @@ export class PipelineStateService {
 
     // Insert group (secondaries first, then main)
     steps.splice(adjustedTo, 0, ...group);
-
-    if (!this.isPrimaryChainCompatible(steps)) {
-      return;
-    }
 
     this.updateSteps(steps);
     this.selectStep(adjustedTo + group.length - 1); // Select the main step
@@ -299,11 +364,13 @@ export class PipelineStateService {
     const pipeline = this.getPipeline();
     const mainChain = this.getMainChain(pipeline.steps);
     if (fromMainIndex < 0 || fromMainIndex >= mainChain.length) return false;
-    if (toMainIndex < 0 || toMainIndex >= mainChain.length) return false;
+    if (toMainIndex < 0 || toMainIndex > mainChain.length) return false;
     if (fromMainIndex === toMainIndex) return true;
 
     const fromFlat = mainChain[fromMainIndex].pipelineIndex;
-    const toFlat = mainChain[toMainIndex].pipelineIndex;
+    const toFlat = toMainIndex < mainChain.length
+      ? mainChain[toMainIndex].pipelineIndex
+      : pipeline.steps.length;
 
     const defn = this.getStepDefinition(pipeline.steps[fromFlat].step_def_id);
     const steps = [...pipeline.steps];
@@ -346,14 +413,119 @@ export class PipelineStateService {
     this.updateSteps(steps);
   }
 
+  /** Move one contiguous branch (or another contiguous step range) as a single unit. */
+  moveStepRange(fromIndex: number, toIndexExclusive: number, targetIndex: number): void {
+    const pipeline = this.getPipeline();
+    if (fromIndex < 0 || toIndexExclusive > pipeline.steps.length || fromIndex >= toIndexExclusive) return;
+    if (targetIndex < 0 || targetIndex > pipeline.steps.length) return;
+    if (targetIndex >= fromIndex && targetIndex <= toIndexExclusive) return;
+
+    const selectedStep = pipeline.steps[this.selectedStepIndexSubject.value];
+    const selectedInstanceId = selectedStep?.instance_id;
+    const steps = [...pipeline.steps];
+    const range = steps.splice(fromIndex, toIndexExclusive - fromIndex);
+    const adjustedTarget = targetIndex > fromIndex ? targetIndex - range.length : targetIndex;
+    steps.splice(adjustedTarget, 0, ...range);
+
+    this.updateSteps(steps);
+    if (selectedInstanceId) {
+      this.selectStep(steps.findIndex((step) => step.instance_id === selectedInstanceId));
+    }
+  }
+
+  /**
+   * Copy main-chain steps, including their attached secondary inputs, to a
+   * different position. Settings are preserved and ids are regenerated.
+   */
+  copyStepsTo(instanceIds: string[], targetIndex: number): string[] {
+    const pipeline = this.getPipeline();
+    const selectedIds = new Set(instanceIds);
+    if (!selectedIds.size || targetIndex < 0 || targetIndex > pipeline.steps.length) return [];
+
+    const secondaryIndices = this.getSecondaryIndices(pipeline.steps);
+    const indicesToCopy = new Set<number>();
+
+    for (let index = 0; index < pipeline.steps.length; index++) {
+      const step = pipeline.steps[index];
+      if (secondaryIndices.has(index) || !selectedIds.has(step.instance_id)) continue;
+
+      const defn = this.getStepDefinition(step.step_def_id);
+      if (defn?.secondary_inputs?.length) {
+        const remaining = new Set(defn.secondary_inputs);
+        for (let secondaryIndex = index - 1; secondaryIndex >= 0; secondaryIndex--) {
+          const candidate = pipeline.steps[secondaryIndex];
+          if (secondaryIndices.has(secondaryIndex) && remaining.has(candidate.step_def_id)) {
+            indicesToCopy.add(secondaryIndex);
+            remaining.delete(candidate.step_def_id);
+            if (!remaining.size) break;
+          }
+        }
+      }
+      indicesToCopy.add(index);
+    }
+
+    if (!indicesToCopy.size) return [];
+
+    const copiedIds: string[] = [];
+    const copies = [...indicesToCopy]
+      .sort((a, b) => a - b)
+      .map((index) => {
+        const source = pipeline.steps[index];
+        const copy: StepInstance = {
+          ...source,
+          instance_id: crypto.randomUUID(),
+          param_values: structuredClone(source.param_values ?? {}),
+        };
+        if (selectedIds.has(source.instance_id)) copiedIds.push(copy.instance_id);
+        return copy;
+      });
+
+    const steps = [...pipeline.steps];
+    steps.splice(targetIndex, 0, ...copies);
+    this.updateSteps(steps);
+    this.selectStep(targetIndex + copies.length - 1);
+    return copiedIds;
+  }
+
+  toggleStepEnabled(index: number): void {
+    const pipeline = this.getPipeline();
+    if (index < 0 || index >= pipeline.steps.length) return;
+
+    const steps = pipeline.steps.map((step, i) => i === index
+      ? { ...step, enabled: step.enabled === false }
+      : step
+    );
+    this.updateSteps(steps);
+  }
+
   selectStep(index: number): void {
     this.clearToolboxPreviewStep();
-    this.selectedStepIndexSubject.next(index);
-    this.previewImageIndexSubject.next(0);
-    // For ROI step, preview the previous step to show the input image
     const pipeline = this.getPipeline();
+    if (index !== this.splitPreviewStepIndexSubject.value) {
+      this.splitPreviewStepIndexSubject.next(-1);
+    }
+    const selectedStep = index >= 0 && index < pipeline.steps.length ? pipeline.steps[index] : null;
+    const selectedDef = selectedStep ? this.getStepDefinition(selectedStep.step_def_id) : undefined;
+    this.selectedStepIndexSubject.next(index);
+    if (selectedDef?.id !== 'save_images' && selectedDef?.id !== 'save_array') {
+      this.previewImageIndexSubject.next(0);
+    }
+    // For ROI step, preview the previous step to show the input image
     if (index >= 0 && index < pipeline.steps.length &&
         pipeline.steps[index].step_def_id === 'mask_rect_roi' && index > 0) {
+      const roiStep = pipeline.steps[index];
+      if (this.shouldPreviewRoiOutput(roiStep)) {
+        this.requestPreview();
+      } else {
+        // Show input image when masking is disabled for interactive drawing.
+        this.requestPreviewForStep(index - 1);
+      }
+    } else if (index >= 0 && index < pipeline.steps.length &&
+               (pipeline.steps[index].step_def_id === 'save_images' ||
+                pipeline.steps[index].step_def_id === 'save_array') && index > 0) {
+      this.requestPreviewForStep(index - 1);
+    } else if (index >= 0 && index < pipeline.steps.length &&
+               pipeline.steps[index].step_def_id === 'scale_bar_overlay' && index > 0) {
       this.requestPreviewForStep(index - 1);
     } else if (index >= 0 && index < pipeline.steps.length &&
                pipeline.steps[index].step_def_id === 'fit_curve' && index > 0) {
@@ -376,16 +548,31 @@ export class PipelineStateService {
 
     if (pipeline.steps.length === 0 || stepIndex < 0) {
       this.previewImageSubject.next(null);
+      this.previewImageOverrideSubject.next(null);
+      this.dualMapPreviewSubject.next(null);
       return;
     }
 
     const step = pipeline.steps[stepIndex];
     const isAggregating = this.AGGREGATING_STEPS.has(step.step_def_id);
     const singleImageOnly = !forceAllImages && !isAggregating;
+    const selectedStep = this.selectedStepIndexSubject.value >= 0 && this.selectedStepIndexSubject.value < pipeline.steps.length
+      ? pipeline.steps[this.selectedStepIndexSubject.value]
+      : null;
+    const scaleBarOverlay =
+      selectedStep?.step_def_id === 'save_images' || selectedStep?.step_def_id === 'save_array'
+        ? this.scaleBarExportParamsSubject.value
+        : null;
     const omittedArr = Array.from(this.omittedPointsSubject.value.indices);
 
     this.previewLoadingSubject.next(true);
-    this.recipeService.previewStep(pipeline, stepIndex, imageIndex, singleImageOnly, omittedArr).subscribe({
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
+    const previewContext = step.step_def_id === 'branch_merge'
+      ? { pipeline, stepIndex, startIndex: 0 }
+      : this.createBranchPreviewContext(pipeline, stepIndex);
+
+    this.recipeService.previewStep(previewContext.pipeline, previewContext.stepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
       next: (res: PreviewResponse) => {
         this.previewLoadingSubject.next(false);
         if (res.success) {
@@ -397,13 +584,41 @@ export class PipelineStateService {
           }
           this.sideOutputsSubject.next(res.side_outputs || {});
           this.imageCountSubject.next(res.image_count ?? 0);
+          this.previewImageIsGrayscaleSubject.next(res.is_grayscale ?? false);
           if (res.image_width && res.image_height) {
             this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
           }
+        } else {
+          this.validationErrorsSubject.next(this.mapPreviewErrors(res.errors || [], previewContext.startIndex));
+          this.previewImageSubject.next(null);
+          this.previewImageOverrideSubject.next(null);
+          this.dualMapPreviewSubject.next(null);
+          this.previewImageIsGrayscaleSubject.next(false);
+          this.imageCountSubject.next(0);
+          this.sideOutputsSubject.next({});
         }
       },
       error: () => { this.previewLoadingSubject.next(false); },
     });
+  }
+
+  requestSplitPreview(stepIndex: number): void {
+    const pipeline = this.getPipeline();
+    if (stepIndex < 0 || stepIndex >= pipeline.steps.length) return;
+    this.splitPreviewStepIndexSubject.next(stepIndex);
+    this.splitPreviewRequestSubject.next(stepIndex);
+  }
+
+  getPreviewContext(stepIndex: number): {
+    pipeline: PipelineDocument;
+    stepIndex: number;
+    startIndex: number;
+  } {
+    const pipeline = this.getPipeline();
+    const step = pipeline.steps[stepIndex];
+    return step?.step_def_id === 'branch_merge'
+      ? { pipeline, stepIndex, startIndex: 0 }
+      : this.createBranchPreviewContext(pipeline, stepIndex);
   }
 
   // --- Pipeline state helpers ---
@@ -414,6 +629,50 @@ export class PipelineStateService {
 
   getSelectedStepIndex(): number {
     return this.selectedStepIndexSubject.value;
+  }
+
+  /** Mark the current document as saved without resetting selection or preview state. */
+  markSaved(name: string): void {
+    this.pipelineSubject.next({ ...this.getPipeline(), name });
+    this.recipeNameSubject.next(name);
+    this.dirtySubject.next(false);
+  }
+
+  renameBranch(branchStartInstanceId: string, name: string): void {
+    const pipeline = this.getPipeline();
+    const branchNames = { ...(pipeline.branch_names ?? {}) };
+    const trimmedName = name.trim();
+    if (trimmedName) {
+      branchNames[branchStartInstanceId] = trimmedName;
+    } else {
+      delete branchNames[branchStartInstanceId];
+    }
+    this.updatePipeline({ ...pipeline, branch_names: branchNames });
+  }
+
+  undo(): boolean {
+    const previous = this.undoStack.pop();
+    if (!previous) return false;
+    this.redoStack.push(this.clonePipeline(this.getPipeline()));
+    this.restoreHistoryState(previous);
+    return true;
+  }
+
+  redo(): boolean {
+    const next = this.redoStack.pop();
+    if (!next) return false;
+    this.undoStack.push(this.clonePipeline(this.getPipeline()));
+    this.restoreHistoryState(next);
+    return true;
+  }
+
+  setScaleBarExportParams(params: Record<string, any> | null): void {
+    this.scaleBarExportParamsSubject.next(params ? { ...params } : null);
+  }
+
+  getScaleBarExportParams(): Record<string, any> | null {
+    const params = this.scaleBarExportParamsSubject.value;
+    return params ? { ...params } : null;
   }
 
   getStepOutputType(stepIndex: number): DataType | null {
@@ -439,24 +698,101 @@ export class PipelineStateService {
     return this.imageDimsSubject.value;
   }
 
+  showExpandedChart(data: any, type: 'scatter' | 'pca', title: string): void {
+    this.expandedChartSubject.next({ data, type, title });
+  }
+
   newPipeline(): void {
+    this.clearHistory();
     this.pipelineSubject.next(createEmptyPipeline());
     this.selectedStepIndexSubject.next(-1);
     this.clearToolboxPreviewStep();
     this.validationErrorsSubject.next([]);
     this.previewImageSubject.next(null);
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
     this.sideOutputsSubject.next({});
     this.dirtySubject.next(false);
     this.recipeNameSubject.next('');
   }
 
   loadPipeline(doc: PipelineDocument): void {
-    this.pipelineSubject.next(doc);
+    this.clearHistory();
+    const normalized = this.normalizePipelineDocument(doc);
+    this.pipelineSubject.next(normalized);
     this.recipeNameSubject.next(doc.name);
     this.dirtySubject.next(false);
     this.clearToolboxPreviewStep();
     this.selectedStepIndexSubject.next(doc.steps.length > 0 ? 0 : -1);
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
     this.pipelineChangedSubject.next();
+  }
+
+  appendPipeline(doc: PipelineDocument): void {
+    const current = this.getPipeline();
+    const idMap = new Map<string, string>();
+    const appendedSteps = doc.steps.map((step) => ({
+      ...step,
+      instance_id: this.createMappedInstanceId(step.instance_id, idMap),
+      param_values: { ...step.param_values },
+    }));
+    const appendedConnections = (doc.connections ?? []).map((connection) => ({
+      ...connection,
+      from_instance_id: idMap.get(connection.from_instance_id) ?? connection.from_instance_id,
+      to_instance_id: idMap.get(connection.to_instance_id) ?? connection.to_instance_id,
+    }));
+    const appendedBranchNames = Object.fromEntries(
+      Object.entries(doc.branch_names ?? {}).map(([instanceId, branchName]) => [
+        idMap.get(instanceId) ?? instanceId,
+        branchName,
+      ])
+    );
+    this.updatePipeline({
+      ...current,
+      steps: [...current.steps, ...appendedSteps],
+      connections: [...(current.connections ?? []), ...appendedConnections],
+      branch_names: { ...(current.branch_names ?? {}), ...appendedBranchNames },
+    });
+    this.recipeNameSubject.next(current.name);
+    this.clearToolboxPreviewStep();
+    this.selectStep(Math.max(0, current.steps.length));
+  }
+
+  connectSteps(
+    fromInstanceId: string,
+    toInstanceId: string,
+    kind: 'primary' | 'secondary' | 'merge' = 'merge'
+  ): void {
+    if (fromInstanceId === toInstanceId) return;
+    const pipeline = this.getPipeline();
+    const exists = (pipeline.connections ?? []).some((connection) =>
+      connection.from_instance_id === fromInstanceId &&
+      connection.to_instance_id === toInstanceId &&
+      connection.kind === kind
+    );
+    if (exists) return;
+
+    this.updatePipeline({
+      ...pipeline,
+      connections: [
+        ...(pipeline.connections ?? []),
+        { from_instance_id: fromInstanceId, to_instance_id: toInstanceId, kind },
+      ],
+    });
+  }
+
+  disconnectSteps(fromInstanceId: string, toInstanceId: string, kind?: 'primary' | 'secondary' | 'merge'): void {
+    const pipeline = this.getPipeline();
+    this.updatePipeline({
+      ...pipeline,
+      connections: (pipeline.connections ?? []).filter((connection) => {
+        const samePair = connection.from_instance_id === fromInstanceId &&
+          connection.to_instance_id === toInstanceId;
+        const sameKind = !kind || connection.kind === kind;
+        return !(samePair && sameKind);
+      }),
+    });
   }
 
   setToolboxPreviewStep(stepDefId: string | null): void {
@@ -470,10 +806,145 @@ export class PipelineStateService {
   private updateSteps(steps: StepInstance[]): void {
     // Re-index
     steps.forEach((s, i) => (s.order = i));
-    const pipeline = { ...this.getPipeline(), steps };
+    const pipeline = { ...this.getPipeline(), steps, connections: this.getPipeline().connections ?? [] };
+    this.updatePipeline(pipeline);
+  }
+
+  private updatePipeline(pipeline: PipelineDocument): void {
+    this.undoStack.push(this.clonePipeline(this.getPipeline()));
+    if (this.undoStack.length > this.HISTORY_LIMIT) this.undoStack.shift();
+    this.redoStack = [];
     this.pipelineSubject.next(pipeline);
     this.dirtySubject.next(true);
     this.pipelineChangedSubject.next();
+  }
+
+  private restoreHistoryState(pipeline: PipelineDocument): void {
+    const restored = this.clonePipeline(pipeline);
+    restored.steps.forEach((step, index) => (step.order = index));
+    this.pipelineSubject.next(restored);
+    this.clearToolboxPreviewStep();
+    this.validationErrorsSubject.next([]);
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
+    const selected = Math.min(this.selectedStepIndexSubject.value, restored.steps.length - 1);
+    this.selectedStepIndexSubject.next(Math.max(-1, selected));
+    this.dirtySubject.next(true);
+    this.pipelineChangedSubject.next();
+  }
+
+  private clearHistory(): void {
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+
+  private clonePipeline(pipeline: PipelineDocument): PipelineDocument {
+    return {
+      ...pipeline,
+      steps: pipeline.steps.map((step) => ({
+        ...step,
+        param_values: structuredClone(step.param_values ?? {}),
+      })),
+      connections: (pipeline.connections ?? []).map((connection) => ({ ...connection })),
+      branch_names: { ...(pipeline.branch_names ?? {}) },
+    };
+  }
+
+  private normalizePipelineDocument(doc: PipelineDocument): PipelineDocument {
+    return {
+      ...doc,
+      steps: doc.steps.map((step) => ({ ...step, enabled: step.enabled !== false })),
+      connections: doc.connections ?? [],
+      branch_names: doc.branch_names ?? {},
+    };
+  }
+
+  private createMappedInstanceId(originalId: string, idMap: Map<string, string>): string {
+    const mappedId = crypto.randomUUID();
+    idMap.set(originalId, mappedId);
+    return mappedId;
+  }
+
+  private createBranchPreviewContext(
+    pipeline: PipelineDocument,
+    stepIndex: number
+  ): { pipeline: PipelineDocument; stepIndex: number; startIndex: number } {
+    const previewStep = pipeline.steps[stepIndex];
+    // Reference colour alignment can target a different branch, including one
+    // displayed later on the canvas. Every downstream preview on this branch
+    // must keep the complete document too; otherwise selecting/inserting the
+    // next node slices the reference branch away and the alignment loses its
+    // reference crops.
+    const branchStartIndex = this.findBranchStartIndex(pipeline.steps, stepIndex);
+    const dependsOnExternalReferenceBranch = pipeline.steps
+      .slice(branchStartIndex, stepIndex + 1)
+      .some((step) =>
+        step.enabled !== false
+        && step.step_def_id === 'reference_color_align'
+        && !!step.param_values?.['reference_branch']
+        && step.param_values['reference_branch'] !== 'auto'
+      );
+    if (dependsOnExternalReferenceBranch) {
+      return { pipeline, stepIndex, startIndex: 0 };
+    }
+
+    const startIndex = branchStartIndex;
+    const endIndex = this.findBranchEndIndex(pipeline.steps, startIndex);
+
+    // A downstream step after branch_merge needs the complete document:
+    // slicing to the current branch would remove externally connected ROI/mask
+    // branches and their merge connections before the request reaches backend.
+    const dependsOnMergedBranches = pipeline.steps
+      .slice(startIndex, stepIndex + 1)
+      .some((step) => step.step_def_id === 'branch_merge');
+    if (dependsOnMergedBranches) {
+      return { pipeline, stepIndex, startIndex: 0 };
+    }
+
+    const branchSteps = pipeline.steps.slice(startIndex, endIndex).map((step, index) => ({
+      ...step,
+      param_values: { ...step.param_values },
+      order: index,
+    }));
+    const branchIds = new Set(branchSteps.map((step) => step.instance_id));
+    const branchConnections = (pipeline.connections ?? []).filter((connection) =>
+      branchIds.has(connection.from_instance_id) && branchIds.has(connection.to_instance_id)
+    );
+
+    return {
+      pipeline: {
+        ...pipeline,
+        steps: branchSteps,
+        connections: branchConnections,
+      },
+      stepIndex: Math.max(0, Math.min(stepIndex - startIndex, branchSteps.length - 1)),
+      startIndex,
+    };
+  }
+
+  private findBranchStartIndex(steps: StepInstance[], stepIndex: number): number {
+    for (let i = Math.min(stepIndex, steps.length - 1); i >= 0; i--) {
+      if (steps[i].step_def_id === 'load_image') {
+        return i;
+      }
+    }
+    return 0;
+  }
+
+  private findBranchEndIndex(steps: StepInstance[], startIndex: number): number {
+    for (let i = startIndex + 1; i < steps.length; i++) {
+      if (steps[i].step_def_id === 'load_image') {
+        return i;
+      }
+    }
+    return steps.length;
+  }
+
+  private mapPreviewErrors(errors: StepError[], startIndex: number): StepError[] {
+    return errors.map((error) => ({
+      ...error,
+      step_index: error.step_index >= 0 ? error.step_index + startIndex : error.step_index,
+    }));
   }
 
   // --- Preview ---
@@ -485,20 +956,37 @@ export class PipelineStateService {
 
     if (pipeline.steps.length === 0 || stepIndex < 0) {
       this.previewImageSubject.next(null);
+      this.previewImageOverrideSubject.next(null);
+      this.dualMapPreviewSubject.next(null);
       this.sideOutputsSubject.next({});
       this.imageCountSubject.next(0);
       return;
     }
 
     const step = pipeline.steps[stepIndex];
-    const isAggregating = this.AGGREGATING_STEPS.has(step.step_def_id);
+    const previewStepIndex =
+      step.step_def_id === 'save_images' || step.step_def_id === 'save_array'
+        ? Math.max(0, stepIndex - 1)
+        : stepIndex;
+    const previewStep = pipeline.steps[previewStepIndex];
+    const isAggregating = this.AGGREGATING_STEPS.has(previewStep.step_def_id);
     const singleImageOnly = !forceAllImages && !isAggregating;
+    const scaleBarOverlay =
+      step.step_def_id === 'save_images' || step.step_def_id === 'save_array'
+        ? this.scaleBarExportParamsSubject.value
+        : null;
 
     // Pass omitted indices for curve fitting
     const omittedArr = Array.from(this.omittedPointsSubject.value.indices);
 
     this.previewLoadingSubject.next(true);
-    this.recipeService.previewStep(pipeline, stepIndex, imageIndex, singleImageOnly, omittedArr).subscribe({
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
+    const previewContext = previewStep.step_def_id === 'branch_merge'
+      ? { pipeline, stepIndex: previewStepIndex, startIndex: 0 }
+      : this.createBranchPreviewContext(pipeline, previewStepIndex);
+
+    this.recipeService.previewStep(previewContext.pipeline, previewContext.stepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
       next: (res: PreviewResponse) => {
         this.previewLoadingSubject.next(false);
         if (res.success) {
@@ -515,8 +1003,10 @@ export class PipelineStateService {
             this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
           }
         } else {
-          this.validationErrorsSubject.next(res.errors || []);
+          this.validationErrorsSubject.next(this.mapPreviewErrors(res.errors || [], previewContext.startIndex));
           this.previewImageSubject.next(null);
+          this.previewImageOverrideSubject.next(null);
+          this.dualMapPreviewSubject.next(null);
           this.previewImageIsGrayscaleSubject.next(false);
           this.imageCountSubject.next(0);
           this.sideOutputsSubject.next({});
@@ -560,6 +1050,15 @@ export class PipelineStateService {
         if (selected.step_def_id === 'fit_curve' && stepIndex > 0) {
           // Fit curve is a manual action. While paging images, only refresh upstream context.
           this.requestPreviewForStep(stepIndex - 1);
+          return;
+        }
+        if (selected.step_def_id === 'mask_rect_roi' && stepIndex > 0) {
+          if (this.shouldPreviewRoiOutput(selected)) {
+            this.requestPreview();
+          } else {
+            // ROI step: preview input image for drawing, ROI overlay handles visualization
+            this.requestPreviewForStep(stepIndex - 1);
+          }
           return;
         }
       }
@@ -709,15 +1208,15 @@ export class PipelineStateService {
   }
 
   /**
-   * Validate only the primary chain (secondaries are modeled as branch inputs).
+   * Validate only primary chains (secondaries are modeled as branch inputs).
    * Rules:
-   * - first primary node must be load_image
-   * - source nodes have no primary input (can only appear at first primary position)
-   * - sink nodes have no primary output (must be last primary node)
-   * - adjacent primary nodes must have compatible output/input data types
+   * - each branch must start with load_image
+   * - source nodes start a new branch
+   * - sink nodes have no primary output (must be last primary node in their branch)
+   * - adjacent primary nodes in the same branch must have compatible output/input data types
    */
   private isPrimaryChainCompatible(steps: StepInstance[]): boolean {
-    const main = this.getMainChain(steps);
+    const main = this.getMainChain(steps.filter((step) => step.enabled !== false));
     if (main.length === 0) return true;
 
     const firstDef = main[0].definition;
@@ -732,11 +1231,16 @@ export class PipelineStateService {
       const currDir = this.getDirection(currDef);
       const currInput = this.getInputType(currDef);
       const currOutput = this.getOutputType(currDef, main[i].step);
+      const nextDef = i < main.length - 1 ? main[i + 1].definition : undefined;
+      const isBranchLast = i === main.length - 1 || (!!nextDef && this.getDirection(nextDef) === 'source');
 
-      if (i === 0) {
-        if (currDir !== 'source') return false;
+      if (currDir === 'source') {
+        if (currDef.id !== 'load_image') return false;
       } else {
-        if (currDir === 'source') return false;
+        if (currDir === 'sink') {
+          if (!isBranchLast) return false;
+          continue;
+        }
 
         const prevDef = main[i - 1].definition;
         if (!prevDef) return false;
@@ -774,10 +1278,8 @@ export class PipelineStateService {
         }
       }
 
-      const isLast = i === main.length - 1;
-      if (!isLast && currDir === 'sink') return false;
-      if (!isLast && !currOutput) return false;
-      if (i > 0 && currDir !== 'source' && !currInput) return false;
+      if (!isBranchLast && !currOutput) return false;
+      if (i > 0 && currDir === 'transform' && !currInput) return false;
     }
 
     return true;

@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "name": "map2",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "08777244-cf4e-4d5e-a376-a8985196b38c",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "L:/Saját meghajtó/Desktop260623/bence_krist/2-3_02.bmp"
+      },
+      "order": 0,
+      "enabled": true
+    },
+    {
+      "instance_id": "2e600c84-a47c-4ad3-8e36-5af74dd7b8e4",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "channel": "GRAY",
+        "space": "GRAY"
+      },
+      "order": 1,
+      "enabled": true
+    },
+    {
+      "instance_id": "85dac368-0142-482d-84c7-56fcf7651e96",
+      "step_def_id": "flat_field_correction",
+      "param_values": {
+        "alpha": 1,
+        "down": 0.1,
+        "final_blur": 3,
+        "method": "downsampled",
+        "nlm_h": 3,
+        "percentile_high": 99,
+        "percentile_low": 1,
+        "sigma_bg": 80,
+        "sigma_small": 8,
+        "use_nlm": false
+      },
+      "order": 2,
+      "enabled": true
+    },
+    {
+      "instance_id": "a9fdb050-3ef8-41a2-b0a7-2251ffee000b",
+      "step_def_id": "mask_rect_roi",
+      "param_values": {
+        "apply_mask": true,
+        "background_color": "fekete",
+        "invert_mask": false,
+        "output_mode": "mask",
+        "roi_angle": 0,
+        "roi_cx": 1548,
+        "roi_cy": 1447,
+        "roi_height": 0,
+        "roi_overrides": "{\"0\":{\"roi_angle\":0,\"roi_type\":\"ellipse\",\"roi_cx\":1548,\"roi_cy\":1447,\"roi_rx\":1142,\"roi_ry\":1122}}",
+        "roi_points": "[]",
+        "roi_rx": 1142,
+        "roi_ry": 1122,
+        "roi_type": "ellipse",
+        "roi_width": 0,
+        "roi_x": 1511,
+        "roi_y": 2700,
+        "shape_only": false,
+        "shape_outline_color": "fehér",
+        "shape_outline_thickness": 2
+      },
+      "order": 3,
+      "enabled": true
+    },
+    {
+      "instance_id": "1691a7d7-c68d-4556-b768-b4b61516eb34",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "L:/Saját meghajtó/Desktop260623/bence_krist/2-3_02.bmp"
+      },
+      "order": 4,
+      "enabled": true
+    },
+    {
+      "instance_id": "4589d1c3-efeb-42cf-8948-ab469018c800",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "channel": "GRAY",
+        "space": "GRAY"
+      },
+      "order": 5,
+      "enabled": true
+    },
+    {
+      "instance_id": "914e8f16-3dbf-40f3-9f28-6faa0a465c44",
+      "step_def_id": "flat_field_correction",
+      "param_values": {
+        "alpha": 1,
+        "down": 0.1,
+        "final_blur": 3,
+        "method": "downsampled",
+        "nlm_h": 3,
+        "percentile_high": 99,
+        "percentile_low": 1,
+        "sigma_bg": 80,
+        "sigma_small": 8,
+        "use_nlm": false
+      },
+      "order": 6,
+      "enabled": true
+    },
+    {
+      "instance_id": "53c424e2-6842-42bf-9af2-8dbf98a4d94d",
+      "step_def_id": "reference_crop",
+      "param_values": {
+        "crop_size": 34,
+        "reference_square_overrides": "{}",
+        "reference_squares": "[]",
+        "show_references": false
+      },
+      "order": 7,
+      "enabled": true
+    },
+    {
+      "instance_id": "9c222195-cf72-40ba-ade7-467aa9b3b903",
+      "step_def_id": "reference_sequence",
+      "param_values": {
+        "component": "GRAY",
+        "direction": "ascending"
+      },
+      "order": 8,
+      "enabled": true
+    },
+    {
+      "instance_id": "d8c6c499-6ee1-4444-b964-91b9ef383d03",
+      "step_def_id": "branch_merge",
+      "param_values": {},
+      "order": 9,
+      "enabled": true
+    },
+    {
+      "instance_id": "1d11e36b-9f3b-4096-a625-3eea20264816",
+      "step_def_id": "kmeans_cluster",
+      "param_values": {
+        "attempts": 3,
+        "background": "black",
+        "color_space": "BGR",
+        "epsilon": 1,
+        "init_mode": "auto",
+        "k": 3,
+        "max_iter": 30,
+        "output_mode": "palette",
+        "reference_source": "auto",
+        "sort_by_brightness": true
+      },
+      "order": 10,
+      "enabled": true
+    },
+    {
+      "instance_id": "e0c23310-1858-4f35-9038-b120f50d1b36",
+      "step_def_id": "cluster_reference_map",
+      "param_values": {
+        "colormap": "jet",
+        "invert": true,
+        "selected_labels": "2"
+      },
+      "order": 11,
+      "enabled": true
+    }
+  ],
+  "connections": [
+    {
+      "from_instance_id": "08777244-cf4e-4d5e-a376-a8985196b38c",
+      "kind": "merge",
+      "to_instance_id": "d8c6c499-6ee1-4444-b964-91b9ef383d03"
+    }
+  ],
+  "branch_names": {},
+  "created_at": "2026-07-24T10:19:06.524662+00:00",
+  "modified_at": "2026-07-24T10:58:09.975890+00:00"
+}
