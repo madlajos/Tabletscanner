@@ -152,7 +152,7 @@ autofocus workflow runs first and establishes the Z-offset reference. A second b
 requests cooperative cancellation, including during autofocus, after the current safe hardware
 step.
 
-The configured tray is a 10×10 grid. Motion limits are currently 0–175 mm on X/Y and 0–40 mm on
+The configured tray is a 10×10 grid. Motion limits are currently 0–175 mm on X, 0-165mm on Y, and 0–40 mm on
 Z. Treat those limits, homing order, lamp timeouts, and light-interlock behavior as hardware
 safety constraints.
 

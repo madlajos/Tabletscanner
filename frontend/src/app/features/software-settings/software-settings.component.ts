@@ -93,7 +93,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   maxHeightOffsetUpMm = 5;
   maxHeightOffsetDownMm = -5;
   firstTabletXMm = 2.9;
-  firstTabletYMm = 10.6;
+  firstTabletYMm = 0;
   firstTabletZMm = 20;
   tabletSpacingMm = 18.3;
   virtualConnectionLabel = '';
@@ -829,7 +829,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     return [x, y, z, spacing].every(Number.isFinite)
       && x >= 0 && y >= 0 && z >= 0 && z <= 40 && spacing > 0
       && x + 9 * spacing <= 175.5
-      && y + 9 * spacing <= 175.5;
+      && y + 9 * spacing <= 165.5;
   }
 
   private getAdvancedValidationError(): string | null {

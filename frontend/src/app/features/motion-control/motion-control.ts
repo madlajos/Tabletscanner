@@ -33,7 +33,7 @@ import { FilterRevolverComponent } from '../../components/filter-revolver/filter
 export class MotionControl implements OnInit, OnDestroy {
   movementAmount: number = 1;
   firstTabletX = 2.9;
-  firstTabletY = 10.6;
+  firstTabletY = 0;
   firstTabletZ = 20;
   tabletSpacing = 18.3;
 
@@ -46,7 +46,7 @@ export class MotionControl implements OnInit, OnDestroy {
   xMin: number = 0;
   xMax: number = 175;
   yMin: number = 0;
-  yMax: number = 175;
+  yMax: number = 165;
   zMin: number = 0;
   zMax: number = 40;
 

@@ -367,7 +367,7 @@ class SettingsMigrationTests(unittest.TestCase):
             'max_height_offset_up_mm': 5,
             'max_height_offset_down_mm': -4,
             'first_tablet_x_mm': 2.9,
-            'first_tablet_y_mm': 10.6,
+            'first_tablet_y_mm': 0,
             'first_tablet_z_mm': 40,
             'tablet_spacing_mm': 18.3,
         }
@@ -377,7 +377,7 @@ class SettingsMigrationTests(unittest.TestCase):
                 'max_height_offset_up_mm': 5.0,
                 'max_height_offset_down_mm': -4.0,
                 'first_tablet_x_mm': 2.9,
-                'first_tablet_y_mm': 10.6,
+                'first_tablet_y_mm': 0.0,
                 'first_tablet_z_mm': 40.0,
                 'tablet_spacing_mm': 18.3,
             },

@@ -100,7 +100,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   // First tablet position and spacing (from settings)
   firstTabletX = 2.9;
-  firstTabletY = 10.6;
+  firstTabletY = 0;
   firstTabletZ = 20.0;
   tabletSpacing = 18.3;
 

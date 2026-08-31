@@ -69,9 +69,9 @@ class VirtualOctopusTests(unittest.TestCase):
         device = VirtualOctopusSerial()
 
         motioncontrols.move_to_position(device, x_pos=12.5, y_pos=200, z_pos=4)
-        self.assertIn('G1 X12.5 Y-25.0 Z4', device.command_history)
+        self.assertIn('G1 X12.5 Y-35.0 Z4', device.command_history)
         self.assertEqual(
-            {'x': 12.5, 'y': 175.0, 'z': 4.0},
+            {'x': 12.5, 'y': 165.0, 'z': 4.0},
             motioncontrols.get_toolhead_position(device),
         )
         self.assertEqual(0.0, device._position['Y'])
@@ -79,7 +79,7 @@ class VirtualOctopusTests(unittest.TestCase):
         motioncontrols.move_relative(device, x=-2.5, y=-5, z=40)
         self.assertIn('G1 X-2.5 Y5.0 Z40', device.command_history)
         self.assertEqual(
-            {'x': 10.0, 'y': 170.0, 'z': 40.0},
+            {'x': 10.0, 'y': 160.0, 'z': 40.0},
             motioncontrols.get_toolhead_position(device),
         )
         self.assertEqual(5.0, device._position['Y'])
@@ -109,7 +109,7 @@ class VirtualOctopusTests(unittest.TestCase):
             {'x': 2.0, 'y': 2.0, 'z': 2.0},
             motioncontrols.get_toolhead_position(device),
         )
-        self.assertEqual(173.0, device._position['Y'])
+        self.assertEqual(163.0, device._position['Y'])
 
     def test_closed_virtual_port_behaves_like_disconnected_serial(self):
         device = VirtualOctopusSerial()

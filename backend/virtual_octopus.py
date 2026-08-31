@@ -28,7 +28,7 @@ class VirtualOctopusSerial:
         self._position = {'X': 0.0, 'Y': 0.0, 'Z': 0.0, 'A': 0.0}
         self._limits = {
             'X': (0.0, 175.0),
-            'Y': (0.0, 175.0),
+            'Y': (0.0, 165.0),
             'Z': (0.0, 40.0),
             # The physical filter revolver is circular and has no software
             # travel seam. The backend periodically normalizes its coordinate.

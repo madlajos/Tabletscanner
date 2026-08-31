@@ -26,15 +26,27 @@ def advanced_payload(**overrides):
 
 
 class TraySettingsTests(unittest.TestCase):
-    def test_existing_calibration_is_valid(self):
+    def test_default_calibration_is_valid(self):
         normalized = validate_motion_simulation_settings(advanced_payload())
-        self.assertEqual(10.6, normalized['first_tablet_y_mm'])
+        self.assertEqual(0.0, normalized['first_tablet_y_mm'])
         self.assertEqual(18.3, normalized['tablet_spacing_mm'])
 
     def test_out_of_range_tray_is_rejected(self):
         with self.assertRaisesRegex(TrayGeometryError, '10 x 10 tray'):
             validate_motion_simulation_settings(
                 advanced_payload(first_tablet_x_mm=20, tablet_spacing_mm=18.3)
+            )
+
+    def test_y_travel_limit_is_165_mm(self):
+        with self.assertRaisesRegex(ValueError, 'between 0 and 165 mm'):
+            validate_motion_simulation_settings(
+                advanced_payload(first_tablet_y_mm=165.1, tablet_spacing_mm=0.001)
+            )
+
+    def test_tray_y_edge_uses_y_travel_limit(self):
+        with self.assertRaisesRegex(TrayGeometryError, '10 x 10 tray'):
+            validate_motion_simulation_settings(
+                advanced_payload(first_tablet_y_mm=1, tablet_spacing_mm=18.3)
             )
 
     def test_schema_four_coordinates_migrate_to_advanced_settings(self):

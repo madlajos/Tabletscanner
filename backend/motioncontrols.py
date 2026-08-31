@@ -10,7 +10,7 @@ _POS_RE = re.compile(r'X:\s*(-?\d+(?:\.\d+)?)\s+Y:\s*(-?\d+(?:\.\d+)?)\s+Z:\s*(-
 
 A_AXIS_HOMING_TIMEOUT_SECONDS = 60.0
 DEFAULT_HOMING_TIMEOUT_SECONDS = 30.0
-Y_NATIVE_MAX_MM = 175.0
+Y_NATIVE_MAX_MM = 165.0
 
 
 def logical_y_to_native(y: float) -> float:

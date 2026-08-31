@@ -53,17 +53,17 @@ DEFAULT_CAPTURE_EXPOSURE_TIME = 100000.0
 DEFAULT_CAPTURE_GAIN = 0.0
 DEFAULT_CAPTURE_GAMMA = 1.0
 DEFAULT_FIRST_TABLET_X_MM = 2.9
-DEFAULT_FIRST_TABLET_Y_MM = 10.6
+DEFAULT_FIRST_TABLET_Y_MM = 0.0
 DEFAULT_FIRST_TABLET_Z_MM = 20.0
 DEFAULT_TABLET_SPACING_MM = 18.3
 DEFAULT_CAMERA_IMAGE_WIDTH = 4000
 DEFAULT_CAMERA_IMAGE_HEIGHT = 4000
 TRAY_GRID_SIZE = 10
-XY_TRAVEL_MAX_MM = 175.0
+X_TRAVEL_MAX_MM = 175.0
+Y_TRAVEL_MAX_MM = 165.0
 Z_TRAVEL_MAX_MM = 40.0
-# The existing calibrated tray reaches Y=175.3 mm. Motion commands are still
-# clamped to 175 mm; retain this sub-millimetre edge allowance so migration
-# doesn't invalidate installations using the established 10.6/18.3 geometry.
+# Allow sub-millimetre calibration rounding at the tray edge. Motion commands
+# remain clamped to the exact per-axis limits.
 TRAY_EDGE_CALIBRATION_TOLERANCE_MM = 0.5
 
 
@@ -366,18 +366,19 @@ def validate_motion_simulation_settings(payload):
     first_y = _finite_number(payload['first_tablet_y_mm'], None)
     first_z = _finite_number(payload['first_tablet_z_mm'], None)
     spacing = _finite_number(payload['tablet_spacing_mm'], None)
-    if first_x is None or not 0 <= first_x <= XY_TRAVEL_MAX_MM:
+    if first_x is None or not 0 <= first_x <= X_TRAVEL_MAX_MM:
         raise ValueError('First tablet X must be between 0 and 175 mm.')
-    if first_y is None or not 0 <= first_y <= XY_TRAVEL_MAX_MM:
-        raise ValueError('First tablet Y must be between 0 and 175 mm.')
+    if first_y is None or not 0 <= first_y <= Y_TRAVEL_MAX_MM:
+        raise ValueError('First tablet Y must be between 0 and 165 mm.')
     if first_z is None or not 0 <= first_z <= Z_TRAVEL_MAX_MM:
         raise ValueError('First tablet Z must be between 0 and 40 mm.')
     if spacing is None or spacing <= 0:
         raise ValueError('Tablet spacing must be a positive number.')
     last_x = first_x + (TRAY_GRID_SIZE - 1) * spacing
     last_y = first_y + (TRAY_GRID_SIZE - 1) * spacing
-    tray_limit = XY_TRAVEL_MAX_MM + TRAY_EDGE_CALIBRATION_TOLERANCE_MM
-    if last_x > tray_limit or last_y > tray_limit:
+    tray_x_limit = X_TRAVEL_MAX_MM + TRAY_EDGE_CALIBRATION_TOLERANCE_MM
+    tray_y_limit = Y_TRAVEL_MAX_MM + TRAY_EDGE_CALIBRATION_TOLERANCE_MM
+    if last_x > tray_x_limit or last_y > tray_y_limit:
         raise TrayGeometryError(
             'The 10 x 10 tray coordinates must stay within the X/Y travel limits.'
         )

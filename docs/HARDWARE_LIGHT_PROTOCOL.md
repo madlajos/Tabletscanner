@@ -97,7 +97,7 @@ retains endstop validation but replaces Marlin's fatal `kill()` path for a misse
 the failed axis remains unhomed, `G28` returns to the command loop, and other serial commands
 remain available. Retrying motion on that axis still requires a successful homing operation.
 Marlin retains the proven CoreXY motor mixing and max-homed native Y configuration. The backend
-maps operator coordinates with `logical Y = 175 - native Y` for position reports, absolute
+maps operator coordinates with `logical Y = 165 - native Y` for position reports, absolute
 moves, and relative moves. Thus native `Y:173` after the 2 mm homing backoff is shown as
 operator `Y:2`, and positive operator Y moves away from the home sensor without changing
 CoreXY motor directions or the Zâ†’Yâ†’X homing sequence.

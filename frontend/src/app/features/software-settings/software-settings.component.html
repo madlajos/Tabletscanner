@@ -235,7 +235,7 @@
                 <h4 class="advanced-group-title" id="advanced-motion-title">Mozgásbeállítások</h4>
                 <div class="advanced-motion-fields">
                   <label><span>Első tabletta X koordinátája</span><span><input type="number" min="0" max="175" step="any" [(ngModel)]="firstTabletXMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
-                  <label><span>Első tabletta Y koordinátája</span><span><input type="number" min="0" max="175" step="any" [(ngModel)]="firstTabletYMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Első tabletta Y koordinátája</span><span><input type="number" min="0" max="165" step="any" [(ngModel)]="firstTabletYMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
                   <label><span>Első tabletta Z koordinátája</span><span><input type="number" min="0" max="40" step="any" [(ngModel)]="firstTabletZMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
                   <label><span>Tabletták közötti távolság</span><span><input type="number" min="0.001" step="any" [(ngModel)]="tabletSpacingMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
                   <label><span>Max. magasságeltolás felfelé</span><span><input type="number" min="0.001" step="any" [(ngModel)]="maxHeightOffsetUpMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
