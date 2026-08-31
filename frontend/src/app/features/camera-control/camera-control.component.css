@@ -302,6 +302,51 @@ td button:not(.browse-button):disabled {
   margin: 0;               /* span full available width in the colspan cell */
 }
 
+.bgr-capture-cell {
+  padding-top: 2px;
+}
+
+.bgr-capture-button {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background-color: #444;
+  color: #eee;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.bgr-capture-button:hover:not(:disabled) {
+  background-color: #555;
+}
+
+.bgr-capture-button.running {
+  background-color: #224477;
+  border-color: #376aa3;
+  box-shadow: 0 0 13px rgba(255, 214, 64, 0.9), inset 3px 3px 8px rgba(0, 0, 0, 0.45);
+  animation: bgr-capture-pulse 1.2s ease-in-out infinite;
+}
+
+.bgr-capture-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.bgr-capture-button.running:disabled {
+  opacity: 1;
+}
+
+@keyframes bgr-capture-pulse {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(255, 214, 64, 0.7), inset 3px 3px 8px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(255, 224, 92, 1), inset 3px 3px 8px rgba(0, 0, 0, 0.45);
+  }
+}
+
 .preset-wrapper {
   max-width: 540px;
 }

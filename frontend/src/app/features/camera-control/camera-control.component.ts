@@ -4,9 +4,10 @@ import { HttpClient } from '@angular/common/http';
 import { SharedService } from '../../shared.service';
 import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
-import { interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs';
+import { finalize, interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from '../../services/settings-updates.service';
+import { BgrCaptureService } from '../../services/bgr-capture.service';
 import { BASE_URL } from '../../api-config';
 
 
@@ -102,12 +103,17 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   private numericFocusValues: Record<string, number | null | undefined> = {};
   cameraSettingsExpanded = true;
   saveSettingsExpanded = true;
+  bgrCaptureInProgress = false;
+  bgrCaptureCancelling = false;
+  private bgrCaptureSub?: Subscription;
+  private bgrCancelSub?: Subscription;
 
 
   constructor(private http: HttpClient,
     public sharedService: SharedService,
     private errorNotificationService: ErrorNotificationService,
-    private settingsUpdatesService: SettingsUpdatesService
+    private settingsUpdatesService: SettingsUpdatesService,
+    private bgrCaptureService: BgrCaptureService
   ) { }
 
   toggleCameraSettings(): void {
@@ -194,6 +200,17 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     }
     if (this.autofocusActiveSub) {
       this.autofocusActiveSub.unsubscribe();
+    }
+
+    if (this.bgrCaptureInProgress) {
+      this.bgrCaptureService.cancel().subscribe({
+        error: error => console.warn('Could not cancel BGR capture during cleanup.', error)
+      });
+    }
+    this.bgrCaptureSub?.unsubscribe();
+    this.bgrCancelSub?.unsubscribe();
+    if (this.bgrCaptureInProgress) {
+      this.sharedService.setMeasurementActive(false);
     }
   }
 
@@ -370,6 +387,63 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         error: err => console.error('Folder dialog failed:', err)
       });
     }
+  }
+
+  toggleBgrCapture(): void {
+    if (this.bgrCaptureInProgress) {
+      this.cancelBgrCapture();
+      return;
+    }
+
+    const targetFolder = normalizePath(this.otherSettings.save_location || '').trim();
+    if (!targetFolder || !this.isConnected || this.measurementActive || this.isAutofocusing) {
+      return;
+    }
+
+    this.bgrCaptureInProgress = true;
+    this.bgrCaptureCancelling = false;
+    this.sharedService.setMeasurementActive(true);
+
+    this.bgrCaptureSub = this.bgrCaptureService.start(targetFolder).pipe(
+      finalize(() => {
+        this.bgrCaptureInProgress = false;
+        this.bgrCaptureCancelling = false;
+        this.bgrCaptureSub = undefined;
+        this.sharedService.setMeasurementActive(false);
+      })
+    ).subscribe({
+      next: response => {
+        response.saved_images.forEach(image => {
+          this.sharedService.emitSavedImage({
+            path: image.path,
+            tabletIndex: 0
+          });
+        });
+        console.info(
+          response.status === 'completed'
+            ? `BGR image set ${response.series_index} saved.`
+            : `BGR image set ${response.series_index} cancelled after ${response.saved_images.length} image(s).`
+        );
+      },
+      error: error => console.error('BGR capture series failed.', error)
+    });
+  }
+
+  private cancelBgrCapture(): void {
+    if (this.bgrCaptureCancelling) {
+      return;
+    }
+    this.bgrCaptureCancelling = true;
+    this.bgrCancelSub = this.bgrCaptureService.cancel().subscribe({
+      next: () => {
+        this.bgrCancelSub = undefined;
+      },
+      error: error => {
+        console.error('BGR capture cancellation failed.', error);
+        this.bgrCaptureCancelling = false;
+        this.bgrCancelSub = undefined;
+      }
+    });
   }
 
   startConnectionPolling(intervalMs: number = 1000): void {

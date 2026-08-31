@@ -32,6 +32,7 @@ FILTER_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
 FILTER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
 MAX_CONFIGURED_FILTERS = 100
 EMPTY_FILTER_KEY = 'empty'
+HEIGHT_OFFSET_REFERENCE_FILTER_NAMES = frozenset(('kék', 'blue'))
 VIS_INCOMPATIBLE_FILTER_NAMES = frozenset(('255nm', '265nm', '365nm'))
 DEFAULT_MAX_HEIGHT_OFFSET_UP_MM = 5.0
 DEFAULT_MAX_HEIGHT_OFFSET_DOWN_MM = -5.0
@@ -280,6 +281,11 @@ def validate_filter_settings(
         if re.sub(r'[\s_-]+', '', definition['name']).casefold()
         in VIS_INCOMPATIBLE_FILTER_NAMES
     }
+    reference_filter_ids = {
+        definition['id']
+        for definition in normalized_filters
+        if definition['name'].casefold() in HEIGHT_OFFSET_REFERENCE_FILTER_NAMES
+    }
     for filter_key in expected_offset_keys:
         row = height_offsets[filter_key]
         if not isinstance(row, dict) or set(row) != set(LIGHT_CHANNELS):
@@ -288,7 +294,10 @@ def validate_filter_settings(
         for channel in LIGHT_CHANNELS:
             value = (
                 0.0
-                if channel == 'vis' and filter_key in vis_incompatible_filter_ids
+                if channel == 'vis' and (
+                    filter_key in vis_incompatible_filter_ids
+                    or filter_key in reference_filter_ids
+                )
                 else _finite_number(row[channel], None)
             )
             if value is None or not max_height_offset_down_mm <= value <= max_height_offset_up_mm:
@@ -299,9 +308,8 @@ def validate_filter_settings(
             normalized_row[channel] = value
         normalized_height_offsets[filter_key] = normalized_row
 
-    # The height matrix remains calibrated against physical empty-filter/VIS,
-    # even when autofocus uses another configured combination.
-    normalized_height_offsets[EMPTY_FILTER_KEY]['vis'] = 0.0
+    # VIS with the configured blue filter is the height-matrix zero. The
+    # physical empty-filter/VIS combination remains independently calibratable.
     return {
         'filters': normalized_filters,
         'slots': normalized_slots,
@@ -391,7 +399,7 @@ def migrate_settings(settings):
     model. Schema v3 installs the selector order verified on the physical
     Octopus controller so stale packaged settings cannot rotate wavelengths.
     Schema v8 expands the former per-filter height value into a
-    filter-by-wavelength matrix whose empty-filter/VIS cell is the fixed zero.
+    filter-by-wavelength matrix. The current calibration zero is blue-filter/VIS.
     Schema v9 adds a validated autofocus light/brightness/filter selection.
     """
     if not isinstance(settings, dict):

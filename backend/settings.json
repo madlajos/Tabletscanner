@@ -1,16 +1,16 @@
 {
     "settings_schema_version": 9,
     "camera_params": {
-        "ExposureTime": 10000.0,
+        "ExposureTime": 30000.0,
         "Gamma": 1.0,
         "Gain": 0.0
     },
     "other_settings": {
         "objective": "1.0x",
-        "save_location": "D:/martin",
-        "background_subtraction": true,
+        "save_location": "C:/Users/madlajos/Desktop/TabletScanner/POROK/F67832",
+        "background_subtraction": false,
         "save_settings": false,
-        "camera_settings_file": "D:/source/Tabletscanner/backend/a2A4508-20ucBAS_40697387.pfs",
+        "camera_settings_file": "C:/Users/madlajos/Desktop/a2A2840-48umUV_41945138.pfs",
         "spacer_rings": "1"
     },
     "auto_measurement_settings": {
@@ -31,19 +31,19 @@
                 "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 5.0
+                "full_timeout_seconds": 30.0
             },
             "uv310": {
                 "dim_percent": 50.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 5.0
+                "full_timeout_seconds": 30.0
             },
             "uv365": {
                 "dim_percent": 70.0,
                 "full_percent": 100.0,
                 "dim_timeout_seconds": 100.0,
-                "full_timeout_seconds": 5.0
+                "full_timeout_seconds": 30.0
             }
         },
         "output_selectors": {
@@ -55,8 +55,8 @@
     },
     "advanced_settings": {
         "use_virtual_com_port": false,
-        "max_height_offset_up_mm": 5.0,
-        "max_height_offset_down_mm": -5.0,
+        "max_height_offset_up_mm": 20.0,
+        "max_height_offset_down_mm": -20.0,
         "first_tablet_x_mm": 6.3,
         "first_tablet_y_mm": 3.5,
         "first_tablet_z_mm": 15.8,
@@ -104,41 +104,41 @@
             "7f4c7a34-1660-4a66-99d5-c380c0c04c66"
         ],
         "height_offsets_mm": {
-            "7447fe07-3a99-4542-9d10-1e7082f0e9e7": {
-                "uv255": 0.0,
+            "9569ff7e-0e15-4ef3-b0a8-6994fb84b631": {
+                "uv255": -0.42,
                 "uv310": 0.0,
                 "uv365": 0.0,
-                "vis": -4.5
+                "vis": 0.0
             },
             "244bd032-e932-4425-9e8c-1915d099cf0a": {
-                "uv255": 0.0,
+                "uv255": -3.22,
                 "uv310": 0.0,
                 "uv365": 0.0,
-                "vis": -1.5
+                "vis": -3.11
             },
             "07641f64-d518-4657-9799-c699ee4c8f24": {
-                "uv255": 0.0,
+                "uv255": 19.0,
                 "uv310": 0.0,
                 "uv365": 0.0,
-                "vis": 5.0
+                "vis": 0.0
             },
-            "9569ff7e-0e15-4ef3-b0a8-6994fb84b631": {
-                "uv255": 0.0,
+            "7447fe07-3a99-4542-9d10-1e7082f0e9e7": {
+                "uv255": -5.98,
                 "uv310": 0.0,
                 "uv365": 0.0,
-                "vis": 1.0
+                "vis": -4.66
             },
             "7f4c7a34-1660-4a66-99d5-c380c0c04c66": {
-                "uv255": 0.0,
+                "uv255": 5.5,
                 "uv310": 0.0,
                 "uv365": 0.0,
-                "vis": 3.0
+                "vis": 0.0
             },
             "empty": {
                 "uv255": 0.0,
                 "uv310": 0.0,
                 "uv365": 0.0,
-                "vis": 0.0
+                "vis": -1.87
             }
         }
     },
@@ -150,8 +150,8 @@
         "offset_y": 4
     },
     "autofocus_settings": {
-        "channel": "uv365",
+        "channel": "vis",
         "brightness": "full",
-        "filter_position": 1
+        "filter_position": 4
     }
 }

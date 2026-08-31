@@ -60,7 +60,9 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   private motionSub?: Subscription;
   private autofocusErrorSub?: Subscription;
   private autofocusActiveSub?: Subscription;
+  private scannerOperationSub?: Subscription;
   isAutofocusing = false;
+  scannerOperationActive = false;
 
   // Tablet IDs, bottom-left = 1, top-right = gridSize^2
   readonly tablets = Array.from(
@@ -171,6 +173,9 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.motionSub = this.sharedService.motionPlatformConnectionStatus$.subscribe(status => {
       this.motionConnected = status;
     });
+    this.scannerOperationSub = this.sharedService.measurementActive$.subscribe(active => {
+      this.scannerOperationActive = active;
+    });
 
     // Subscribe to homed state from SharedService (published by motion-control component)
     this.homedSub = this.sharedService.motionHomed$.subscribe(homed => {
@@ -250,6 +255,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.homedSub?.unsubscribe();
     this.autofocusErrorSub?.unsubscribe();
     this.autofocusActiveSub?.unsubscribe();
+    this.scannerOperationSub?.unsubscribe();
     this.traySettingsSub?.unsubscribe();
     
     // Ensure measurement is marked inactive on destroy
@@ -303,7 +309,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       return true; // allow stopping
     }
 
-    if (this.isAutofocusing) {
+    if (this.isAutofocusing || this.scannerOperationActive) {
       return false;
     }
 
@@ -881,6 +887,9 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     // Toggle behavior - if running, stop
     if (this.measurementActive) {
       this.stopMeasurement();
+      return;
+    }
+    if (this.scannerOperationActive) {
       return;
     }
 

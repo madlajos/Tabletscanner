@@ -1,5 +1,9 @@
 {
   "E1401": "Hiányzó lámpabeállítások a lámpa felkapcsolásához",
+  "E1501": "A BGR képsorozat nem indítható, mert egy másik művelet folyamatban van.",
+  "E1502": "A Kék, Zöld és Piros szűrőt egy-egy szűrőváltó-helyhez kell rendelni.",
+  "E1503": "A BGR képsorozat nem menthető a kiválasztott mappába.",
+  "E1504": "A BGR képsorozathoz csatlakoztatott és nullázott mozgásplatform, szűrőváltó és kamera szükséges.",
   "E1111": "Kamera csatlakozási hiba",
   "E1201": "Asztalvezérlő csatlakozási hiba",
   "E1202": "A tengely nullázása sikertelen. Ellenőrizze a végállás- vagy Hall-szenzort.",

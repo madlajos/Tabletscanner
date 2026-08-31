@@ -28,7 +28,7 @@ export interface MeasurementRecord {
 export interface SavedImageInfo {
   path: string;
   tabletIndex: number;
-  lightType: 'dome' | 'bar';
+  lightType?: 'dome' | 'bar';
 }
 
 

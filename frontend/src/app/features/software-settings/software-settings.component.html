@@ -101,7 +101,7 @@
                             <input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any"
                               [(ngModel)]="filterSettings.height_offsets_mm['empty'][channel.id]"
                               (ngModelChange)="onFilterChanged()"
-                              [disabled]="measurementActive || isAutofocusZeroCell('empty', channel.id)"
+                              [disabled]="measurementActive"
                               [attr.aria-label]="'Üres szűrő, ' + channel.label + ' magasság-eltolás'">
                             <span>mm</span>
                           </span>
@@ -114,7 +114,8 @@
                             *ngIf="!isUnavailableHeightOffsetCombination(filter, channel.id)">
                             <input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any"
                               [(ngModel)]="filterSettings.height_offsets_mm[filter.id][channel.id]"
-                              (ngModelChange)="onFilterChanged()" [disabled]="measurementActive"
+                              (ngModelChange)="onFilterChanged()"
+                              [disabled]="measurementActive || isHeightOffsetReferenceCell(filter.id, channel.id)"
                               [attr.aria-label]="(filter.name || 'Névtelen szűrő') + ', ' + channel.label + ' magasság-eltolás'">
                             <span>mm</span>
                           </span>

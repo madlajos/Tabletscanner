@@ -73,6 +73,22 @@
             </div>
           </td>
         </tr>
+
+        <tr>
+          <td colspan="3" class="bgr-capture-cell">
+            <button
+              type="button"
+              class="bgr-capture-button"
+              [class.running]="bgrCaptureInProgress"
+              (click)="toggleBgrCapture()"
+              [disabled]="bgrCaptureCancelling || (!bgrCaptureInProgress && (!isConnected || measurementActive || isAutofocusing || !otherSettings.save_location))"
+              [attr.aria-pressed]="bgrCaptureInProgress"
+              [attr.aria-label]="bgrCaptureInProgress ? 'BGR képsorozat megszakítása' : 'Automatikus BGR képsorozat indítása'"
+            >
+              {{ bgrCaptureCancelling ? 'Megszakítás…' : (bgrCaptureInProgress ? 'BGR mérés leállítása' : 'Automatikus BGR mérés') }}
+            </button>
+          </td>
+        </tr>
       </tbody>
     </table>
   </section>

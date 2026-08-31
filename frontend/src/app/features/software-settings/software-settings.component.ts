@@ -525,8 +525,12 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     );
   }
 
-  isAutofocusZeroCell(filterKey: string, channel: HeightOffsetChannel): boolean {
-    return filterKey === 'empty' && channel === 'vis';
+  isHeightOffsetReferenceCell(filterKey: string, channel: HeightOffsetChannel): boolean {
+    if (channel !== 'vis') return false;
+    const filterName = this.filterSettings.filters.find(filter => filter.id === filterKey)?.name;
+    if (!filterName) return false;
+    const normalizedName = filterName.trim().toLocaleLowerCase('hu-HU');
+    return normalizedName === 'kék' || normalizedName === 'blue';
   }
 
   isUnavailableHeightOffsetCombination(
@@ -576,10 +580,11 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       for (const channel of this.heightOffsetChannels) {
         const unavailable = !!filter
           && this.isUnavailableHeightOffsetCombination(filter, channel.id);
-        const value = key === 'empty' && channel.id === 'vis' || unavailable
+        const referenceCell = this.isHeightOffsetReferenceCell(key, channel.id);
+        const value = referenceCell || unavailable
           ? 0
           : Number(sourceRow[channel.id]);
-        if (unavailable) {
+        if (referenceCell || unavailable) {
           sourceRow[channel.id] = 0;
         }
         if (

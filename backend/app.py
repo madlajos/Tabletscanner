@@ -13,6 +13,14 @@ from cameracontrol import (apply_camera_settings,
 import porthandler
 import motioncontrols
 import filter_revolver
+from filter_capture_series import (
+    FilterCaptureSeriesCoordinator,
+    capture_filename,
+    capture_folder_is_empty,
+    capture_series_stem,
+    next_capture_series_index,
+    resolve_filter_targets,
+)
 import height_offset_control
 from height_offset_control import HeightOffsetCommandError
 import os
@@ -92,6 +100,7 @@ light_controller = LightController(
     porthandler.write_and_wait,
     operation_lock=porthandler.motion_lock,
 )
+bgr_capture_coordinator = FilterCaptureSeriesCoordinator()
 
 
 def four_channel_lamp_timeout_monitor():
@@ -1415,6 +1424,41 @@ def move_toolhead_absolute():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     
     
+def _run_configured_manual_autofocus(motion_platform, skip_empty_check: bool) -> dict:
+    """Run the manual autofocus workflow while the caller owns ``motion_busy``."""
+    # Always clear the abort flag so a previous cancelled operation cannot block this run.
+    globals.autofocus_abort = False
+
+    # Select the acknowledged filter slot first, then activate the saved
+    # illumination through the four-channel interlock.
+    autofocus_settings, filter_settings = _select_configured_autofocus_hardware(
+        motion_platform
+    )
+    height_offset_control.invalidate_reference()
+
+    response = autofocus_main.autofocus_coarse(
+        motion_platform,
+        do_frame_touch_check=False,
+        skip_empty_check=skip_empty_check,
+    )
+    if response.get('status') == 'OK':
+        configured_offset = height_offset_control.configured_offset(
+            filter_settings,
+            autofocus_settings['filter_position'],
+            autofocus_settings['channel'],
+        )
+        reference_z = height_offset_control.record_combination_reference(
+            getattr(globals, 'last_toolhead_pos', {}).get('z'),
+            configured_offset,
+        )
+        response['autofocus_reference'] = height_offset_control.status()
+        response['autofocus_settings'] = autofocus_settings
+        app.logger.info('Manual autofocus height-offset reference set to Z=%.4f.', reference_z)
+    else:
+        height_offset_control.invalidate_reference()
+    return response
+
+
 @app.route('/api/autofocus_coarse', methods=['POST'])
 def autofocus_coarse():
     motion_platform = globals.motion_platform
@@ -1444,35 +1488,12 @@ def autofocus_coarse():
         globals.motion_busy = True
 
     try:
-        # Always clear abort flag so manual AF is not blocked by a previous auto-measurement stop
-        globals.autofocus_abort = False
-
-        # Select the acknowledged filter slot first, then activate the saved
-        # illumination through the four-channel interlock.
-        autofocus_settings, filter_settings = _select_configured_autofocus_hardware(
-            motion_platform
-        )
-        height_offset_control.invalidate_reference()
-
         data = request.get_json(silent=True) or {}
-        skip_empty = bool(data.get('skip_empty_check', False))
-        resp = autofocus_main.autofocus_coarse(motion_platform, do_frame_touch_check=False, skip_empty_check=skip_empty)
-        if resp.get('status') == 'OK':
-            configured_offset = height_offset_control.configured_offset(
-                filter_settings,
-                autofocus_settings['filter_position'],
-                autofocus_settings['channel'],
-            )
-            reference_z = height_offset_control.record_combination_reference(
-                getattr(globals, 'last_toolhead_pos', {}).get('z'),
-                configured_offset,
-            )
-            resp['autofocus_reference'] = height_offset_control.status()
-            resp['autofocus_settings'] = autofocus_settings
-            app.logger.info('Manual autofocus height-offset reference set to Z=%.4f.', reference_z)
-        else:
-            height_offset_control.invalidate_reference()
-        return jsonify(resp)
+        response = _run_configured_manual_autofocus(
+            motion_platform,
+            skip_empty_check=bool(data.get('skip_empty_check', False)),
+        )
+        return jsonify(response)
     except filter_revolver.FilterRevolverCommandError as error:
         globals.homed_axes.discard('a')
         globals.filter_revolver_homed = False
@@ -2090,6 +2111,265 @@ def _check_devices_connected():
         }), 503
     
     return motion_platform, camera, None, None
+
+
+def _bgr_capture_result(status: str, series_index: int, saved_images: list[dict]):
+    """Build the common completed/cancelled BGR series response."""
+    return jsonify({
+        'status': status,
+        'series_index': series_index,
+        'saved_images': saved_images,
+    }), 200
+
+
+@app.route('/api/bgr-capture-series', methods=['POST'])
+def capture_bgr_filter_series():
+    """Select the configured blue, green, and red filters and save one image per filter."""
+    if not bgr_capture_coordinator.begin():
+        return jsonify({
+            'error': 'A BGR capture series is already running.',
+            'code': ErrorCode.BGR_CAPTURE_BUSY,
+            'popup': True,
+        }), 409
+
+    owns_motion = False
+    saved_images = []
+    series_index = 1
+    initial_autofocus_started = False
+    series_completed = False
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_target_folder = data.get('target_folder', '')
+        target_folder = (
+            _normalize_path(raw_target_folder).strip()
+            if isinstance(raw_target_folder, str)
+            else ''
+        )
+        if not target_folder or not os.path.isdir(target_folder):
+            return jsonify({
+                'error': 'The configured save location does not exist or is not a folder.',
+                'code': ErrorCode.BGR_SAVE_FAILED,
+                'popup': True,
+            }), 400
+
+        try:
+            stem = capture_series_stem(target_folder)
+            folder_was_empty = capture_folder_is_empty(target_folder)
+        except (OSError, ValueError) as error:
+            app.logger.warning('BGR capture save location rejected: %s', error)
+            return jsonify({
+                'error': str(error),
+                'code': ErrorCode.BGR_SAVE_FAILED,
+                'popup': True,
+            }), 400
+
+        motion_platform, _camera, error_response, error_status = _check_devices_connected()
+        if error_response:
+            return error_response, error_status
+        if not globals.toolhead_homed or not globals.filter_revolver_homed:
+            return jsonify({
+                'error': 'Home the motion platform and filter revolver before BGR capture.',
+                'code': ErrorCode.BGR_CAPTURE_NOT_READY,
+                'popup': True,
+            }), 409
+
+        try:
+            targets = resolve_filter_targets(_current_filter_settings())
+        except ValueError as error:
+            app.logger.warning('BGR capture filter configuration rejected: %s', error)
+            return jsonify({
+                'error': str(error),
+                'code': ErrorCode.BGR_FILTER_CONFIGURATION_INVALID,
+                'popup': True,
+            }), 400
+
+        with porthandler.motion_lock:
+            if globals.motion_busy:
+                return jsonify({
+                    'error': 'The motion platform is busy with another operation.',
+                    'code': ErrorCode.BGR_CAPTURE_BUSY,
+                    'popup': True,
+                }), 409
+            globals.motion_busy = True
+            owns_motion = True
+
+        if folder_was_empty:
+            if bgr_capture_coordinator.cancellation_requested():
+                return _bgr_capture_result('cancelled', series_index, saved_images)
+            bgr_capture_coordinator.set_autofocus_in_progress(True)
+            try:
+                if bgr_capture_coordinator.cancellation_requested():
+                    return _bgr_capture_result('cancelled', series_index, saved_images)
+                initial_autofocus_started = True
+                autofocus_response = _run_configured_manual_autofocus(
+                    motion_platform,
+                    skip_empty_check=True,
+                )
+            except filter_revolver.FilterRevolverCommandError as error:
+                globals.homed_axes.discard('a')
+                globals.filter_revolver_homed = False
+                globals.filter_revolver_position = None
+                height_offset_control.invalidate_reference()
+                app.logger.warning('Initial BGR autofocus filter movement failed: %s', error)
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.BGR_CAPTURE_NOT_READY,
+                    'popup': True,
+                }), 504
+            except (LampSettingsError, LightConfigurationError, ValueError) as error:
+                height_offset_control.invalidate_reference()
+                app.logger.warning('Initial BGR autofocus configuration failed: %s', error)
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.BGR_CAPTURE_NOT_READY,
+                    'popup': True,
+                }), 400
+            except LightCommandError as error:
+                height_offset_control.invalidate_reference()
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
+                    'popup': True,
+                }), 503
+            except (OSError, PermissionError):
+                height_offset_control.invalidate_reference()
+                return _handle_motion_usb_disconnect(
+                    motion_platform,
+                    'initial BGR autofocus',
+                )
+            finally:
+                bgr_capture_coordinator.set_autofocus_in_progress(False)
+
+            if bgr_capture_coordinator.cancellation_requested():
+                return _bgr_capture_result('cancelled', series_index, saved_images)
+            if autofocus_response.get('status') != 'OK':
+                error_code = autofocus_response.get('code') or ErrorCode.GENERIC
+                return jsonify({
+                    'error': autofocus_response.get('message') or 'Autofocus failed.',
+                    'code': error_code,
+                    'popup': True,
+                }), 422
+
+        try:
+            # Re-evaluate after autofocus because it can be a long-running operation.
+            series_index = next_capture_series_index(target_folder, stem)
+        except OSError as error:
+            app.logger.warning('BGR capture save location became unavailable: %s', error)
+            return jsonify({
+                'error': str(error),
+                'code': ErrorCode.BGR_SAVE_FAILED,
+                'popup': True,
+            }), 400
+
+        for target in targets:
+            if bgr_capture_coordinator.cancellation_requested():
+                return _bgr_capture_result('cancelled', series_index, saved_images)
+
+            try:
+                _move_filter_revolver_to_position(motion_platform, target.position)
+                height_offset = _apply_selected_height_offset(motion_platform)
+            except filter_revolver.FilterRevolverCommandError as error:
+                globals.homed_axes.discard('a')
+                globals.filter_revolver_homed = False
+                globals.filter_revolver_position = None
+                app.logger.warning('BGR capture filter movement failed: %s', error)
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.BGR_CAPTURE_NOT_READY,
+                    'popup': True,
+                }), 504
+            except ValueError as error:
+                app.logger.warning('BGR capture filter position is invalid: %s', error)
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.BGR_CAPTURE_NOT_READY,
+                    'popup': True,
+                }), 409
+            except HeightOffsetCommandError as error:
+                app.logger.warning('BGR capture height correction failed: %s', error)
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.MOTION_HEIGHT_OFFSET_FAILED,
+                    'popup': True,
+                }), 422
+            except (OSError, PermissionError):
+                return _handle_motion_usb_disconnect(
+                    motion_platform,
+                    f'BGR capture filter {target.name}',
+                )
+
+            # A selected filter and its Z correction form one safe, indivisible step.
+            if bgr_capture_coordinator.cancellation_requested():
+                return _bgr_capture_result('cancelled', series_index, saved_images)
+            if bgr_capture_coordinator.wait_for_cancellation(0.2):
+                return _bgr_capture_result('cancelled', series_index, saved_images)
+
+            filename = capture_filename(stem, series_index, target.suffix)
+            active_light = light_controller.status().get('active_channel')
+            try:
+                paths = _capture_and_save_image(
+                    target_folder,
+                    filename,
+                    background_subtraction=False,
+                    light_type=active_light,
+                    filter_position=target.position,
+                )
+            except (OSError, PermissionError) as error:
+                app.logger.warning('BGR image save failed for %s: %s', filename, error)
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.BGR_SAVE_FAILED,
+                    'popup': True,
+                }), 500
+            except RuntimeError as error:
+                app.logger.warning('BGR camera capture failed for %s: %s', filename, error)
+                return jsonify({
+                    'error': str(error),
+                    'code': ErrorCode.CAMERA_DISCONNECTED,
+                    'popup': True,
+                }), 503
+
+            saved_images.append({
+                'filter_name': target.name,
+                'suffix': target.suffix,
+                'filter_position': target.position,
+                'path': paths[0],
+                'height_offset': height_offset,
+            })
+
+        series_completed = True
+        return _bgr_capture_result('completed', series_index, saved_images)
+    except Exception as error:
+        app.logger.exception('Unexpected BGR capture series failure')
+        return jsonify({
+            'error': str(error),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
+        }), 500
+    finally:
+        if owns_motion and initial_autofocus_started and not series_completed:
+            try:
+                _turn_off_all_lights()
+            except Exception as off_error:
+                app.logger.warning(
+                    'Could not switch off lights after interrupted initial BGR autofocus: %s',
+                    off_error,
+                )
+        if owns_motion:
+            globals.motion_busy = False
+            globals.autofocus_abort = False
+        bgr_capture_coordinator.finish()
+
+
+@app.route('/api/bgr-capture-series/cancel', methods=['POST'])
+def cancel_bgr_filter_series():
+    """Request cooperative cancellation after the current safe hardware step."""
+    requested = bgr_capture_coordinator.request_cancel()
+    if requested and bgr_capture_coordinator.autofocus_in_progress():
+        globals.autofocus_abort = True
+    return jsonify({
+        'status': 'cancellation_requested' if requested else 'idle',
+    }), 200
 
 
 def _format_capture_timestamp(dt: datetime) -> str:

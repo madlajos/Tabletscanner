@@ -18,7 +18,7 @@ def invalidate_reference() -> None:
 
 
 def record_reference(z_position) -> float:
-    """Record the focused empty-filter/VIS Z coordinate as the zero point."""
+    """Record the focused blue-filter/VIS Z coordinate as the zero point."""
     try:
         reference_z = float(z_position)
     except (TypeError, ValueError) as error:
@@ -36,7 +36,7 @@ def record_reference(z_position) -> float:
 def record_combination_reference(z_position, configured_offset_mm) -> float:
     """Rebase a focused filter/light combination onto the height-matrix zero.
 
-    Matrix offsets are calibrated relative to empty-filter/VIS. When autofocus
+    Matrix offsets are calibrated relative to blue-filter/VIS. When autofocus
     uses a different combination, its focused Z is therefore ``zero + offset``.
     Store the derived zero so subsequent filter/light changes continue to use
     the existing matrix correctly.

@@ -1039,9 +1039,9 @@ def final_out_of_frame_check(
             print(f"[ROUNDED_CHECK] allow NOT_ENOUGH_INTERIOR (touch_count={touch_count})")
             ok_round = True
 
-        if (ok_round is None) or (ok_round is False):
-            maybe_dump_debug(debug, debug_buffer, str(rounded_error_code))
-            return False, str(rounded_error_code), c
+        # if (ok_round is None) or (ok_round is False):
+        #    maybe_dump_debug(debug, debug_buffer, str(rounded_error_code))
+        #    return False, str(rounded_error_code), c
 
     if not bool(do_frame_touch_check):
         print("[FRAME_TOUCH] skipped (do_frame_touch_check=False)")

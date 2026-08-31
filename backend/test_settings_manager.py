@@ -231,7 +231,6 @@ class SettingsMigrationTests(unittest.TestCase):
             'slots': [None, 'uv-310', None, None, None, None],
             'height_offsets_mm': {
                 **height_offset_matrix('uv-310', value=1.5),
-                'empty': {'uv255': 1.5, 'uv310': 1.5, 'uv365': 1.5, 'vis': 0.0},
             },
         }, settings_manager.validate_filter_settings(payload))
         with self.assertRaises(ValueError):
@@ -269,6 +268,31 @@ class SettingsMigrationTests(unittest.TestCase):
 
         self.assertEqual(0.0, normalized['height_offsets_mm']['f255']['vis'])
         self.assertEqual(0.0, normalized['height_offsets_mm']['f365']['vis'])
+
+    def test_blue_filter_vis_is_zero_reference_while_empty_vis_is_editable(self):
+        payload = {
+            'filters': [{
+                'id': 'blue', 'name': 'Kék',
+                'wavelength_range': '450–500', 'color': '#0000ff',
+            }],
+            'slots': [None, 'blue', None, None, None, None],
+            'height_offsets_mm': {
+                **height_offset_matrix('blue', value=1.5),
+                'empty': {
+                    **height_offset_matrix()['empty'],
+                    'vis': -1.25,
+                },
+                'blue': {
+                    **height_offset_matrix('blue')['blue'],
+                    'vis': 2.75,
+                },
+            },
+        }
+
+        normalized = settings_manager.validate_filter_settings(payload)
+
+        self.assertEqual(-1.25, normalized['height_offsets_mm']['empty']['vis'])
+        self.assertEqual(0.0, normalized['height_offsets_mm']['blue']['vis'])
 
     def test_filter_settings_update_persists_without_losing_other_categories(self):
         settings_manager.set_settings({'camera_params': {'Gamma': 1.0}})
