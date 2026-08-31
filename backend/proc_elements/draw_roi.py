@@ -67,6 +67,47 @@ def _crop_to_mask_bbox(img, mask):
     return img[y:y + h, x:x + w]
 
 
+def _crop_rotated_rect(img, roi):
+    """Extract a rotated rectangular ROI and straighten it in one affine warp."""
+    x = float(roi["x"])
+    y = float(roi["y"])
+    width = int(roi["width"])
+    height = int(roi["height"])
+    angle = float(roi.get("angle", 0.0))
+
+    if width <= 0 or height <= 0:
+        return img
+
+    # Map output pixels back into the rotated rectangle in the source image.
+    # Keeping the ROI centre convention identical to _build_mask ensures that
+    # the preview outline, mask and extracted image all refer to the same area.
+    cx = x + width / 2.0
+    cy = y + height / 2.0
+    radians = np.radians(angle)
+    cos_a = float(np.cos(radians))
+    sin_a = float(np.sin(radians))
+    transform = np.array([
+        [cos_a, -sin_a, cx - cos_a * width / 2.0 + sin_a * height / 2.0],
+        [sin_a, cos_a, cy - sin_a * width / 2.0 - cos_a * height / 2.0],
+    ], dtype=np.float32)
+
+    return cv2.warpAffine(
+        img,
+        transform,
+        (width, height),
+        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+
+
+def _crop_to_roi(img, mask, roi):
+    """Crop to a ROI, straightening rotated rectangles instead of using their bbox."""
+    if roi.get("type", "rect") == "rect" and abs(float(roi.get("angle", 0.0))) >= 0.01:
+        return _crop_rotated_rect(img, roi)
+    return _crop_to_mask_bbox(img, mask)
+
+
 def _resolve_outline_color_value(img, shape_outline_color):
     color_value = 255 if str(shape_outline_color).lower() in ("fehér", "feher", "white") else 0
     if img.ndim == 2:
@@ -203,7 +244,7 @@ def mask_roi(
         if shape_only:
             output_images.append(_draw_roi_outline(img, current_roi, shape_outline_color, shape_outline_thickness))
         elif crop_mode:
-            output_images.append(_crop_to_mask_bbox(img, mask))
+            output_images.append(_crop_to_roi(img, mask, current_roi))
         elif apply_mask:
             # Apply mask: keep ROI, fill outside with background_color
             if background_color == 0:

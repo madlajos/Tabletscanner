@@ -29,17 +29,29 @@ import { PipelinePreviewComponent } from './pipeline-preview.component';
   styleUrls: ['./recipe-creator.component.css'],
 })
 export class RecipeCreatorComponent implements OnInit, OnDestroy {
+  private static readonly CANVAS_HEIGHT_KEY = 'recipeCreatorCanvasHeight';
+
   recipeName = '';
   isDirty = false;
   showLoadDialog = false;
   savedRecipes: RecipeSummary[] = [];
   showSaveInput = false;
   saveInputName = '';
+  showNewRecipeConfirm = false;
+  showOverwriteConfirm = false;
   editingDescriptionFor: string | null = null;
   editingDescriptionText = '';
   showDeleteConfirm: string | null = null;
+  canvasHeight = 220;
 
   private subs: Subscription[] = [];
+  private resizeState: {
+    startY: number;
+    startHeight: number;
+    centerHeight: number;
+    onMove: (event: PointerEvent) => void;
+    onUp: () => void;
+  } | null = null;
 
   constructor(
     public pipelineState: PipelineStateService,
@@ -48,6 +60,7 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.pipelineState.loadCatalog();
+    this.restoreCanvasHeight();
 
     this.subs.push(
       this.pipelineState.recipeName$.subscribe((n) => (this.recipeName = n)),
@@ -57,10 +70,66 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+    this.stopCanvasResize();
+  }
+
+  startCanvasResize(event: PointerEvent): void {
+    event.preventDefault();
+    const center = (event.currentTarget as HTMLElement).closest('.creator-center') as HTMLElement | null;
+    if (!center) return;
+
+    this.stopCanvasResize();
+    const state = {
+      startY: event.clientY,
+      startHeight: this.canvasHeight,
+      centerHeight: center.getBoundingClientRect().height,
+      onMove: (moveEvent: PointerEvent) => this.resizeCanvas(moveEvent),
+      onUp: () => this.stopCanvasResize(),
+    };
+    this.resizeState = state;
+    document.body.classList.add('resizing-canvas');
+    window.addEventListener('pointermove', state.onMove);
+    window.addEventListener('pointerup', state.onUp, { once: true });
+  }
+
+  private resizeCanvas(event: PointerEvent): void {
+    if (!this.resizeState) return;
+    const delta = this.resizeState.startY - event.clientY;
+    const maxHeight = Math.max(160, this.resizeState.centerHeight - 160);
+    this.canvasHeight = this.clamp(this.resizeState.startHeight + delta, 120, maxHeight);
+  }
+
+  private stopCanvasResize(): void {
+    if (!this.resizeState) return;
+    window.removeEventListener('pointermove', this.resizeState.onMove);
+    window.removeEventListener('pointerup', this.resizeState.onUp);
+    document.body.classList.remove('resizing-canvas');
+    localStorage.setItem(RecipeCreatorComponent.CANVAS_HEIGHT_KEY, String(Math.round(this.canvasHeight)));
+    this.resizeState = null;
+  }
+
+  private restoreCanvasHeight(): void {
+    const saved = Number(localStorage.getItem(RecipeCreatorComponent.CANVAS_HEIGHT_KEY));
+    if (Number.isFinite(saved) && saved > 0) {
+      this.canvasHeight = this.clamp(saved, 120, 600);
+    }
+  }
+
+  private clamp(value: number, min: number, max: number): number {
+    return Math.min(Math.max(value, min), max);
   }
 
   onNew(): void {
+    this.showNewRecipeConfirm = true;
+  }
+
+  confirmNewRecipe(): void {
+    this.showNewRecipeConfirm = false;
     this.pipelineState.newPipeline();
+  }
+
+  cancelNewRecipe(): void {
+    this.showNewRecipeConfirm = false;
   }
 
   onSave(): void {
@@ -69,7 +138,18 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
       this.saveInputName = '';
       return;
     }
-    this.doSave(this.recipeName);
+    this.showOverwriteConfirm = true;
+  }
+
+  confirmOverwrite(): void {
+    this.showOverwriteConfirm = false;
+    if (this.recipeName) {
+      this.doSave(this.recipeName);
+    }
+  }
+
+  cancelOverwrite(): void {
+    this.showOverwriteConfirm = false;
   }
 
   onSaveAs(): void {
@@ -93,7 +173,7 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
     const doc: PipelineDocument = { ...pipeline, name };
     this.recipeService.saveRecipe(doc).subscribe({
       next: () => {
-        this.pipelineState.loadPipeline({ ...doc });
+        this.pipelineState.markSaved(name);
       },
       error: (err) => console.error('Save failed:', err),
     });
@@ -114,6 +194,14 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
     this.recipeService.loadRecipe(name).subscribe({
       next: (doc) => this.pipelineState.loadPipeline(doc),
       error: (err) => console.error('Load failed:', err),
+    });
+  }
+
+  appendRecipe(name: string, event: Event): void {
+    event.stopPropagation();
+    this.recipeService.loadRecipe(name).subscribe({
+      next: (doc) => this.pipelineState.appendPipeline(doc),
+      error: (err) => console.error('Append failed:', err),
     });
   }
 

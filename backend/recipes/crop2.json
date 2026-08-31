@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "name": "crop2",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "cc56b965-6857-4e16-9328-9f64e117fce4",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "C:/Users/Lilla/Desktop/Pana_all_fina2"
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "fee2fe15-6c32-472e-99d8-40d532674f13",
+      "step_def_id": "apply_clahe",
+      "param_values": {
+        "clip_limit": 2,
+        "tile_x": 8,
+        "tile_y": 8
+      },
+      "order": 1
+    },
+    {
+      "instance_id": "617e6a56-01d1-4d8a-91ad-0344084e0157",
+      "step_def_id": "flat_field_correction",
+      "param_values": {
+        "method": "downsampled",
+        "alpha": 1,
+        "use_nlm": false,
+        "nlm_h": 3,
+        "sigma_bg": 80,
+        "down": 0.1,
+        "sigma_small": 8,
+        "final_blur": 3,
+        "percentile_low": 1,
+        "percentile_high": 99
+      },
+      "order": 2
+    },
+    {
+      "instance_id": "befedacf-d6fe-4f0c-a6e5-ccf873c7df81",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "space": "GRAY",
+        "channel": "GRAY"
+      },
+      "order": 3
+    },
+    {
+      "instance_id": "b26477b3-88ee-4c72-a478-74ac131cc13a",
+      "step_def_id": "mask_rect_roi",
+      "param_values": {
+        "apply_mask": true,
+        "background_color": "fekete",
+        "invert_mask": false,
+        "output_mode": "crop",
+        "roi_angle": 0,
+        "roi_cx": 0,
+        "roi_cy": 0,
+        "roi_height": 1223,
+        "roi_overrides": "{\"1\":{\"roi_angle\":21,\"roi_type\":\"rect\",\"roi_x\":275,\"roi_y\":1041,\"roi_width\":2107,\"roi_height\":1223},\"2\":{\"roi_angle\":32.7,\"roi_type\":\"rect\",\"roi_x\":357,\"roi_y\":799,\"roi_width\":2107,\"roi_height\":1223},\"3\":{\"roi_angle\":37.3,\"roi_type\":\"rect\",\"roi_x\":347,\"roi_y\":937,\"roi_width\":2107,\"roi_height\":1223},\"5\":{\"roi_angle\":21.6,\"roi_type\":\"rect\",\"roi_x\":379,\"roi_y\":813,\"roi_width\":2107,\"roi_height\":1223},\"6\":{\"roi_angle\":16,\"roi_type\":\"rect\",\"roi_x\":379,\"roi_y\":813,\"roi_width\":2107,\"roi_height\":1223},\"7\":{\"roi_angle\":29.5,\"roi_type\":\"rect\",\"roi_x\":379,\"roi_y\":900,\"roi_width\":2107,\"roi_height\":1223},\"8\":{\"roi_angle\":27.3,\"roi_type\":\"rect\",\"roi_x\":379,\"roi_y\":900,\"roi_width\":2107,\"roi_height\":1223},\"9\":{\"roi_angle\":27.4,\"roi_type\":\"rect\",\"roi_x\":379,\"roi_y\":900,\"roi_width\":2107,\"roi_height\":1223},\"11\":{\"roi_angle\":35.1,\"roi_type\":\"rect\",\"roi_x\":315,\"roi_y\":1024,\"roi_width\":2107,\"roi_height\":1223},\"12\":{\"roi_angle\":31.5,\"roi_type\":\"rect\",\"roi_x\":315,\"roi_y\":1024,\"roi_width\":2107,\"roi_height\":1223},\"13\":{\"roi_angle\":25,\"roi_type\":\"rect\",\"roi_x\":361,\"roi_y\":1115,\"roi_width\":2107,\"roi_height\":1223},\"14\":{\"roi_angle\":21.4,\"roi_type\":\"rect\",\"roi_x\":316,\"roi_y\":1032,\"roi_width\":2107,\"roi_height\":1223},\"15\":{\"roi_angle\":26.6,\"roi_type\":\"rect\",\"roi_x\":316,\"roi_y\":1032,\"roi_width\":2107,\"roi_height\":1223},\"16\":{\"roi_angle\":32.5,\"roi_type\":\"rect\",\"roi_x\":316,\"roi_y\":1032,\"roi_width\":2107,\"roi_height\":1223},\"17\":{\"roi_angle\":37.2,\"roi_type\":\"rect\",\"roi_x\":494,\"roi_y\":968,\"roi_width\":2107,\"roi_height\":1223}}",
+        "roi_points": "[]",
+        "roi_rx": 0,
+        "roi_ry": 0,
+        "roi_type": "rect",
+        "roi_width": 2107,
+        "roi_x": 494,
+        "roi_y": 968,
+        "shape_only": false,
+        "shape_outline_color": "fehér",
+        "shape_outline_thickness": 2
+      },
+      "order": 4
+    },
+    {
+      "instance_id": "56aa21b4-e9db-470f-8356-e293d9c6c3c1",
+      "step_def_id": "save_images",
+      "param_values": {
+        "output_folder": "C:/Users/Lilla/Desktop/Pana_all_fina2/crop/crop_2",
+        "name_prefix": "",
+        "name_suffix": ""
+      },
+      "order": 5
+    }
+  ],
+  "connections": [],
+  "created_at": "2026-07-13T14:43:53.676927+00:00",
+  "modified_at": "2026-07-13T15:04:56.725810+00:00"
+}

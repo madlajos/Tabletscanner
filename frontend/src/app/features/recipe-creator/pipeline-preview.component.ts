@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription, combineLatest } from 'rxjs';
+import { Subscription, combineLatest, forkJoin } from 'rxjs';
 import { DataType } from '../../models/pipeline.models';
 import { PipelineStateService } from '../../services/pipeline-state.service';
 import { RecipeService } from '../../services/recipe.service';
@@ -31,6 +31,23 @@ interface ScaleBarOverlayState {
   barColor: string;
 }
 
+interface BranchMergePanel {
+  label: string;
+  imageSrc: string;
+  sourceName: string;
+  imageWidth: number;
+  imageHeight: number;
+  imageCount: number;
+  isGrayscale: boolean;
+}
+
+interface ReferenceColorPreviewState {
+  sourceSrc: string;
+  alignedSrc: string;
+  cropSrcs: string[];
+  histograms: Record<'source' | 'reference' | 'aligned', number[][]>;
+}
+
 @Component({
   selector: 'app-pipeline-preview',
   standalone: true,
@@ -58,13 +75,23 @@ interface ScaleBarOverlayState {
                   (click)="toggleScale()" [disabled]="showScaleBar" title="Sk\u00e1la eszk\u00f6z">
               \uD83D\uDCD0
             </button>
-            <button class="tool-btn icon-btn icon-tool-btn" (click)="saveAnnotatedImage()" title="K\u00e9p ment\u00e9se"
-                    [disabled]="!imageSrc">
+            <button class="tool-btn icon-btn icon-tool-btn" (click)="saveAnnotatedImage()" title="Preview ment\u00e9se"
+                    [disabled]="!hasSavablePreview()">
               \uD83D\uDCBE
             </button>
             <button class="tool-btn icon-tool-btn" [class.active]="pixelActive"
                     (click)="togglePixelTool()" title="Pixel m\u00e9r\u00e9s">
               \uD83D\uDD0D
+            </button>
+            <button class="tool-btn icon-tool-btn split-preview-btn"
+                    [class.active]="splitPreviewActive"
+                    (click)="toggleSplitPreview()"
+                    [disabled]="!canShowSplitPreview()"
+                    [attr.aria-pressed]="splitPreviewActive"
+                    title="Osztott preview (dupla kattint\u00e1s egy node-on)">
+              <span class="split-preview-icon" aria-hidden="true">
+                <span></span><span></span>
+              </span>
             </button>
           </div>
           @if (pixelActive) {
@@ -261,6 +288,144 @@ interface ScaleBarOverlayState {
                    style="cursor: pointer;" />
             </div>
           </div>
+        } @else if (referenceColorPreview && !showGraphViewer) {
+          <div class="reference-color-preview">
+            <div class="reference-color-panels">
+              <div class="reference-color-panel">
+                <div class="branch-merge-title">Eredeti, illesztendő kép</div>
+                <img [src]="referenceColorPreview.sourceSrc" class="reference-color-main-image" alt="Eredeti kép" draggable="false" />
+              </div>
+              <div class="reference-color-panel">
+                <div class="branch-merge-title">Referencia cropok</div>
+                <div class="reference-color-crops">
+                  @for (cropSrc of referenceColorPreview.cropSrcs; track $index) {
+                    <img [src]="cropSrc" class="reference-color-crop" [alt]="'Referencia ' + ($index + 1)" draggable="false" />
+                  }
+                </div>
+              </div>
+              <div class="reference-color-panel">
+                <div class="branch-merge-title">Illesztett eredmény</div>
+                <img [src]="referenceColorPreview.alignedSrc" class="reference-color-main-image" alt="Illesztett kép" draggable="false" />
+              </div>
+            </div>
+            <div class="reference-color-histograms">
+              @for (kind of referenceHistogramKinds; track kind.key) {
+                <div class="reference-histogram-card">
+                  <div class="reference-histogram-title">{{ kind.label }} – LAB hisztogram{{ kind.key === 'reference' ? ' (összes crop együtt)' : '' }}</div>
+                  <svg viewBox="0 0 255 100" preserveAspectRatio="none" class="reference-histogram-svg" role="img">
+                    @for (channel of [0, 1, 2]; track channel) {
+                      <polyline [attr.points]="getReferenceHistogramPoints(kind.key, channel)" [attr.class]="'hist-line hist-line-' + channel" />
+                      @if (kind.key === 'aligned') {
+                        <polyline [attr.points]="getReferenceHistogramPoints('reference', channel)" [attr.class]="'hist-line hist-reference-overlay hist-line-' + channel" />
+                      }
+                    }
+                  </svg>
+                  <div class="reference-histogram-legend"><span class="lab-l">L</span><span class="lab-a">A</span><span class="lab-b">B</span>@if (kind.key === 'aligned') { <span>szaggatott: referencia</span> }</div>
+                </div>
+              }
+            </div>
+          </div>
+        } @else if (showBranchMergeView() && !showGraphViewer) {
+          <div class="branch-merge-compare-container">
+            @for (panel of branchMergePanels; track $index) {
+              <div class="branch-merge-panel">
+                <div class="branch-merge-title">{{ panel.label }}</div>
+                <img
+                  [src]="panel.imageSrc"
+                  [alt]="panel.label"
+                  class="branch-merge-image"
+                  [class.grayscale]="panel.isGrayscale"
+                  draggable="false"
+                />
+                <div class="branch-merge-meta">
+                  <span>{{ panel.sourceName || 'Kijelolt kep' }}</span>
+                  <span>{{ panel.imageWidth }} x {{ panel.imageHeight }}</span>
+                  <span>{{ panel.imageCount }} kep</span>
+                </div>
+              </div>
+            }
+          </div>
+        } @else if (showKmeansComparison() && kmeansSourceSrc && kmeansOverlaySrc && !showGraphViewer) {
+          <div class="gray-map-compare-container">
+            <div class="gray-map-compare-panel">
+              <div class="gray-map-compare-title">Eredeti kép</div>
+              <img [src]="kmeansSourceSrc" alt="Eredeti kép" class="gray-map-compare-image" draggable="false" />
+            </div>
+            <div class="gray-map-compare-panel">
+              <div class="gray-map-compare-title">Klaszter overlay</div>
+              <img [src]="kmeansOverlaySrc" alt="Klaszterek az eredeti képen" class="gray-map-compare-image" draggable="false" />
+              <div class="cluster-legend" aria-label="Klaszter jelmagyarázat">
+                @for (item of kmeansLegend; track item.label) {
+                  <label class="cluster-legend-item cluster-legend-item--editable" title="Kattints a klaszter szinenek modositasahoz">
+                    <span class="cluster-legend-swatch" [style.background]="item.color"></span>
+                    <span>Label {{ item.label }}</span>
+                    <input
+                      type="color"
+                      class="cluster-legend-color-input"
+                      [value]="normalizeLegendColor(item.color)"
+                      (change)="onKmeansLegendColorChange(item.label, $event)"
+                    />
+                  </label>
+                }
+              </div>
+            </div>
+          </div>
+        } @else if (showClusterReferenceMap() && kmeansOverlaySrc && clusterMapSrc && !showGraphViewer) {
+          <div class="gray-map-compare-container">
+            <div class="gray-map-compare-panel">
+              <div class="gray-map-compare-title">K-közép overlay</div>
+              <img [src]="kmeansOverlaySrc" alt="K-közép klaszterek az eredeti képen" class="gray-map-compare-image" draggable="false" />
+              <div class="cluster-legend" aria-label="Klaszter jelmagyarázat">
+                @for (item of kmeansLegend; track item.label) {
+                  <label class="cluster-legend-item cluster-legend-item--editable" title="Kattints a klaszter szinenek modositasahoz">
+                    <span class="cluster-legend-swatch" [style.background]="item.color"></span>
+                    <span>Label {{ item.label }}</span>
+                    <input
+                      type="color"
+                      class="cluster-legend-color-input"
+                      [value]="normalizeLegendColor(item.color)"
+                      (change)="onKmeansLegendColorChange(item.label, $event)"
+                    />
+                  </label>
+                }
+              </div>
+              @if (clusterMapLabelValues.length > 0) {
+                <div class="cluster-value-chart">
+                  @for (component of clusterMapValueComponents; track component) {
+                    <div class="reference-sequence-histogram-title">{{ component }}</div>
+                    @for (item of clusterMapLabelValues; track item.label) {
+                      <div class="reference-sequence-bar-row">
+                        <span class="reference-sequence-bar-label">Label {{ item.label }}</span>
+                        <div class="reference-sequence-bar-track">
+                          <div
+                            class="reference-sequence-bar-fill"
+                            [style.width.%]="getClusterMapValueWidth(item, component)"
+                            [style.background]="getKmeansLegendColor(item.label)"
+                          ></div>
+                        </div>
+                        <span class="reference-sequence-bar-value">
+                          {{ getClusterMapValueLabel(item, component) }}
+                        </span>
+                      </div>
+                    }
+                  }
+                </div>
+              }
+            </div>
+            <div class="gray-map-compare-panel">
+              <div class="gray-map-compare-title cluster-map-title">
+                <span>Referencia map – aktuális maradék</span>
+                <button
+                  type="button"
+                  class="cluster-map-accept"
+                  (click)="acceptClusterMap()"
+                  [disabled]="clusterMapRemainderIsFinal"
+                  title="Aktuális térkép eltárolása"
+                >Kész</button>
+              </div>
+              <img [src]="clusterMapSrc" alt="Referencia map" class="gray-map-compare-image" draggable="false" />
+            </div>
+          </div>
         } @else if (showGrayMapComparison() && grayMapBaseSrc && grayMapOverlaySrc && !showGraphViewer) {
           <div class="gray-map-compare-container">
             <div class="gray-map-compare-panel">
@@ -342,6 +507,47 @@ interface ScaleBarOverlayState {
               }
             }
           </div>
+        } @else if (referenceCropStripActive && referenceCropImages.length > 0 && !showGraphViewer) {
+          <div class="reference-sequence-view" [class.reference-sequence-view--with-histogram]="referenceCropScores.length > 0">
+            <div class="reference-crop-strip">
+              @for (src of referenceCropImages; track $index) {
+                <div class="reference-crop-tile">
+                  <img [src]="src" [alt]="getReferenceCropLabel($index)" draggable="false" />
+                  <span class="reference-crop-name-badge">{{ getReferenceCropLabel($index) }}</span>
+                  @if (referenceCropScores.length > $index) {
+                    <span class="reference-crop-score-badge">{{ getReferenceCropScoreLabel($index) }}</span>
+                  }
+                </div>
+              }
+            </div>
+            @if (referenceSequenceComponents.length > 0) {
+              <div class="reference-sequence-histogram">
+                @for (component of referenceSequenceComponents; track component) {
+                  <div class="reference-sequence-histogram-title">{{ component }}</div>
+                  <div class="reference-sequence-bars">
+                    @for (score of getReferenceComponentScores(component); track $index) {
+                      <div class="reference-sequence-bar-row">
+                        <span class="reference-sequence-bar-label">{{ getReferenceCropLabel($index) }}</span>
+                        <div class="reference-sequence-bar-track">
+                          <div
+                            class="reference-sequence-bar-fill"
+                            [style.width.%]="getReferenceComponentBarWidth(component, score)"
+                            [style.background]="getReferenceSequenceColor(component)"
+                          ></div>
+                        </div>
+                        <span class="reference-sequence-bar-value">
+                          {{ getReferenceComponentScoreLabel(component, $index) }}
+                          @if (getReferenceComponentDiffLabel(component, $index)) {
+                            <small>{{ getReferenceComponentDiffLabel(component, $index) }}</small>
+                          }
+                        </span>
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+            }
+          </div>
         } @else if (imageSrc && !showGraphViewer) {
           <div class="image-roi-container" #imageRoiContainer>
             <img #previewImg
@@ -352,6 +558,34 @@ interface ScaleBarOverlayState {
               draggable="false"
               (load)="onImageLoad()"
             />
+            @if (referenceCropActive) {
+              <svg class="reference-crop-overlay"
+                   [attr.viewBox]="'0 0 ' + referenceCropImgW + ' ' + referenceCropImgH"
+                   (mousedown)="onReferenceCropMouseDown($event)"
+                   (mousemove)="onReferenceCropMouseMove($event)"
+                   (mouseup)="onReferenceCropMouseUp($event)"
+                   (mouseleave)="onReferenceCropMouseUp($event)"
+                   (contextmenu)="onReferenceCropContextMenu($event)">
+                @for (sq of referenceCropSquares; track $index) {
+                  <g>
+                    <rect [attr.x]="sq.x"
+                          [attr.y]="sq.y"
+                          [attr.width]="sq.size"
+                          [attr.height]="sq.size"
+                          class="reference-crop-square"
+                          [class.dragging]="referenceCropDragIndex === $index"
+                          [attr.data-ref-index]="$index" />
+                      <text [attr.x]="sq.x + 6 * referenceCropScale"
+                          [attr.y]="sq.y + 18 * referenceCropScale"
+                          class="reference-crop-label"
+                          [attr.font-size]="14 * referenceCropScale"
+                          [attr.data-ref-index]="$index">
+                      {{ getReferenceCropOverlayLabel($index) }}
+                    </text>
+                  </g>
+                }
+              </svg>
+            }
             @if (roiActive) {
               <svg class="roi-overlay"
                    [attr.viewBox]="'0 0 ' + roiImgW + ' ' + roiImgH"
@@ -869,6 +1103,31 @@ interface ScaleBarOverlayState {
       flex-shrink: 0;
     }
 
+    .cluster-map-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .cluster-map-accept {
+      min-width: 54px;
+      height: 30px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 15px;
+      color: #fff;
+      background: #2e7d32;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .cluster-map-accept:disabled {
+      opacity: .45;
+      cursor: default;
+    }
+
     .gray-map-compare-image {
       flex: 1;
       min-height: 0;
@@ -878,7 +1137,150 @@ interface ScaleBarOverlayState {
       border-radius: 6px;
     }
 
+    .cluster-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      flex-shrink: 0;
+      color: #d7deea;
+      font-size: 12px;
+    }
+
+    .cluster-legend-item {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .cluster-legend-item--editable {
+      padding: 3px 6px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .cluster-legend-item--editable:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .cluster-legend-color-input {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .cluster-legend-swatch {
+      width: 12px;
+      height: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.55);
+      border-radius: 3px;
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+    }
+
+    .cluster-value-chart {
+      flex-shrink: 0;
+      padding: 10px;
+      background: #111;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+    }
+
     /* multi-panel dual_map layout — 2-3 rows (gray / RGB / sub), columns = original + N components */
+    .branch-merge-compare-container {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      width: 100%;
+      height: 100%;
+      padding: 12px;
+      box-sizing: border-box;
+      overflow: auto;
+    }
+
+    .reference-color-preview { width: 100%; height: 100%; padding: 12px; box-sizing: border-box; overflow: auto; }
+    .reference-color-panels, .reference-color-histograms { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .reference-color-panel, .reference-histogram-card { padding: 10px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.1); border-radius: 6px; min-width: 0; }
+    .reference-color-panel { display: flex; flex-direction: column; gap: 8px; min-height: 220px; }
+    .reference-color-main-image { width: 100%; height: 100%; min-height: 180px; object-fit: contain; }
+    .reference-color-crops { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; flex: 1; }
+    .reference-color-crop { width: 96px; height: 96px; object-fit: contain; image-rendering: pixelated; border: 1px solid rgba(255,255,255,.15); }
+    .reference-color-histograms { margin-top: 12px; }
+    .reference-histogram-title { color: #d7deea; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+    .reference-histogram-svg { display: block; width: 100%; height: 120px; background: #111; border-radius: 4px; }
+    .hist-line { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+    .hist-reference-overlay { stroke-dasharray: 5 3; opacity: .75; }
+    .hist-line-0 { stroke: #f1f5f9; } .hist-line-1 { stroke: #ef4444; } .hist-line-2 { stroke: #3b82f6; }
+    .reference-histogram-legend { display: flex; justify-content: center; gap: 12px; margin-top: 5px; font-size: 11px; }
+    .lab-l { color: #f1f5f9; } .lab-a { color: #ef4444; } .lab-b { color: #60a5fa; }
+
+    .branch-merge-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .branch-merge-title {
+      color: #e5e7eb;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .branch-merge-image {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      object-fit: contain;
+      border-radius: 4px;
+      background: #111;
+    }
+
+    .branch-merge-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: #b6bcc7;
+      font-size: 11px;
+    }
+
+    .branch-merge-meta span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .split-preview-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .split-preview-icon {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2px;
+      width: 18px;
+      height: 14px;
+      padding: 2px;
+      box-sizing: border-box;
+      border: 1.5px solid currentColor;
+      border-radius: 2px;
+    }
+
+    .split-preview-icon span {
+      display: block;
+      background: currentColor;
+      border-radius: 1px;
+      opacity: 0.8;
+    }
+
     .dual-map-multipanel {
       display: grid;
       grid-auto-flow: row;
@@ -1002,6 +1404,178 @@ interface ScaleBarOverlayState {
       height: 100%;
       cursor: crosshair;
       overflow: visible;
+    }
+
+    .reference-sequence-view {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+      padding: 18px;
+      box-sizing: border-box;
+      overflow: auto;
+    }
+
+    .reference-sequence-view--with-histogram {
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+    }
+
+    .reference-crop-strip {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-auto-rows: minmax(160px, 1fr);
+      gap: 10px;
+    }
+
+    .reference-crop-tile {
+      position: relative;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      min-width: 0;
+      min-height: 0;
+      color: #d1d5db;
+      font-size: 12px;
+      background: #111;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .reference-crop-tile img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .reference-crop-name-badge,
+    .reference-crop-score-badge {
+      max-width: calc(100% - 12px);
+      padding: 4px 7px;
+      color: #f8fafc;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      background: rgba(15, 23, 42, 0.78);
+      border-radius: 999px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .reference-crop-name-badge {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+    }
+
+    .reference-crop-score-badge {
+      position: static;
+      max-width: none;
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(2, 6, 23, 0.82);
+      border-radius: 0;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .reference-sequence-histogram {
+      min-width: 0;
+      min-height: 0;
+      padding: 12px;
+      color: #d1d5db;
+      background: #111;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      overflow: auto;
+    }
+
+    .reference-sequence-histogram-title {
+      color: #f8fafc;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .reference-sequence-bar-row {
+      display: grid;
+      grid-template-columns: minmax(34px, 52px) minmax(0, 1fr) minmax(44px, auto);
+      align-items: center;
+      gap: 7px;
+      min-height: 20px;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+
+    .reference-sequence-bar-label,
+    .reference-sequence-bar-value {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .reference-sequence-bar-value {
+      text-align: right;
+      color: #f8fafc;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .reference-sequence-bar-value small {
+      display: block;
+      color: #94a3b8;
+      font-size: 10px;
+    }
+
+    .reference-sequence-bar-track {
+      height: 9px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+    }
+
+    .reference-sequence-bar-fill {
+      height: 100%;
+      border-radius: inherit;
+    }
+
+    .reference-crop-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+      overflow: visible;
+    }
+
+    .reference-crop-square {
+      fill: rgba(34, 197, 94, 0.16);
+      stroke: #22c55e;
+      stroke-width: 2;
+      stroke-dasharray: 8 4;
+      cursor: move;
+    }
+
+    .reference-crop-square.dragging {
+      fill: rgba(250, 204, 21, 0.22);
+      stroke: #facc15;
+    }
+
+    .reference-crop-label {
+      fill: #fff;
+      stroke: #111;
+      stroke-width: 3;
+      paint-order: stroke;
+      pointer-events: none;
+      font-family: sans-serif;
+      font-weight: 700;
     }
 
     .roi-handle {
@@ -1643,6 +2217,22 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   imageSrc: string | null = null;
   grayMapOverlaySrc: string | null = null;
   grayMapBaseSrc: string | null = null;
+  branchMergePanels: BranchMergePanel[] = [];
+  splitPreviewActive = false;
+  referenceColorPreview: ReferenceColorPreviewState | null = null;
+  readonly referenceHistogramKinds: Array<{ key: 'source' | 'reference' | 'aligned'; label: string }> = [
+    { key: 'source', label: 'Eredeti' },
+    { key: 'reference', label: 'Referenciák' },
+    { key: 'aligned', label: 'Illesztett' },
+  ];
+  kmeansSourceSrc: string | null = null;
+  kmeansOverlaySrc: string | null = null;
+  clusterMapLabelSrc: string | null = null;
+  clusterMapSrc: string | null = null;
+  kmeansLegend: Array<{ label: number; color: string }> = [];
+  clusterMapLabelValues: Array<{ label: number; pixelCount: number; values: Record<string, number> }> = [];
+  clusterMapValueComponents: string[] = [];
+  clusterMapRemainderIsFinal = false;
   dualMapState: {
     grayBase: string | null;
     grayOverlays: string[];
@@ -1662,6 +2252,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private baseFitScale = 1;
   private isDragging = false;
   private dragStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
+  private zoomAnchorFrame: number | null = null;
 
   // Zoom for montage
   montageZoomLevel = 1.0;
@@ -1749,6 +2340,84 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   circleImgW = 100;
   circleImgH = 100;
   private circleStepIndex = -1;
+
+  // Reference crop overlay
+  referenceCropActive = false;
+  referenceCropStripActive = false;
+  referenceCropImages: string[] = [];
+  referenceCropSquares: Array<{ x: number; y: number; size: number; name?: string }> = [];
+  referenceCropLabels: string[] = [];
+  referenceCropScores: number[] = [];
+  referenceSequenceComponents: string[] = [];
+  referenceSequenceScores: Record<string, number[]> = {};
+  referenceSequenceDiffs: Record<string, Array<number | null>> = {};
+  referenceSequenceComponent = '';
+  referenceSequenceColor = '#94a3b8';
+  referenceSequenceMaxScore = 1;
+  referenceCropImgW = 100;
+  referenceCropImgH = 100;
+  referenceCropDragIndex = -1;
+  private referenceCropStepIndex = -1;
+  private referenceCropCurrentImageIndex = 0;
+  private referenceCropGlobalOffset = 0;
+  private referenceCropSize = 64;
+  private referenceCropDragOffset = { x: 0, y: 0 };
+
+  get referenceCropScale(): number {
+    return Math.max(1, Math.max(this.referenceCropImgW, this.referenceCropImgH) / 1000);
+  }
+
+  getReferenceCropLabel(index: number): string {
+    const sortedLabel = this.referenceCropLabels[index]?.trim();
+    if (sortedLabel) return sortedLabel;
+    const name = this.referenceCropSquares[index]?.name?.trim();
+    return name || String(index + 1);
+  }
+
+  getReferenceCropOverlayLabel(index: number): string {
+    return String(this.referenceCropGlobalOffset + index + 1);
+  }
+
+  getReferenceCropScoreLabel(index: number): string {
+    const value = this.referenceCropScores[index];
+    return Number.isFinite(value) ? value.toFixed(2) : '';
+  }
+
+  getReferenceSequenceBarWidth(value: number): number {
+    return Number.isFinite(value) ? Math.max(2, Math.min(100, (Math.abs(value) / this.referenceSequenceMaxScore) * 100)) : 0;
+  }
+
+  getReferenceComponentScores(component: string): number[] {
+    return this.referenceSequenceScores[component] || [];
+  }
+
+  getReferenceComponentScoreLabel(component: string, index: number): string {
+    const value = this.referenceSequenceScores[component]?.[index];
+    return Number.isFinite(value) ? Number(value).toFixed(2) : '';
+  }
+
+  getReferenceComponentDiffLabel(component: string, index: number): string {
+    const value = this.referenceSequenceDiffs[component]?.[index];
+    if (!Number.isFinite(value)) return '';
+    const num = Number(value);
+    return `${num >= 0 ? '+' : ''}${num.toFixed(2)}`;
+  }
+
+  getReferenceComponentBarWidth(component: string, value: number): number {
+    const scores = this.referenceSequenceScores[component] || [];
+    const finiteScores = scores.filter((score) => Number.isFinite(score));
+    const max = finiteScores.length ? Math.max(...finiteScores.map((score) => Math.abs(score)), 1) : 1;
+    return Number.isFinite(value) ? Math.max(2, Math.min(100, (Math.abs(value) / max) * 100)) : 0;
+  }
+
+  hasSavablePreview(): boolean {
+    return !!(
+      (this.showGraphViewer && this.graphCanvasRef?.nativeElement) ||
+      (this.showingMontage && this.montagePreview) ||
+      (this.referenceCropStripActive && this.referenceCropImages.length > 0) ||
+      this.imageSrc
+    );
+  }
 
   // Ruler tool state (multi-ruler: up to 5 lines)
   rulerActive = false;
@@ -1913,6 +2582,148 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     return step?.step_def_id === 'dual_map';
   }
 
+  showClusterReferenceMap(): boolean {
+    const step = this.currentPipeline?.steps[this.selectedStepIndex];
+    return step?.step_def_id === 'cluster_reference_map';
+  }
+
+  acceptClusterMap(): void {
+    if (!this.currentPipeline || this.selectedStepIndex < 0) return;
+    const step = this.currentPipeline.steps[this.selectedStepIndex];
+    if (step?.step_def_id !== 'cluster_reference_map' || step.param_values?.['remainder_as_last']) return;
+
+    let accepted: any[] = [];
+    try {
+      const parsed = JSON.parse(String(step.param_values?.['accepted_components'] ?? '[]'));
+      accepted = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      accepted = [];
+    }
+    accepted.push({
+      name: `Komponens ${accepted.length + 1}`,
+      selected_labels: String(step.param_values?.['selected_labels'] ?? '1'),
+      reference_label: String(step.param_values?.['reference_label'] ?? '1'),
+      center_mode: String(step.param_values?.['center_mode'] ?? 'cluster_median'),
+      map_multiplier: Number(step.param_values?.['map_multiplier'] ?? 1),
+      invert: !!step.param_values?.['invert'],
+    });
+    this.pipelineState.updateParams(this.selectedStepIndex, {
+      ...step.param_values,
+      accepted_components: JSON.stringify(accepted),
+    });
+  }
+
+  showKmeansComparison(): boolean {
+    const step = this.currentPipeline?.steps[this.selectedStepIndex];
+    return step?.step_def_id === 'kmeans_cluster';
+  }
+
+  private getFallbackKmeansLegend(stepIndex: number, pipeline: any): Array<{ label: number; color: string }> {
+    const colors = [
+      '#ff0000', '#00ff00', '#0000ff', '#ffff00',
+      '#ff00ff', '#00ffff', '#ff0080', '#0080ff',
+      '#ff8000', '#80ff00', '#8000ff', '#00ff80',
+    ];
+    let count = 3;
+    for (let index = stepIndex; index >= 0; index--) {
+      const step = pipeline?.steps?.[index];
+      if (step?.step_def_id === 'kmeans_cluster') {
+        count = Math.max(2, Number(step.param_values?.['k'] ?? 3));
+        break;
+      }
+    }
+    return Array.from({ length: count }, (_, index) => ({
+      label: index + 1,
+      color: colors[index % colors.length],
+    }));
+  }
+
+  getKmeansLegendColor(label: number): string {
+    return this.kmeansLegend.find((item) => item.label === label)?.color || '#94a3b8';
+  }
+
+  normalizeLegendColor(color: string): string {
+    if (/^#[0-9a-f]{6}$/i.test(color)) return color;
+    const channels = color.match(/\d+/g)?.slice(0, 3).map(Number);
+    if (!channels || channels.length !== 3) return '#ffffff';
+    return `#${channels.map((value) =>
+      Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0')
+    ).join('')}`;
+  }
+
+  onKmeansLegendColorChange(label: number, event: Event): void {
+    const color = (event.target as HTMLInputElement).value;
+    const pipeline = this.currentPipeline;
+    if (!pipeline || !color) return;
+
+    let kmeansIndex = -1;
+    for (let index = this.selectedStepIndex; index >= 0; index--) {
+      if (pipeline.steps[index]?.step_def_id === 'kmeans_cluster') {
+        kmeansIndex = index;
+        break;
+      }
+    }
+    if (kmeansIndex < 0) return;
+
+    const step = pipeline.steps[kmeansIndex];
+    let colors: Record<string, string> = {};
+    try {
+      const raw = step.param_values?.['cluster_colors'] ?? '{}';
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) colors = { ...parsed };
+    } catch {
+      colors = {};
+    }
+    colors[String(label)] = color;
+    this.kmeansLegend = this.kmeansLegend.map((item) =>
+      item.label === label ? { ...item, color } : item
+    );
+    this.pipelineState.updateParams(kmeansIndex, {
+      ...step.param_values,
+      cluster_colors: JSON.stringify(colors),
+    });
+  }
+
+  getClusterMapValueWidth(
+    item: { values: Record<string, number> },
+    component: string,
+  ): number {
+    const value = Number(item.values[component] ?? 0);
+    const maximum = Math.max(
+      1,
+      ...this.clusterMapLabelValues.map((entry) => Math.abs(Number(entry.values[component] ?? 0))),
+    );
+    return Math.max(2, Math.min(100, (Math.abs(value) / maximum) * 100));
+  }
+
+  getClusterMapValueLabel(
+    item: { pixelCount: number; values: Record<string, number> },
+    component: string,
+  ): string {
+    const value = Number(item.values[component]);
+    return `${Number.isFinite(value) ? value.toFixed(2) : '–'} · ${item.pixelCount} px`;
+  }
+
+  showBranchMergeView(): boolean {
+    return this.splitPreviewActive && this.branchMergePanels.length >= 2;
+  }
+
+  getReferenceHistogramPoints(kind: 'source' | 'reference' | 'aligned', channel: number): string {
+    const values = this.referenceColorPreview?.histograms?.[kind]?.[channel];
+    if (!Array.isArray(values)) return '';
+    return values.map((value, index) => `${index},${100 - Math.max(0, Math.min(1, Number(value))) * 96}`).join(' ');
+  }
+
+  canShowSplitPreview(): boolean {
+    return this.branchMergePanels.length >= 2;
+  }
+
+  toggleSplitPreview(): void {
+    if (!this.canShowSplitPreview()) return;
+    this.splitPreviewActive = !this.splitPreviewActive;
+    this.resetZoom();
+  }
+
   get dualMapMaxCols(): number {
     if (!this.dualMapState) return 1;
     return Math.max(
@@ -1920,6 +2731,90 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       this.dualMapState.rgbOverlays.length  || 1,
       this.dualMapState.subOverlays.length  || 0,
     );
+  }
+
+  private buildBranchMergePanels(sideOutputs: Record<string, any> | null | undefined): BranchMergePanel[] {
+    const preview = sideOutputs?.['branch_merge_preview'];
+    const panels = preview?.['panels'];
+    if (!Array.isArray(panels)) return [];
+
+    return panels
+      .filter((panel) => panel && typeof panel['image_base64'] === 'string' && panel['image_base64'])
+      .map((panel, index) => ({
+        label: String(panel['label'] || (index === 0 ? 'Elso ag' : 'Masodik ag')),
+        imageSrc: `data:image/jpeg;base64,${panel['image_base64']}`,
+        sourceName: String(panel['source_name'] || ''),
+        imageWidth: Number(panel['image_width'] || 0),
+        imageHeight: Number(panel['image_height'] || 0),
+        imageCount: Number(panel['image_count'] || 0),
+        isGrayscale: !!panel['is_grayscale'],
+      }));
+  }
+
+  private splitPreviewRequestId = 0;
+  private splitPreviewNodeIndex = -1;
+
+  private loadNodeSplitPreview(stepIndex: number): void {
+    if (!this.currentPipeline || stepIndex <= 0 || stepIndex >= this.currentPipeline.steps.length) {
+      this.branchMergePanels = [];
+      this.splitPreviewActive = false;
+      return;
+    }
+
+    const requestId = ++this.splitPreviewRequestId;
+    this.splitPreviewNodeIndex = stepIndex;
+    const indices = [stepIndex - 1, stepIndex];
+    const imageIndex = this.currentIndex;
+    const requests = indices.map((index) => {
+      const context = this.pipelineState.getPreviewContext(index);
+      return this.recipeService.previewStep(
+        context.pipeline,
+        context.stepIndex,
+        imageIndex,
+        true,
+      );
+    });
+
+    this.loading = true;
+    forkJoin(requests).subscribe({
+      next: (responses) => {
+        if (requestId !== this.splitPreviewRequestId) return;
+        this.loading = false;
+
+        const selectedName =
+          this.pipelineState.getStepDefinition(this.currentPipeline!.steps[stepIndex].step_def_id)?.name ||
+          this.currentPipeline!.steps[stepIndex].step_def_id;
+        const labels = [`Bemenet – ${selectedName}`, `Kimenet – ${selectedName}`];
+
+        this.branchMergePanels = responses
+          .map((response, index): BranchMergePanel | null => {
+            if (!response.success || !response.image_base64) return null;
+            const sourceStep = this.currentPipeline!.steps[indices[index]];
+            const sourceName =
+              this.pipelineState.getStepDefinition(sourceStep.step_def_id)?.name ||
+              sourceStep.step_def_id;
+            return {
+              label: labels[index],
+              imageSrc: `data:image/jpeg;base64,${response.image_base64}`,
+              sourceName,
+              imageWidth: Number(response.image_width || 0),
+              imageHeight: Number(response.image_height || 0),
+              imageCount: Number(response.image_count || 0),
+              isGrayscale: !!response.is_grayscale,
+            };
+          })
+          .filter((panel): panel is BranchMergePanel => panel !== null);
+
+        this.splitPreviewActive = this.branchMergePanels.length === 2;
+        if (this.splitPreviewActive) this.resetZoom();
+      },
+      error: () => {
+        if (requestId !== this.splitPreviewRequestId) return;
+        this.loading = false;
+        this.branchMergePanels = [];
+        this.splitPreviewActive = false;
+      },
+    });
   }
 
   private subs: Subscription[] = [];
@@ -1965,6 +2860,9 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       }),
       this.pipelineState.imageCount$.subscribe((c) => (this.imageCount = c)),
       this.pipelineState.previewImageIndex$.subscribe((i) => (this.currentIndex = i)),
+      this.pipelineState.splitPreviewRequest$.subscribe((stepIndex) => {
+        this.loadNodeSplitPreview(stepIndex);
+      }),
       combineLatest([
         this.pipelineState.sideOutputs$,
         this.pipelineState.selectedStepIndex$,
@@ -1972,8 +2870,72 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pipelineState.previewImageIndex$
       ]).subscribe(([so, stepIdx, pipeline, imgIdx]) => {
         this.imageNames = so?.['loaded_paths'] ?? [];
+        if (this.splitPreviewActive && stepIdx !== this.splitPreviewNodeIndex) {
+          this.splitPreviewActive = false;
+          this.splitPreviewNodeIndex = -1;
+        }
         this.selectedStepIndex = stepIdx;
         this.currentPipeline = pipeline;
+        if (stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'reference_color_align') {
+          const sourceRows = so?.['reference_color_align_source_images_base64'];
+          const alignedRows = so?.['reference_color_align_aligned_images_base64'];
+          const cropRows = so?.['reference_crops_base64'];
+          const histograms = so?.['reference_color_align_histograms'];
+          const cropSrcs = Array.isArray(cropRows)
+            ? cropRows.flat().filter((value: unknown) => typeof value === 'string' && value)
+                .map((value: string) => `data:image/jpeg;base64,${value}`)
+            : [];
+          this.referenceColorPreview = Array.isArray(sourceRows) && sourceRows[0]
+            && Array.isArray(alignedRows) && alignedRows[0]
+            && cropSrcs.length && histograms
+            ? {
+                sourceSrc: `data:image/jpeg;base64,${sourceRows[0]}`,
+                alignedSrc: `data:image/jpeg;base64,${alignedRows[0]}`,
+                cropSrcs,
+                histograms,
+              }
+            : null;
+        } else {
+          this.referenceColorPreview = null;
+        }
+        if (!this.splitPreviewActive) {
+          this.branchMergePanels = stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'branch_merge'
+            ? this.buildBranchMergePanels(so)
+            : [];
+        }
+        const sourceRows = so?.['kmeans_source_images_base64'];
+        const labelRows = so?.['kmeans_labeled_images_base64'];
+        const overlayRows = so?.['kmeans_overlay_images_base64'];
+        const mapRows = so?.['cluster_map_images_base64'];
+        const safeIndex = (rows: any[]) => Math.min(Math.max(imgIdx, 0), rows.length - 1);
+        this.kmeansSourceSrc = Array.isArray(sourceRows) && sourceRows.length && sourceRows[safeIndex(sourceRows)]
+          ? `data:image/jpeg;base64,${sourceRows[safeIndex(sourceRows)]}` : null;
+        this.clusterMapLabelSrc = Array.isArray(labelRows) && labelRows.length && labelRows[safeIndex(labelRows)]
+          ? `data:image/jpeg;base64,${labelRows[safeIndex(labelRows)]}` : null;
+        this.kmeansOverlaySrc = Array.isArray(overlayRows) && overlayRows.length && overlayRows[safeIndex(overlayRows)]
+          ? `data:image/jpeg;base64,${overlayRows[safeIndex(overlayRows)]}` : this.clusterMapLabelSrc;
+        this.clusterMapSrc = Array.isArray(mapRows) && mapRows.length && mapRows[safeIndex(mapRows)]
+          ? `data:image/png;base64,${mapRows[safeIndex(mapRows)]}` : null;
+        const legendRows = so?.['kmeans_legend'];
+        const legend = Array.isArray(legendRows) && legendRows.length ? legendRows[safeIndex(legendRows)] : [];
+        this.kmeansLegend = Array.isArray(legend) && legend.length ? legend.map((item: any) => {
+          const rgb = Array.isArray(item?.color) ? item.color : [255, 255, 255];
+          return { label: Number(item?.label), color: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` };
+        }) : this.getFallbackKmeansLegend(stepIdx, pipeline);
+        const labelValueRows = so?.['cluster_map_label_values'];
+        const labelValues = Array.isArray(labelValueRows) && labelValueRows.length
+          ? labelValueRows[safeIndex(labelValueRows)]
+          : [];
+        this.clusterMapLabelValues = Array.isArray(labelValues) ? labelValues.map((item: any) => ({
+          label: Number(item?.label),
+          pixelCount: Number(item?.pixel_count ?? 0),
+          values: item?.values && typeof item.values === 'object' ? item.values : {},
+        })) : [];
+        this.clusterMapValueComponents = Array.from(new Set(
+          this.clusterMapLabelValues.flatMap((item) => Object.keys(item.values)),
+        ));
+        this.clusterMapRemainderIsFinal =
+          !!pipeline.steps[stepIdx]?.param_values?.['remainder_as_last'];
         // Invalidate montage cache when pipeline or step changes
         const newCacheKey = `${stepIdx}:${JSON.stringify(pipeline)}`;
         if (newCacheKey !== this.montageCacheKey) {
@@ -2134,6 +3096,75 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           this.circleStepIndex = -1;
         }
       }),
+      // Track reference crop overlay and sorted crop strip.
+      combineLatest([
+        this.pipelineState.pipeline$,
+        this.pipelineState.selectedStepIndex$,
+        this.pipelineState.sideOutputs$,
+        this.pipelineState.previewImageIndex$,
+        this.pipelineState.imageDims$,
+      ]).subscribe(([pipeline, idx, sideOutputs, imgIdx, dims]) => {
+        const stepDefId = idx >= 0 && idx < pipeline.steps.length ? pipeline.steps[idx].step_def_id : '';
+        if (stepDefId === 'reference_crop' || stepDefId === 'reference_sequence') {
+          this.deactivateMeasurementTools();
+          const step = pipeline.steps[idx];
+          this.referenceCropStepIndex = idx;
+          this.referenceCropImgW = dims.w || this.rulerImgW || 100;
+          this.referenceCropImgH = dims.h || this.rulerImgH || 100;
+          if (stepDefId === 'reference_crop') {
+            this.referenceCropSize = Math.max(1, Number(step.param_values?.['crop_size'] ?? 64) || 64);
+            this.referenceCropCurrentImageIndex = imgIdx;
+            this.referenceCropSquares = this.getReferenceCropSquaresForImage(step.param_values, imgIdx);
+            this.referenceCropGlobalOffset = this.getReferenceCropGlobalOffset(step.param_values, imgIdx);
+            this.referenceCropLabels = [];
+            this.referenceCropScores = [];
+            this.referenceSequenceComponents = [];
+            this.referenceSequenceScores = {};
+            this.referenceSequenceDiffs = {};
+            this.referenceSequenceComponent = '';
+            this.referenceSequenceColor = '#94a3b8';
+            this.referenceSequenceMaxScore = 1;
+            this.referenceCropStripActive = !!step.param_values?.['show_references'];
+            this.referenceCropActive = !this.referenceCropStripActive;
+          } else {
+            this.referenceCropSquares = [];
+            const sequence = this.getReferenceSequenceState(sideOutputs, imgIdx, pipeline, idx);
+            this.referenceCropLabels = sequence.labels;
+            this.referenceCropScores = sequence.scores;
+            this.referenceSequenceComponents = sequence.components;
+            this.referenceSequenceScores = sequence.scoresByComponent;
+            this.referenceSequenceDiffs = sequence.diffsByComponent;
+            this.referenceSequenceComponent = sequence.component;
+            this.referenceSequenceColor = this.getReferenceSequenceColor(sequence.component);
+            this.referenceSequenceMaxScore = this.getReferenceSequenceMaxScore(sequence.scores);
+            this.referenceCropStripActive = true;
+            this.referenceCropActive = false;
+          }
+
+          const cropRows = sideOutputs?.['reference_crops_base64'];
+          const rowIdx = Array.isArray(cropRows) && cropRows.length === 1 ? 0 : imgIdx;
+          const row = Array.isArray(cropRows) ? cropRows[rowIdx] : [];
+          this.referenceCropImages = Array.isArray(row)
+            ? row.filter((src: string | null) => !!src).map((src: string) => `data:image/jpeg;base64,${src}`)
+            : [];
+        } else {
+          this.referenceCropActive = false;
+          this.referenceCropStripActive = false;
+          this.referenceCropImages = [];
+          this.referenceCropSquares = [];
+          this.referenceCropLabels = [];
+          this.referenceCropScores = [];
+          this.referenceSequenceComponents = [];
+          this.referenceSequenceScores = {};
+          this.referenceSequenceDiffs = {};
+          this.referenceSequenceComponent = '';
+          this.referenceSequenceColor = '#94a3b8';
+          this.referenceSequenceMaxScore = 1;
+          this.referenceCropDragIndex = -1;
+          this.referenceCropStepIndex = -1;
+          this.referenceCropGlobalOffset = 0;
+        }
+      }),
       // Track scale bar overlay when scale_bar_overlay step is selected
       combineLatest([
         this.pipelineState.pipeline$,
@@ -2170,27 +3201,75 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (this.boundOnKeyDown) {
       window.removeEventListener('keydown', this.boundOnKeyDown);
     }
+    if (this.zoomAnchorFrame !== null) {
+      cancelAnimationFrame(this.zoomAnchorFrame);
+    }
   }
 
   // --- Gallery zoom/pan ---
 
   onWheel(event: WheelEvent): void {
     if (this.showGraphViewer) return;
-    if (!event.ctrlKey) return;
+    if (!event.ctrlKey && !event.shiftKey) return;
     event.preventDefault();
-    
+
     const factor = event.deltaY > 0 ? 0.9 : 1.1;
-    
+
     // Determine if we're in montage view or regular image view
     if (this.showingMontage && this.montagePreview) {
-      // Zoom montage
+      const montageContainer = this.previewContainer?.nativeElement
+        .querySelector('.montage-gallery-container') as HTMLElement | null;
+      const montageImg = montageContainer
+        ?.querySelector('.montage-gallery-image') as HTMLImageElement | null;
+
       this.montageZoomLevel = Math.max(1.0, Math.min(5.0, this.montageZoomLevel * factor));
-      this.applyMontageTransform();
+      this.zoomAtPointer(event, montageContainer, montageImg, () => this.applyMontageTransform());
     } else {
-      // Zoom regular image
       this.zoomLevel = Math.max(1.0, Math.min(5.0, this.zoomLevel * factor));
-      this.applyImageTransform();
+      this.zoomAtPointer(
+        event,
+        this.scrollArea?.nativeElement,
+        this.previewImg?.nativeElement,
+        () => this.applyImageTransform(),
+      );
     }
+  }
+
+  private zoomAtPointer(
+    event: WheelEvent,
+    container: HTMLElement | null | undefined,
+    image: HTMLImageElement | null | undefined,
+    applyTransform: () => void,
+  ): void {
+    if (!container || !image) {
+      applyTransform();
+      return;
+    }
+
+    const oldRect = image.getBoundingClientRect();
+    if (oldRect.width <= 0 || oldRect.height <= 0) {
+      applyTransform();
+      return;
+    }
+
+    // Remember the exact image point under the cursor before changing its size.
+    const imageX = (event.clientX - oldRect.left) / oldRect.width;
+    const imageY = (event.clientY - oldRect.top) / oldRect.height;
+    const pointerX = event.clientX;
+    const pointerY = event.clientY;
+
+    applyTransform();
+
+    // The first zoom also changes flex alignment, so adjust after Angular/CSS layout.
+    if (this.zoomAnchorFrame !== null) {
+      cancelAnimationFrame(this.zoomAnchorFrame);
+    }
+    this.zoomAnchorFrame = requestAnimationFrame(() => {
+      this.zoomAnchorFrame = null;
+      const newRect = image.getBoundingClientRect();
+      container.scrollLeft += newRect.left + imageX * newRect.width - pointerX;
+      container.scrollTop += newRect.top + imageY * newRect.height - pointerY;
+    });
   }
 
   onMouseDown(event: MouseEvent): void {
@@ -2805,6 +3884,243 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     this.drawGraph();
   }
 
+  // --- Reference crop interaction ---
+
+  private parseReferenceCropSquares(raw: any): Array<{ x: number; y: number; size: number; name?: string }> {
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw || '[]') : (raw || []);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((sq) => ({
+          x: Number(sq?.x ?? 0) || 0,
+          y: Number(sq?.y ?? 0) || 0,
+          size: this.referenceCropSize,
+          name: typeof sq?.name === 'string' ? sq.name : '',
+        }))
+        .filter((sq) => sq.size > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  private parseReferenceCropSquareOverrides(raw: any): Record<string, any[]> {
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private getReferenceCropSquaresForImage(
+    params: Record<string, any> | undefined,
+    imageIndex: number
+  ): Array<{ x: number; y: number; size: number; name?: string }> {
+    const overrides = this.parseReferenceCropSquareOverrides(params?.['reference_square_overrides']);
+    const current = overrides[String(imageIndex)];
+    if (Array.isArray(current)) {
+      return this.parseReferenceCropSquares(current);
+    }
+    if (Object.keys(overrides).length > 0) {
+      return [];
+    }
+    return this.parseReferenceCropSquares(params?.['reference_squares']);
+  }
+
+  private getReferenceCropGlobalOffset(params: Record<string, any> | undefined, imageIndex: number): number {
+    const overrides = this.parseReferenceCropSquareOverrides(params?.['reference_square_overrides']);
+    const keys = Object.keys(overrides);
+    if (!keys.length) return 0;
+    return keys
+      .filter((key) => Number(key) < imageIndex)
+      .reduce((sum, key) => sum + (Array.isArray(overrides[key]) ? overrides[key].length : 0), 0);
+  }
+
+  private getAllReferenceCropSquares(params: Record<string, any> | undefined): Array<{ x: number; y: number; size: number; name?: string }> {
+    const overrides = this.parseReferenceCropSquareOverrides(params?.['reference_square_overrides']);
+    const keys = Object.keys(overrides).sort((a, b) => Number(a) - Number(b));
+    if (!keys.length) return this.parseReferenceCropSquares(params?.['reference_squares']);
+    return keys.flatMap((key) => this.parseReferenceCropSquares(overrides[key]));
+  }
+
+  private getReferenceSequenceState(
+    sideOutputs: any,
+    imgIdx: number,
+    pipeline: any,
+    stepIndex: number
+  ): {
+    labels: string[];
+    scores: number[];
+    component: string;
+    components: string[];
+    scoresByComponent: Record<string, number[]>;
+    diffsByComponent: Record<string, Array<number | null>>;
+  } {
+    const sequenceMeta = sideOutputs?.meta?.reference_sequence;
+    const rows = sequenceMeta?.rows;
+    const rowIdx = Array.isArray(rows) && rows.length === 1 ? 0 : imgIdx;
+    const row = Array.isArray(rows) ? rows[rowIdx] : null;
+    const items = row?.items;
+    const component = String(sequenceMeta?.component ?? '');
+    const components = Array.isArray(sequenceMeta?.components) && sequenceMeta.components.length
+      ? sequenceMeta.components.map((value: any) => String(value))
+      : [component].filter(Boolean);
+    if (!Array.isArray(items)) {
+      return { labels: [], scores: [], component, components, scoresByComponent: {}, diffsByComponent: {} };
+    }
+    const cropNames = this.getPreviousReferenceCropNames(pipeline, stepIndex);
+    const labels = items.map((item: any, index: number) => {
+      const label = String(item?.label ?? '').trim();
+      const originalIndex = Number(item?.original_index);
+      const cropName = Number.isInteger(originalIndex) ? cropNames[originalIndex]?.trim() : '';
+      return cropName || label || String(index + 1);
+    });
+    const scores = items.map((item: any) => Number(item?.score));
+    const scoresByComponent: Record<string, number[]> = {};
+    const diffsByComponent: Record<string, Array<number | null>> = {};
+    for (const comp of components) {
+      scoresByComponent[comp] = items.map((item: any) => Number(item?.scores?.[comp] ?? item?.score));
+      diffsByComponent[comp] = items.map((item: any) => {
+        const value = item?.diffs?.[comp];
+        return value === null || value === undefined ? null : Number(value);
+      });
+    }
+    return {
+      labels,
+      scores,
+      component,
+      components,
+      scoresByComponent,
+      diffsByComponent,
+    };
+  }
+
+  private getPreviousReferenceCropNames(pipeline: any, stepIndex: number): string[] {
+    const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [];
+    for (let i = stepIndex - 1; i >= 0; i--) {
+      if (steps[i]?.step_def_id !== 'reference_crop') continue;
+      const squares = this.getAllReferenceCropSquares(steps[i]?.param_values);
+      return squares.map((sq) => String(sq.name ?? ''));
+    }
+    return [];
+  }
+
+  private getReferenceSequenceMaxScore(scores: number[]): number {
+    const finiteScores = scores.filter((value) => Number.isFinite(value));
+    return finiteScores.length ? Math.max(...finiteScores.map((value) => Math.abs(value)), 1) : 1;
+  }
+
+  getReferenceSequenceColor(component: string): string {
+    const colors: Record<string, string> = {
+      R: '#ef4444',
+      G: '#22c55e',
+      B: '#3b82f6',
+      H: '#f97316',
+      S: '#a855f7',
+      V: '#facc15',
+      L: '#e5e7eb',
+      A: '#ec4899',
+      LAB_B: '#06b6d4',
+      GRAY: '#94a3b8',
+    };
+    return colors[String(component || 'GRAY').toUpperCase()] || colors['GRAY'];
+  }
+
+  private referenceCropSvgCoords(event: MouseEvent): { x: number; y: number } {
+    const svg = (event.currentTarget ?? event.target) as SVGSVGElement;
+    const rect = svg.getBoundingClientRect();
+    const sx = this.referenceCropImgW / rect.width;
+    const sy = this.referenceCropImgH / rect.height;
+    return {
+      x: Math.round(Math.max(0, Math.min(this.referenceCropImgW, (event.clientX - rect.left) * sx))),
+      y: Math.round(Math.max(0, Math.min(this.referenceCropImgH, (event.clientY - rect.top) * sy))),
+    };
+  }
+
+  private commitReferenceCropSquares(): void {
+    if (this.referenceCropStepIndex < 0) return;
+    const pipeline = this.pipelineState.getPipeline();
+    const step = pipeline.steps[this.referenceCropStepIndex];
+    if (!step) return;
+    const squares = this.referenceCropSquares.map((sq) => ({
+      x: Math.round(sq.x),
+      y: Math.round(sq.y),
+      size: Math.round(sq.size),
+      name: sq.name ?? '',
+    }));
+    const updated = { ...step.param_values };
+    const overrides = this.parseReferenceCropSquareOverrides(updated['reference_square_overrides']);
+    overrides[String(this.referenceCropCurrentImageIndex)] = squares;
+    updated['reference_square_overrides'] = JSON.stringify(overrides);
+    updated['reference_squares'] = JSON.stringify(this.getAllReferenceCropSquares(updated));
+    this.pipelineState.updateParams(this.referenceCropStepIndex, updated);
+  }
+
+  private referenceCropHitIndex(x: number, y: number): number {
+    for (let i = this.referenceCropSquares.length - 1; i >= 0; i--) {
+      const sq = this.referenceCropSquares[i];
+      if (x >= sq.x && x <= sq.x + sq.size && y >= sq.y && y <= sq.y + sq.size) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  onReferenceCropMouseDown(event: MouseEvent): void {
+    if (event.button !== 0 || !this.referenceCropActive) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const { x, y } = this.referenceCropSvgCoords(event);
+    const hit = this.referenceCropHitIndex(x, y);
+    if (hit >= 0) {
+      const sq = this.referenceCropSquares[hit];
+      this.referenceCropDragIndex = hit;
+      this.referenceCropDragOffset = { x: x - sq.x, y: y - sq.y };
+      return;
+    }
+
+    const size = this.referenceCropSize;
+    const nx = Math.max(0, Math.min(this.referenceCropImgW - size, x - size / 2));
+    const ny = Math.max(0, Math.min(this.referenceCropImgH - size, y - size / 2));
+    this.referenceCropSquares = [...this.referenceCropSquares, { x: nx, y: ny, size }];
+    this.commitReferenceCropSquares();
+  }
+
+  onReferenceCropMouseMove(event: MouseEvent): void {
+    if (this.referenceCropDragIndex < 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const { x, y } = this.referenceCropSvgCoords(event);
+    const squares = [...this.referenceCropSquares];
+    const sq = { ...squares[this.referenceCropDragIndex] };
+    sq.x = Math.max(0, Math.min(this.referenceCropImgW - sq.size, x - this.referenceCropDragOffset.x));
+    sq.y = Math.max(0, Math.min(this.referenceCropImgH - sq.size, y - this.referenceCropDragOffset.y));
+    squares[this.referenceCropDragIndex] = sq;
+    this.referenceCropSquares = squares;
+  }
+
+  onReferenceCropMouseUp(event: MouseEvent): void {
+    if (this.referenceCropDragIndex < 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.referenceCropDragIndex = -1;
+    this.commitReferenceCropSquares();
+  }
+
+  onReferenceCropContextMenu(event: MouseEvent): void {
+    if (!this.referenceCropActive) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const { x, y } = this.referenceCropSvgCoords(event);
+    const hit = this.referenceCropHitIndex(x, y);
+    if (hit >= 0) {
+      this.referenceCropSquares = this.referenceCropSquares.filter((_, i) => i !== hit);
+      this.commitReferenceCropSquares();
+    }
+  }
+
   // --- ROI interaction ---
 
   onImageLoad(): void {
@@ -2812,6 +4128,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (img) {
       this.roiImgW = img.naturalWidth;
       this.roiImgH = img.naturalHeight;
+      this.referenceCropImgW = img.naturalWidth;
+      this.referenceCropImgH = img.naturalHeight;
       this.rulerImgW = img.naturalWidth;
       this.rulerImgH = img.naturalHeight;
       if (this.particleClickPending) {
@@ -4245,6 +5563,20 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   // === Save image with annotations ===
 
   async saveAnnotatedImage(): Promise<void> {
+    if (this.showGraphViewer && this.graphCanvasRef?.nativeElement) {
+      await this.saveCanvasAsPng(this.graphCanvasRef.nativeElement, 'pipeline_preview_graph.png');
+      return;
+    }
+    if (this.showingMontage && this.montagePreview) {
+      await this.saveImageSrcAsPng(this.montagePreview, 'pipeline_preview_montage.png');
+      return;
+    }
+    if (this.referenceCropStripActive && this.referenceCropImages.length > 0) {
+      const canvas = await this.renderReferenceSequencePreview();
+      if (canvas) await this.saveCanvasAsPng(canvas, 'pipeline_preview_reference_sequence.png');
+      return;
+    }
+
     if (!this.imageSrc) return;
 
     const img = this.previewImg?.nativeElement;
@@ -4352,14 +5684,129 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       ctx.textAlign = 'start';
     }
 
-    // Save via file picker or download fallback
+    await this.saveCanvasAsPng(canvas, 'pipeline_preview.png');
+  }
+
+  private async saveImageSrcAsPng(src: string, filename: string): Promise<void> {
+    const img = await this.loadPreviewImage(src);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0);
+    await this.saveCanvasAsPng(canvas, filename);
+  }
+
+  private async renderReferenceSequencePreview(): Promise<HTMLCanvasElement | null> {
+    const imgs = await Promise.all(this.referenceCropImages.map((src) => this.loadPreviewImage(src)));
+    if (!imgs.length) return null;
+
+    const tileW = 180;
+    const tileH = 170;
+    const gap = 12;
+    const pad = 18;
+    const histW = this.referenceSequenceComponents.length ? 320 : 0;
+    const cols = Math.min(4, Math.max(1, imgs.length));
+    const rows = Math.ceil(imgs.length / cols);
+    const gridW = cols * tileW + (cols - 1) * gap;
+    const gridH = rows * tileH + (rows - 1) * gap;
+    const canvas = document.createElement('canvas');
+    canvas.width = pad * 2 + gridW + (histW ? gap + histW : 0);
+    canvas.height = pad * 2 + Math.max(gridH, 240);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '13px sans-serif';
+    ctx.textBaseline = 'middle';
+
+    imgs.forEach((img, index) => {
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const x = pad + col * (tileW + gap);
+      const y = pad + row * (tileH + gap);
+      this.drawReferenceTile(ctx, img, x, y, tileW, tileH, this.getReferenceCropLabel(index), this.getReferenceCropScoreLabel(index));
+    });
+
+    if (histW) {
+      this.drawReferenceHistogram(ctx, pad + gridW + gap, pad, histW, Math.max(gridH, 240) - pad);
+    }
+    return canvas;
+  }
+
+  private drawReferenceTile(ctx: CanvasRenderingContext2D, img: HTMLImageElement, x: number, y: number, w: number, h: number, label: string, score: string): void {
+    const footerH = score ? 24 : 0;
+    ctx.fillStyle = '#111827';
+    ctx.fillRect(x, y, w, h);
+    const maxImgH = h - footerH;
+    const scale = Math.min(w / img.width, maxImgH / img.height);
+    const iw = img.width * scale;
+    const ih = img.height * scale;
+    ctx.drawImage(img, x + (w - iw) / 2, y + (maxImgH - ih) / 2, iw, ih);
+    ctx.fillStyle = 'rgba(15,23,42,0.82)';
+    ctx.fillRect(x + 6, y + 6, Math.min(w - 12, Math.max(34, label.length * 7 + 14)), 22);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillText(label, x + 13, y + 17);
+    if (score) {
+      ctx.fillStyle = 'rgba(2,6,23,0.9)';
+      ctx.fillRect(x, y + h - footerH, w, footerH);
+      ctx.fillStyle = '#f8fafc';
+      ctx.textAlign = 'center';
+      ctx.fillText(score, x + w / 2, y + h - footerH / 2);
+      ctx.textAlign = 'start';
+    }
+  }
+
+  private drawReferenceHistogram(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+    ctx.fillStyle = '#111827';
+    ctx.fillRect(x, y, w, h);
+    let yy = y + 18;
+    for (const component of this.referenceSequenceComponents) {
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '700 13px sans-serif';
+      ctx.fillText(component, x + 12, yy);
+      ctx.font = '11px sans-serif';
+      yy += 26;
+      for (let index = 0; index < this.getReferenceComponentScores(component).length; index++) {
+        if (yy > y + h - 10) return;
+        const score = this.getReferenceComponentScores(component)[index];
+        const barX = x + 62;
+        const barW = w - 150;
+        ctx.fillStyle = '#d1d5db';
+        ctx.fillText(this.getReferenceCropLabel(index), x + 12, yy);
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(barX, yy - 5, barW, 9);
+        ctx.fillStyle = this.getReferenceSequenceColor(component);
+        ctx.fillRect(barX, yy - 5, barW * this.getReferenceComponentBarWidth(component, score) / 100, 9);
+        ctx.fillStyle = '#f8fafc';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${this.getReferenceComponentScoreLabel(component, index)} ${this.getReferenceComponentDiffLabel(component, index)}`, x + w - 12, yy);
+        ctx.textAlign = 'start';
+        yy += 22;
+      }
+      yy += 10;
+    }
+  }
+
+  private loadPreviewImage(src: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  private async saveCanvasAsPng(canvas: HTMLCanvasElement, filename: string): Promise<void> {
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
     if (!blob) return;
 
     if ('showSaveFilePicker' in window) {
       try {
         const handle = await (window as any).showSaveFilePicker({
-          suggestedName: 'annotated_image.png',
+          suggestedName: filename,
           types: [{
             description: 'PNG Image',
             accept: { 'image/png': ['.png'] },
@@ -4376,7 +5823,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'annotated_image.png';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

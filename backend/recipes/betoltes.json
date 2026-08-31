@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "betoltes",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "c829248d-2508-4b27-893e-78fd2f4f58bc",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/Lilla/Desktop/REF_2604/05.bmp",
+        "file_order": ""
+      },
+      "order": 0
+    }
+  ],
+  "created_at": "2026-04-25T19:27:13.905134+00:00",
+  "modified_at": "2026-04-25T19:27:13.905134+00:00"
+}

@@ -5,6 +5,7 @@ Recipes are stored in a 'recipes' subdirectory next to this file.
 import json
 import os
 import re
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -17,8 +18,17 @@ logger = logging.getLogger(__name__)
 _recipe_lock = threading.Lock()
 
 def _recipes_dir() -> str:
-    """Get (and ensure) the recipes directory path."""
-    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recipes")
+    """Get (and ensure) the persistent recipes directory path.
+
+    In a PyInstaller build ``__file__`` points into a temporary ``_MEI...``
+    extraction directory which is removed when the application exits.  Store
+    recipes next to the executable instead so they survive restarts.
+    """
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    d = os.path.join(base_dir, "recipes")
     os.makedirs(d, exist_ok=True)
     return d
 

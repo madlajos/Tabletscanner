@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "name": "forx",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "54406397-e933-4db7-8160-d7c7b08c31f1",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "L:/Saját meghajtó/Desktop260623/REF_2604/allied/sa/forx"
+      },
+      "order": 0,
+      "enabled": true
+    },
+    {
+      "instance_id": "7e00249c-c764-47b2-911e-dd23931fb30b",
+      "step_def_id": "reference_crop",
+      "param_values": {
+        "crop_size": 64,
+        "reference_square_overrides": "{\"0\":[{\"x\":65,\"y\":109,\"size\":64,\"name\":\"MCC\"}],\"1\":[{\"x\":150,\"y\":148,\"size\":64,\"name\":\"\"}],\"2\":[{\"x\":36,\"y\":57,\"size\":64,\"name\":\"\"}]}",
+        "reference_squares": "[{\"x\":65,\"y\":109,\"size\":64,\"name\":\"MCC\"},{\"x\":150,\"y\":148,\"size\":64,\"name\":\"\"},{\"x\":36,\"y\":57,\"size\":64,\"name\":\"\"}]",
+        "show_references": false
+      },
+      "order": 1,
+      "enabled": true
+    },
+    {
+      "instance_id": "04724f39-c6de-4251-a31e-f1dbb17f2371",
+      "step_def_id": "reference_sequence",
+      "param_values": {
+        "component": "GRAY",
+        "direction": "descending"
+      },
+      "order": 2,
+      "enabled": true
+    },
+    {
+      "instance_id": "b6c7aae7-d08e-4bed-9ca6-4ecacdaa419d",
+      "step_def_id": "load_image",
+      "param_values": {
+        "file_order": "",
+        "source": "L:/Saját meghajtó/Desktop260623/REF_2604/Forx/crop/uv.jpg"
+      },
+      "order": 3,
+      "enabled": true
+    },
+    {
+      "instance_id": "74144d5e-4702-4631-9e9b-0b285196bb0b",
+      "step_def_id": "reference_color_align",
+      "param_values": {
+        "mode": "location_scale",
+        "output_dark": 0,
+        "output_light": 255,
+        "reference_branch": "54406397-e933-4db7-8160-d7c7b08c31f1",
+        "strength": 1
+      },
+      "order": 4,
+      "enabled": true
+    },
+    {
+      "instance_id": "a409be39-89a6-4ec5-b840-dedd472c27c6",
+      "step_def_id": "apply_blur",
+      "param_values": {
+        "method": "gaussian",
+        "ksize": 5,
+        "sigma": 0,
+        "sigma_color": 75,
+        "sigma_space": 75
+      },
+      "order": 5,
+      "enabled": true
+    },
+    {
+      "instance_id": "3be1c2c0-ae7c-4758-9c76-4ad5ccda8bf8",
+      "step_def_id": "branch_merge",
+      "param_values": {},
+      "order": 6,
+      "enabled": true
+    },
+    {
+      "instance_id": "a3b6104d-b620-43a7-aaa1-5d9e034dab64",
+      "step_def_id": "kmeans_cluster",
+      "param_values": {
+        "attempts": 3,
+        "background": "black",
+        "color_space": "BGR",
+        "epsilon": 1,
+        "init_mode": "auto",
+        "k": 3,
+        "max_iter": 30,
+        "output_mode": "palette",
+        "reference_source": "auto",
+        "sort_by_brightness": true
+      },
+      "order": 7,
+      "enabled": true
+    },
+    {
+      "instance_id": "6b4b542c-7166-4bde-a34e-4bc21e6feb8c",
+      "step_def_id": "cluster_reference_map",
+      "param_values": {
+        "accepted_components": "[]",
+        "center_mode": "reference_mean_half",
+        "colormap": "jet",
+        "invert": false,
+        "map_multiplier": 1,
+        "reference_label": "1",
+        "remainder_as_last": false,
+        "remainder_display_multiplier": 1,
+        "remainder_invert": false,
+        "remainder_name": "Maradék",
+        "selected_labels": "1,2"
+      },
+      "order": 8,
+      "enabled": true
+    }
+  ],
+  "connections": [
+    {
+      "from_instance_id": "1d186b84-c32a-4155-a048-1c516205bc4d",
+      "kind": "merge",
+      "to_instance_id": "bdfebe0f-9bfa-489f-a224-5b4572f50135"
+    },
+    {
+      "from_instance_id": "7e00249c-c764-47b2-911e-dd23931fb30b",
+      "kind": "merge",
+      "to_instance_id": "bdfebe0f-9bfa-489f-a224-5b4572f50135"
+    },
+    {
+      "from_instance_id": "7e00249c-c764-47b2-911e-dd23931fb30b",
+      "kind": "merge",
+      "to_instance_id": "05d64255-ef0b-469a-9653-dc0feda01631"
+    },
+    {
+      "from_instance_id": "7e00249c-c764-47b2-911e-dd23931fb30b",
+      "kind": "merge",
+      "to_instance_id": "3be1c2c0-ae7c-4758-9c76-4ad5ccda8bf8"
+    }
+  ],
+  "branch_names": {},
+  "created_at": "2026-08-13T09:26:24.445363+00:00",
+  "modified_at": "2026-08-19T08:08:38.854184+00:00"
+}

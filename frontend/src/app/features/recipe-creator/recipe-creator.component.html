@@ -23,6 +23,54 @@
     </div>
   </div>
 
+  <!-- New recipe confirmation popup -->
+  @if (showNewRecipeConfirm) {
+    <div class="save-dialog-overlay" (click)="cancelNewRecipe()">
+      <div
+        class="save-dialog new-recipe-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-recipe-dialog-title"
+        (click)="$event.stopPropagation()"
+      >
+        <span id="new-recipe-dialog-title" class="dialog-title">Új recept létrehozása</span>
+        <p class="dialog-message">
+          Biztosan új receptet szeretne létrehozni?
+          @if (isDirty) {
+            <span class="dialog-warning">A nem mentett módosítások elvesznek.</span>
+          }
+        </p>
+        <div class="dialog-actions">
+          <button mat-flat-button (click)="confirmNewRecipe()">Új recept</button>
+          <button mat-button (click)="cancelNewRecipe()">Mégse</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Existing recipe overwrite confirmation -->
+  @if (showOverwriteConfirm) {
+    <div class="save-dialog-overlay" (click)="cancelOverwrite()">
+      <div
+        class="save-dialog new-recipe-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="overwrite-dialog-title"
+        (click)="$event.stopPropagation()"
+      >
+        <span id="overwrite-dialog-title" class="dialog-title">Recept felülírása</span>
+        <p class="dialog-message">
+          Biztosan rá szeretne menteni erre a receptre:
+          <strong>{{ recipeName }}</strong>?
+        </p>
+        <div class="dialog-actions">
+          <button mat-flat-button (click)="confirmOverwrite()">Felülírás</button>
+          <button mat-button (click)="cancelOverwrite()">Mégse</button>
+        </div>
+      </div>
+    </div>
+  }
+
   <!-- Save name input popup -->
   @if (showSaveInput) {
     <div class="save-dialog-overlay" (click)="cancelSave()">
@@ -90,6 +138,9 @@
                 }
               </div>
               <div class="recipe-actions">
+                <button mat-icon-button class="recipe-action-btn" (click)="appendRecipe(recipe.name, $event)" title="Hozzáadás az aktuális recepthez">
+                  <mat-icon>add_link</mat-icon>
+                </button>
                 <button mat-icon-button class="recipe-action-btn" (click)="duplicateRecipe(recipe.name, $event)" title="Másolás">
                   <mat-icon>content_copy</mat-icon>
                 </button>
@@ -131,7 +182,12 @@
       <div class="preview-area">
         <app-pipeline-preview></app-pipeline-preview>
       </div>
-      <div class="canvas-area">
+      <div
+        class="center-resizer"
+        (pointerdown)="startCanvasResize($event)"
+        title="Feldolgozasi lanc meretezese"
+      ></div>
+      <div class="canvas-area" [style.height.px]="canvasHeight">
         <app-pipeline-canvas></app-pipeline-canvas>
       </div>
     </section>

@@ -211,6 +211,130 @@ interface NodeHelpContent {
               <div class="roi-empty-warning">⚠ Nincs kijelölt ROI terület</div>
             }
           }
+          @if (isReferenceCropStep()) {
+            <div class="reference-crop-actions">
+              <button
+                type="button"
+                class="reference-crop-toggle"
+                [class.active]="!!getParamValue('show_references')"
+                (click)="toggleReferenceCropView()"
+              >
+                {{ getParamValue('show_references') ? 'Teljes kep mutatasa' : 'Kivagott referenciak mutatasa' }}
+              </button>
+              <div class="reference-crop-count">
+                {{ getReferenceCropCountLabel() }}
+              </div>
+            </div>
+            @if (getReferenceCropRows().length > 0) {
+              <div class="reference-crop-list">
+                @for (crop of getReferenceCropRows(); track crop.key) {
+                  <div class="reference-crop-row">
+                    <span class="reference-crop-index">{{ crop.index + 1 }}</span>
+                    <input
+                      type="text"
+                      class="reference-crop-name"
+                      [ngModel]="crop.name"
+                      (ngModelChange)="onReferenceCropNameChange(crop, $event)"
+                      [placeholder]="'Referencia ' + (crop.index + 1)"
+                    />
+                    <button
+                      type="button"
+                      class="reference-crop-delete"
+                      (click)="removeReferenceCrop(crop)"
+                      [attr.aria-label]="'Referencia ' + (crop.index + 1) + ' torlese'"
+                      title="Referencia torlese"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                }
+              </div>
+            }
+          }
+          @if (step?.step_def_id === 'cluster_reference_map') {
+            <div class="cluster-components">
+              <div class="section-label">Elfogadott térképek</div>
+              @for (component of getAcceptedClusterMaps(); track $index) {
+                <div class="cluster-component-card">
+                  @if (getAcceptedClusterMapImage($index); as mapImage) {
+                    <img class="cluster-component-preview" [src]="mapImage" [alt]="component.name" />
+                  }
+                  <input
+                    type="text"
+                    [ngModel]="component.name"
+                    (ngModelChange)="updateAcceptedClusterMap($index, 'name', $event)"
+                  />
+                  <div class="cluster-component-summary">
+                    Labelek: {{ component.selected_labels }} · referencia: {{ component.reference_label }}
+                  </div>
+                  <label>
+                    Szorzó
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      [ngModel]="component.map_multiplier"
+                      (ngModelChange)="updateAcceptedClusterMap($index, 'map_multiplier', +$event)"
+                    />
+                  </label>
+                  <button type="button" (click)="removeAcceptedClusterMap($index)">Eltávolítás</button>
+                </div>
+              } @empty {
+                <div class="dev-empty">Még nincs elfogadott térkép.</div>
+              }
+              @if (getParamValue('remainder_as_last')) {
+                <div class="cluster-component-card remainder">
+                  @if (getAcceptedClusterMapImage(getAcceptedClusterMaps().length); as remainderImage) {
+                    <img class="cluster-component-preview" [src]="remainderImage" alt="Maradék térkép" />
+                  }
+                  <input
+                    type="text"
+                    [ngModel]="getParamValue('remainder_name')"
+                    (ngModelChange)="onParamChange('remainder_name', $event)"
+                    placeholder="Maradék"
+                  />
+                  <div class="cluster-component-summary">
+                    100% − az összes eltárolt térkép
+                  </div>
+                  <label>
+                    Megjelenítési szorzó
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      [ngModel]="getParamValue('remainder_display_multiplier')"
+                      (ngModelChange)="onParamChange('remainder_display_multiplier', +$event)"
+                    />
+                  </label>
+                  <label class="toggle-wrap">
+                    <input
+                      type="checkbox"
+                      [ngModel]="getParamValue('remainder_invert')"
+                      (ngModelChange)="onParamChange('remainder_invert', $event)"
+                    />
+                    <span>Színskála megfordítása</span>
+                  </label>
+                  <button type="button" (click)="removeClusterMapRemainder()">Maradék törlése</button>
+                </div>
+              } @else {
+                <button
+                  type="button"
+                  class="cluster-remainder-button"
+                  [disabled]="getAcceptedClusterMaps().length < 2"
+                  (click)="calculateClusterMapRemainder()"
+                >
+                  Maradék kiszámítása
+                </button>
+                @if (getAcceptedClusterMaps().length < 2) {
+                  <div class="cluster-component-summary">
+                    Előbb tárolj el legalább két térképet a „Kész” gombbal.
+                  </div>
+                }
+              }
+            </div>
+          }
           @for (param of getVisibleParams(); track param.name) {
                 @if (param.name !== 'file_order' && param.name !== 'group_colors' && param.name !== 'output_mode' && param.name !== 'shape_only' && param.name !== 'shape_outline_color' && param.name !== 'shape_outline_thickness' && !shouldHideParam(param)) {
             <div class="param-row">
@@ -394,7 +518,32 @@ interface NodeHelpContent {
                   </div>
                 }
                 @case ('string') {
-                  @if (isFitCurveYAxisParam(param.name)) {
+                  @if (step?.step_def_id === 'cluster_reference_map' && param.name === 'selected_labels') {
+                    <div class="param-control label-picker">
+                      @for (label of getClusterMapLabelOptions(); track label) {
+                        <button type="button" class="label-chip" [class.active]="isClusterMapLabelSelected(label)"
+                          [attr.aria-pressed]="isClusterMapLabelSelected(label)"
+                          (click)="toggleClusterMapLabel(label)">
+                          <span class="label-chip-swatch" [style.background]="getClusterLabelColor(label)">
+                            {{ isClusterMapLabelSelected(label) ? '✓' : '' }}
+                          </span>
+                          <span>Label {{ label }}</span>
+                        </button>
+                      }
+                    </div>
+                  } @else if (step?.step_def_id === 'cluster_reference_map' && param.name === 'reference_label') {
+                    <div class="param-control">
+                      <select
+                        [id]="'param-' + param.name"
+                        [ngModel]="getParamValue(param.name)"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                      >
+                        @for (label of getSelectedClusterMapLabelOptions(); track label) {
+                          <option [value]="label">Label {{ label }}</option>
+                        }
+                      </select>
+                    </div>
+                  } @else if (isFitCurveYAxisParam(param.name)) {
                     <div class="param-control">
                       <select
                         [id]="'param-' + param.name"
@@ -415,6 +564,18 @@ interface NodeHelpContent {
                       >
                         @for (opt of getPredictYOptions(); track opt) {
                           <option [value]="opt">{{ getYKeyLabel(opt) }}</option>
+                        }
+                      </select>
+                    </div>
+                  } @else if (isKmeansReferenceSourceParam(param.name)) {
+                    <div class="param-control">
+                      <select
+                        [id]="'param-' + param.name"
+                        [ngModel]="getParamValue(param.name) || 'auto'"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                      >
+                        @for (opt of getKmeansReferenceSourceOptions(); track opt.value) {
+                          <option [value]="opt.value">{{ opt.label }}</option>
                         }
                       </select>
                     </div>
@@ -834,6 +995,47 @@ interface NodeHelpContent {
                 </div>
               }
 
+              @if (step?.step_def_id === 'kmeans_cluster') {
+                @if (getKmeansReferenceInfo(); as refInfo) {
+                  <div class="user-result-item">
+                    <span class="user-result-label">Referencia cropok a pipeline-ban:</span>
+                    <span class="user-result-value">{{ refInfo.reference_crops_available }}</span>
+                  </div>
+                  <div class="user-result-item">
+                    <span class="user-result-label">Referencia cropok hasznalata:</span>
+                    <span class="user-result-value">{{ refInfo.uses_reference_crops ? 'Igen' : 'Nem' }}</span>
+                  </div>
+                  <div class="user-result-item">
+                    <span class="user-result-label">Forras:</span>
+                    <span class="user-result-value">{{ refInfo.reference_source_label || (refInfo.reference_sequence_used ? 'Reference sequence' : (refInfo.reference_crops_available > 0 ? 'Reference crop' : '-')) }}</span>
+                  </div>
+                  <div class="user-result-item">
+                    <span class="user-result-label">Tenyleges klaszterszam:</span>
+                    <span class="user-result-value">{{ refInfo.effective_k }}</span>
+                  </div>
+                  @if (getKmeansReferenceSequenceEntries().length > 0) {
+                    <div class="stats-grid">
+                      @for (entry of getKmeansReferenceSequenceEntries(); track entry.key) {
+                        <div class="stat-item">
+                          <span class="stat-label">{{ entry.label }}</span>
+                          <span class="stat-value">{{ entry.value }}</span>
+                        </div>
+                      }
+                    </div>
+                  }
+                }
+                @if (getKmeansClusterEntries().length > 0) {
+                  <div class="stats-grid">
+                    @for (entry of getKmeansClusterEntries(); track entry.key) {
+                      <div class="stat-item">
+                        <span class="stat-label">{{ entry.label }}</span>
+                        <span class="stat-value">{{ entry.value }}</span>
+                      </div>
+                    }
+                  </div>
+                }
+              }
+
               @if (step?.step_def_id === 'fit_curve') {
                 <button class="run-fit-btn" (click)="runCurveFit()" [disabled]="previewLoading || isPreviewMode">
                   {{ previewLoading ? '⏳ Futtatás...' : '▶ Görbe illesztés futtatása' }}
@@ -957,192 +1159,6 @@ interface NodeHelpContent {
                     </div>
                   }
                 }
-              }
-
-              @if ((step?.step_def_id === 'gray_map' || step?.step_def_id === 'rgb_cls_reference_mapping') && getGrayMapDisplayOptions().length > 0) {
-                <div class="gray-map-panel">
-                  <div class="gray-map-toolbar">
-                    <div class="gray-map-toolbar-row">
-                      <span class="gray-map-toolbar-label">Megjelenítés</span>
-                      <select
-                        class="gray-map-select"
-                        [ngModel]="selectedGrayMapKey"
-                        (ngModelChange)="onGrayMapSelectionChange($event)"
-                      >
-                        @for (option of getGrayMapDisplayOptions(); track option.key) {
-                          <option [value]="option.key">{{ option.label }}</option>
-                        }
-                      </select>
-                    </div>
-                    @if (isJetSoftKey(selectedGrayMapKey)) {
-                      <div class="jet-colorbar-wrap">
-                        <div class="jet-colorbar-bar"></div>
-                        <div class="jet-colorbar-ticks">
-                          <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-                        </div>
-                      </div>
-                    }
-                    @if (getGrayMapSummary()) {
-                      <div class="gray-map-summary">{{ getGrayMapSummary() }}</div>
-                    }
-                  </div>
-
-                  <div class="gray-map-grid">
-                    @for (item of getGrayMapImageItems(); track item.key) {
-                      <div
-                        class="gray-map-card"
-                        [class.selected]="selectedGrayMapKey === item.familyKey && selectedGrayMapComponentIndex === (item.componentIndex ?? 0)"
-                        (click)="showGrayMapInPreview(item.familyKey, item.componentIndex ?? 0)"
-                      >
-                        <div class="gray-map-title">
-                          {{ item.label }}
-                          @if (item.componentCount) {
-                            <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
-                          }
-                        </div>
-                        <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
-                      </div>
-                    }
-                  </div>
-                </div>
-              }
-
-              @if (step?.step_def_id === 'dual_map' && hasDualMapData()) {
-                <div class="dual-map-panel">
-                  <!-- Gray side -->
-                  <div class="dual-map-section">
-                    <div class="dual-map-section-title">Szürke oldal</div>
-                    <div class="gray-map-toolbar">
-                      <div class="gray-map-toolbar-row">
-                        <span class="gray-map-toolbar-label">Megjelenítés</span>
-                        <select
-                          class="gray-map-select"
-                          [ngModel]="selectedDualMapGrayKey"
-                          (ngModelChange)="onDualMapGrayKeyChange($event)"
-                        >
-                          @for (option of getDualMapGrayOptions(); track option.key) {
-                            <option [value]="option.key">{{ option.label }}</option>
-                          }
-                        </select>
-                      </div>
-                      @if (isJetSoftKey(selectedDualMapGrayKey)) {
-                        <div class="jet-colorbar-wrap">
-                          <div class="jet-colorbar-bar"></div>
-                          <div class="jet-colorbar-ticks">
-                            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-                          </div>
-                        </div>
-                      }
-                    </div>
-                    <div class="gray-map-grid">
-                      @for (item of getDualMapGrayItems(); track item.key) {
-                        <div
-                          class="gray-map-card"
-                          [class.selected]="selectedDualMapGrayKey === item.familyKey && selectedDualMapGrayCompIdx === (item.componentIndex ?? 0)"
-                          (click)="showDualMapInPreview('gray', item.familyKey, item.componentIndex ?? 0)"
-                        >
-                          <div class="gray-map-title">
-                            {{ item.label }}
-                            @if (item.componentCount) {
-                              <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
-                            }
-                          </div>
-                          <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
-                        </div>
-                      }
-                    </div>
-                  </div>
-
-                  <!-- RGB side -->
-                  <div class="dual-map-section">
-                    <div class="dual-map-section-title">RGB oldal</div>
-                    <div class="gray-map-toolbar">
-                      <div class="gray-map-toolbar-row">
-                        <span class="gray-map-toolbar-label">Megjelenítés</span>
-                        <select
-                          class="gray-map-select"
-                          [ngModel]="selectedDualMapRgbKey"
-                          (ngModelChange)="onDualMapRgbKeyChange($event)"
-                        >
-                          @for (option of getDualMapRgbOptions(); track option.key) {
-                            <option [value]="option.key">{{ option.label }}</option>
-                          }
-                        </select>
-                      </div>
-                      @if (isJetSoftKey(selectedDualMapRgbKey)) {
-                        <div class="jet-colorbar-wrap">
-                          <div class="jet-colorbar-bar"></div>
-                          <div class="jet-colorbar-ticks">
-                            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-                          </div>
-                        </div>
-                      }
-                    </div>
-                    <div class="gray-map-grid">
-                      @for (item of getDualMapRgbItems(); track item.key) {
-                        <div
-                          class="gray-map-card"
-                          [class.selected]="selectedDualMapRgbKey === item.familyKey && selectedDualMapRgbCompIdx === (item.componentIndex ?? 0)"
-                          (click)="showDualMapInPreview('rgb', item.familyKey, item.componentIndex ?? 0)"
-                        >
-                          <div class="gray-map-title">
-                            {{ item.label }}
-                            @if (item.componentCount) {
-                              <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
-                            }
-                          </div>
-                          <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
-                        </div>
-                      }
-                    </div>
-                  </div>
-
-                  <!-- Sub-classification section (visible only when sub params produce output) -->
-                  @if (hasDualMapSubData()) {
-                    <div class="dual-map-section dual-map-section--sub">
-                      <div class="dual-map-section-title">Aláosztályozás</div>
-                      <div class="gray-map-toolbar">
-                        <div class="gray-map-toolbar-row">
-                          <span class="gray-map-toolbar-label">Megjelenítés</span>
-                          <select
-                            class="gray-map-select"
-                            [ngModel]="selectedDualMapSubKey"
-                            (ngModelChange)="onDualMapSubKeyChange($event)"
-                          >
-                            @for (option of getDualMapSubOptions(); track option.key) {
-                              <option [value]="option.key">{{ option.label }}</option>
-                            }
-                          </select>
-                        </div>
-                        @if (isJetSoftKey(selectedDualMapSubKey)) {
-                          <div class="jet-colorbar-wrap">
-                            <div class="jet-colorbar-bar"></div>
-                            <div class="jet-colorbar-ticks">
-                              <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-                            </div>
-                          </div>
-                        }
-                      </div>
-                      <div class="gray-map-grid">
-                        @for (item of getDualMapSubItems(); track item.key) {
-                          <div
-                            class="gray-map-card"
-                            [class.selected]="selectedDualMapSubKey === item.familyKey && selectedDualMapSubCompIdx === (item.componentIndex ?? 0)"
-                            (click)="showDualMapInPreview('sub', item.familyKey, item.componentIndex ?? 0)"
-                          >
-                            <div class="gray-map-title">
-                              {{ item.label }}
-                              @if (item.componentCount) {
-                                <span class="gray-map-count">({{ (item.componentIndex ?? 0) + 1 }} / {{ item.componentCount }})</span>
-                              }
-                            </div>
-                            <img class="gray-map-image" [src]="item.src" [alt]="item.label" />
-                          </div>
-                        }
-                      </div>
-                    </div>
-                  }
-                </div>
               }
           </div>
         }
@@ -1481,6 +1497,93 @@ interface NodeHelpContent {
       background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
       border-radius: 8px; text-align: center;
     }
+    .reference-crop-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0 12px;
+    }
+    .reference-crop-toggle {
+      border: 1px solid #3b82f6;
+      background: rgba(59, 130, 246, 0.12);
+      color: #dbeafe;
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .reference-crop-toggle.active {
+      background: #2563eb;
+      color: #fff;
+    }
+    .reference-crop-count {
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    .reference-crop-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: -4px 0 12px;
+    }
+    .reference-crop-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .reference-crop-index {
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      color: #e5e7eb;
+      font-size: 12px;
+      font-weight: 700;
+      background: #374151;
+      border-radius: 999px;
+    }
+    .reference-crop-name {
+      flex: 1;
+      min-width: 0;
+      height: 30px;
+      padding: 0 9px;
+      background: #1f2227;
+      border: 1px solid #3a3f46;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-size: 12px;
+    }
+    .reference-crop-name:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .reference-crop-delete {
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: #9ca3af;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .reference-crop-delete:hover {
+      border-color: rgba(239, 68, 68, 0.45);
+      background: rgba(239, 68, 68, 0.12);
+      color: #f87171;
+    }
+    .reference-crop-delete:focus-visible {
+      outline: 2px solid #ef4444;
+      outline-offset: 1px;
+    }
     .param-row {
       display: flex;
       flex-direction: column;
@@ -1499,6 +1602,52 @@ interface NodeHelpContent {
       line-height: 1.25;
     }
     .param-control { width: 100%; }
+
+    .label-picker {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .label-chip {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      color: #cbd5e1;
+      background: #202733;
+      border: 1px solid #3a4658;
+      border-radius: 7px;
+      font: inherit;
+      cursor: pointer;
+      transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+    }
+
+    .label-chip:hover {
+      border-color: #718096;
+      background: #293241;
+    }
+
+    .label-chip.active {
+      color: #f8fbff;
+      background: #174b73;
+      border-color: #3b9bdd;
+    }
+
+    .label-chip-swatch {
+      width: 18px;
+      height: 18px;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 18px;
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.75);
+      border-radius: 4px;
+      font-size: 11px;
+      line-height: 1;
+      text-shadow: 0 1px 2px #000;
+    }
 
     .threshold-histogram-wrap {
       margin-top: 8px;
@@ -2324,6 +2473,46 @@ interface NodeHelpContent {
       background: #f5f5f5;
       border-radius: 8px;
     }
+
+    .cluster-components {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 10px 0 14px;
+      padding: 10px;
+      border: 1px solid #474b52;
+      border-radius: 8px;
+    }
+    .cluster-component-card {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px;
+      border-left: 4px solid #2e7d32;
+      background: #24282a;
+      border-radius: 5px;
+    }
+    .cluster-component-card input[type="text"] { font-weight: 600; }
+    .cluster-component-summary { color: #aab3bf; font-size: 12px; }
+    .cluster-component-preview {
+      display: block;
+      width: 100%;
+      max-height: 180px;
+      object-fit: contain;
+      background: #111;
+      border-radius: 5px;
+    }
+    .cluster-component-card.remainder { border-left-color: #f59e0b; }
+    .cluster-remainder-button {
+      padding: 9px 12px;
+      border: 0;
+      border-radius: 6px;
+      color: #fff;
+      background: #b46a08;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .cluster-remainder-button:disabled { opacity: .45; cursor: default; }
   `],
 })
 export class StepInspectorComponent implements OnInit, OnDestroy {
@@ -2525,16 +2714,6 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
           this.referenceGroups = [];
         }
 
-        if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') {
-          this.grayMapSelectionInitialized = false;
-        }
-
-        if (this.step?.step_def_id !== 'dual_map') {
-          this.dualMapInitialized = false;
-        }
-
-        this.syncGrayMapPreview();
-        this.syncDualMapPreview();
       }),
       this.pipelineState.omittedPoints$.subscribe(({ indices, imageNames }) => {
         this.currentOmittedIndices = new Set(indices);
@@ -2719,6 +2898,235 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return this.step?.step_def_id === 'mask_rect_roi';
   }
 
+  getClusterMapLabelOptions(): number[] {
+    const previousK = this.getPreviousKmeansK();
+    return Array.from({ length: Math.max(2, previousK) }, (_, i) => i + 1);
+  }
+
+  private getPreviousKmeansK(): number {
+    const pipeline = this.pipelineState.getPipeline();
+    for (let i = this.selectedIndex - 1; i >= 0; i--) {
+      const candidate = pipeline.steps[i];
+      if (candidate.step_def_id === 'kmeans_cluster') return Number(candidate.param_values?.['k'] ?? 3);
+    }
+    return 3;
+  }
+
+  isClusterMapLabelSelected(label: number): boolean {
+    return String(this.getParamValue('selected_labels') ?? '').split(',').map(v => Number(v.trim())).includes(label);
+  }
+
+  getSelectedClusterMapLabelOptions(): number[] {
+    const selected = this.getClusterMapLabelOptions().filter(
+      label => this.isClusterMapLabelSelected(label),
+    );
+    return selected.length ? selected : [1];
+  }
+
+  getClusterLabelColor(label: number): string {
+    const colors = [
+      '#ff0000', '#00ff00', '#0000ff', '#ffff00',
+      '#ff00ff', '#00ffff', '#ff0080', '#0080ff',
+      '#ff8000', '#80ff00', '#8000ff', '#00ff80',
+    ];
+    return colors[(Math.max(1, label) - 1) % colors.length];
+  }
+
+  toggleClusterMapLabel(label: number): void {
+    const selected = new Set(String(this.getParamValue('selected_labels') ?? '').split(',').map(v => Number(v.trim())).filter(v => v > 0));
+    if (selected.has(label)) {
+      if (selected.size === 1) return;
+      selected.delete(label);
+    } else {
+      selected.add(label);
+    }
+    const selectedLabels = Array.from(selected).sort((a, b) => a - b);
+    this.onParamChange('selected_labels', selectedLabels.join(','));
+    const referenceLabel = Number(this.getParamValue('reference_label') ?? 1);
+    if (!selected.has(referenceLabel)) {
+      this.onParamChange('reference_label', String(selectedLabels[0]));
+    }
+  }
+
+  getAcceptedClusterMaps(): any[] {
+    try {
+      const parsed = JSON.parse(String(this.getParamValue('accepted_components') ?? '[]'));
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  getAcceptedClusterMapImage(componentIndex: number): string | null {
+    const rows = this.sideOutputs?.['cluster_map_component_images_base64'];
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const imageIndex = Math.min(Math.max(this.previewImageIndex, 0), rows.length - 1);
+    const row = rows[imageIndex];
+    const encoded = Array.isArray(row) ? row[componentIndex] : null;
+    return typeof encoded === 'string' && encoded
+      ? `data:image/png;base64,${encoded}`
+      : null;
+  }
+
+  updateAcceptedClusterMap(index: number, key: string, value: any): void {
+    const components = this.getAcceptedClusterMaps().map((component) => ({ ...component }));
+    if (!components[index]) return;
+    components[index][key] = key === 'map_multiplier'
+      ? Math.max(0, Math.min(1, Number(value) || 0))
+      : value;
+    this.onParamChange('accepted_components', JSON.stringify(components));
+  }
+
+  removeAcceptedClusterMap(index: number): void {
+    const components = this.getAcceptedClusterMaps();
+    components.splice(index, 1);
+    this.onParamChange('accepted_components', JSON.stringify(components));
+  }
+
+  calculateClusterMapRemainder(): void {
+    if (this.getAcceptedClusterMaps().length < 2) return;
+    this.onParamChange('remainder_as_last', true);
+  }
+
+  removeClusterMapRemainder(): void {
+    this.onParamChange('remainder_as_last', false);
+  }
+
+  isReferenceCropStep(): boolean {
+    return this.step?.step_def_id === 'reference_crop';
+  }
+
+  toggleReferenceCropView(): void {
+    this.onParamChange('show_references', !this.getParamValue('show_references'));
+  }
+
+  getReferenceCropCount(): number {
+    return this.getReferenceCropSquares().length;
+  }
+
+  getReferenceCropCountLabel(): string {
+    const currentCount = this.getReferenceCropCount();
+    const totalCount = this.getReferenceCropTotalCount();
+    if (totalCount > currentCount) {
+      return `${currentCount} ezen a kepen / ${totalCount} osszesen`;
+    }
+    return `${currentCount} kijeloles`;
+  }
+
+  getReferenceCropRows(): Array<{ key: string; index: number; localIndex: number; imageKey: string; name: string }> {
+    const overrides = this.getReferenceCropOverrides();
+    const keys = Object.keys(overrides).sort((a, b) => Number(a) - Number(b));
+    if (keys.length > 0) {
+      const rows: Array<{ key: string; index: number; localIndex: number; imageKey: string; name: string }> = [];
+      for (const imageKey of keys) {
+        const squares = Array.isArray(overrides[imageKey]) ? overrides[imageKey] : [];
+        squares.forEach((sq, localIndex) => {
+          const index = rows.length;
+          rows.push({
+            key: `${imageKey}:${localIndex}`,
+            index,
+            localIndex,
+            imageKey,
+            name: String(sq?.name ?? ''),
+          });
+        });
+      }
+      return rows;
+    }
+    return this.getReferenceCropSquares().map((sq, index) => ({
+      key: `base:${index}`,
+      index,
+      localIndex: index,
+      imageKey: '',
+      name: String(sq?.name ?? ''),
+    }));
+  }
+
+  onReferenceCropNameChange(
+    crop: { index: number; localIndex: number; imageKey: string },
+    name: string
+  ): void {
+    if (!this.step || this.selectedIndex < 0) return;
+    const overrides = this.getReferenceCropOverrides();
+    let squares: any[];
+    if (crop.imageKey) {
+      squares = Array.isArray(overrides[crop.imageKey]) ? [...overrides[crop.imageKey]] : [];
+      if (crop.localIndex < 0 || crop.localIndex >= squares.length) return;
+      squares[crop.localIndex] = { ...squares[crop.localIndex], name };
+      overrides[crop.imageKey] = squares;
+    } else {
+      squares = this.getReferenceCropSquares();
+      if (crop.index < 0 || crop.index >= squares.length) return;
+      squares[crop.index] = { ...squares[crop.index], name };
+    }
+    this.pipelineState.updateParams(this.selectedIndex, {
+      ...this.step.param_values,
+      reference_squares: JSON.stringify(this.getAllReferenceCropSquares(overrides, squares)),
+      reference_square_overrides: JSON.stringify(overrides),
+    });
+  }
+
+  removeReferenceCrop(crop: { index: number; localIndex: number; imageKey: string }): void {
+    if (!this.step || this.selectedIndex < 0) return;
+    const overrides = this.getReferenceCropOverrides();
+    let squares: any[];
+    if (crop.imageKey) {
+      const imageSquares = Array.isArray(overrides[crop.imageKey]) ? overrides[crop.imageKey] : [];
+      if (crop.localIndex < 0 || crop.localIndex >= imageSquares.length) return;
+      overrides[crop.imageKey] = imageSquares.filter((_, index) => index !== crop.localIndex);
+      squares = this.getReferenceCropSquares();
+    } else {
+      squares = this.getReferenceCropSquares();
+      if (crop.index < 0 || crop.index >= squares.length) return;
+      squares = squares.filter((_, index) => index !== crop.index);
+    }
+    this.pipelineState.updateParams(this.selectedIndex, {
+      ...this.step.param_values,
+      reference_squares: JSON.stringify(this.getAllReferenceCropSquares(overrides, squares)),
+      reference_square_overrides: JSON.stringify(overrides),
+    });
+  }
+
+  private getReferenceCropSquares(): any[] {
+    const overrides = this.getReferenceCropOverrides();
+    const current = overrides[String(this.previewImageIndex)];
+    if (Array.isArray(current)) return current;
+    if (Object.keys(overrides).length > 0) return [];
+    const raw = this.getParamValue('reference_squares') ?? '[]';
+    try {
+      const squares = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return Array.isArray(squares) ? squares : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private getReferenceCropTotalCount(): number {
+    const overrides = this.getReferenceCropOverrides();
+    const keys = Object.keys(overrides);
+    if (keys.length === 0) return this.getReferenceCropSquares().length;
+    return keys.reduce((sum, key) => {
+      const row = overrides[key];
+      return sum + (Array.isArray(row) ? row.length : 0);
+    }, 0);
+  }
+
+  private getReferenceCropOverrides(): Record<string, any[]> {
+    const raw = this.getParamValue('reference_square_overrides') ?? '{}';
+    try {
+      const overrides = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return overrides && typeof overrides === 'object' && !Array.isArray(overrides) ? overrides : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private getAllReferenceCropSquares(overrides: Record<string, any[]>, fallbackSquares: any[]): any[] {
+    const keys = Object.keys(overrides).sort((a, b) => Number(a) - Number(b));
+    if (keys.length === 0) return fallbackSquares;
+    return keys.flatMap((key) => Array.isArray(overrides[key]) ? overrides[key] : []);
+  }
+
   isRoiEmpty(): boolean {
     if (!this.isRoiStep()) return false;
     const t = this.normalizeRoiType(this.getParamValue('roi_type'));
@@ -2796,6 +3204,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
         return true;
       });
     }
+    if (this.step?.step_def_id === 'reference_crop') {
+      return params.filter(p => p.name !== 'reference_squares' && p.name !== 'reference_square_overrides' && p.name !== 'show_references');
+    }
     return params;
   }
 
@@ -2812,6 +3223,24 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     }
 
     if (this.step?.step_def_id === 'predict_node' && param.name === 'fit_index') return true;
+
+    if (this.step?.step_def_id === 'reference_crop') {
+      return param.name === 'reference_squares' || param.name === 'reference_square_overrides' || param.name === 'show_references';
+    }
+
+    if (this.step?.step_def_id === 'reference_color_align') {
+      const usesBranchReference = this.getParamValue('reference_branch') !== 'auto';
+      if (param.name === 'output_dark' || param.name === 'output_light') return true;
+      if (!usesBranchReference && param.name === 'mode') return true;
+    }
+
+    if (this.step?.step_def_id === 'cluster_reference_map') {
+      return param.name === 'accepted_components'
+        || param.name === 'remainder_as_last'
+        || param.name === 'remainder_name'
+        || param.name === 'remainder_display_multiplier'
+        || param.name === 'remainder_invert';
+    }
 
     if (this.step?.step_def_id === 'color_thresh') {
       if (param.name === 'space') return true;
@@ -2863,8 +3292,33 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return this.step?.step_def_id === 'predict_node' && paramName === 'y_name';
   }
 
+  isKmeansReferenceSourceParam(paramName: string): boolean {
+    return this.step?.step_def_id === 'kmeans_cluster' && paramName === 'reference_source';
+  }
+
   isPredictEquationParam(paramName: string): boolean {
     return this.step?.step_def_id === 'predict_node' && paramName === 'equation';
+  }
+
+  getKmeansReferenceSourceOptions(): Array<{ value: string; label: string }> {
+    const options: Array<{ value: string; label: string }> = [
+      { value: 'auto', label: 'Auto - aktualis referencia a pipeline-bol' },
+    ];
+    const pipeline = this.pipelineState.getPipeline();
+    const stop = this.selectedIndex >= 0 ? this.selectedIndex : pipeline.steps.length;
+    for (let i = 0; i < stop; i++) {
+      const step = pipeline.steps[i];
+      if (step.step_def_id !== 'reference_crop' && step.step_def_id !== 'reference_sequence') continue;
+      const label = step.step_def_id === 'reference_sequence'
+        ? `Reference sequence #${i + 1}`
+        : `Reference crop #${i + 1}`;
+      options.push({ value: step.instance_id, label });
+    }
+    const current = String(this.step?.param_values?.['reference_source'] ?? '').trim();
+    if (current && current !== 'auto' && !options.some((opt) => opt.value === current)) {
+      options.push({ value: current, label: `Ismeretlen forras (${current.slice(0, 8)})` });
+    }
+    return options;
   }
 
   getFitCurveAggMethodOptions(): string[] {
@@ -3022,7 +3476,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (id === 'save_images') return true;
     if (id === 'save_array') return true;
     if (id === 'predict_node') return (this.getPredictions()?.length ?? 0) > 0;
-    if (id === 'gray_map' || id === 'rgb_cls_reference_mapping') return this.getGrayMapDisplayOptions().length > 0;
+    if (id === 'kmeans_cluster') return !!this.getKmeansReferenceInfo() || this.getKmeansClusterEntries().length > 0;
     return false;
   }
 
@@ -3132,6 +3586,76 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return buildEntriesFromStat(values, '', '');
   }
 
+  getKmeansReferenceInfo(): {
+    mode?: string;
+    reference_crops_available: number;
+    uses_reference_crops: boolean;
+    effective_k: number;
+    reference_sequence_used?: boolean;
+    reference_source_label?: string;
+    reference_source_type?: string;
+    reference_sequence?: any;
+  } | null {
+    const rows = this.sideOutputs['kmeans_reference_info'];
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const idx = Math.min(this.previewImageIndex, rows.length - 1);
+    const row = rows[idx];
+    if (!row || typeof row !== 'object') return null;
+    const info = row as Record<string, any>;
+    return {
+      mode: String(info['mode'] ?? ''),
+      reference_crops_available: Number(info['reference_crops_available'] ?? 0),
+      uses_reference_crops: Boolean(info['uses_reference_crops']),
+      effective_k: Number(info['effective_k'] ?? 0),
+      reference_sequence_used: Boolean(info['reference_sequence_used']),
+      reference_source_label: String(info['reference_source_label'] ?? ''),
+      reference_source_type: String(info['reference_source_type'] ?? ''),
+      reference_sequence: info['reference_sequence'] ?? null,
+    };
+  }
+
+  getKmeansReferenceSequenceEntries(): { key: string; label: string; value: string }[] {
+    const info = this.getKmeansReferenceInfo();
+    const sequenceRows = info?.reference_sequence;
+    if (!Array.isArray(sequenceRows) || sequenceRows.length === 0) return [];
+    const idx = Math.min(this.previewImageIndex, sequenceRows.length - 1);
+    const row = sequenceRows[idx];
+    const items = row?.items;
+    if (!Array.isArray(items)) return [];
+    return items.map((item: any, i: number) => {
+      const scores = item?.scores && typeof item.scores === 'object' ? item.scores : {};
+      const scoreParts = Object.keys(scores)
+        .sort()
+        .map((key) => `${key}: ${Number(scores[key]).toFixed(1)}`);
+      const label = String(item?.label ?? i + 1);
+      return {
+        key: `ref_seq_${i}`,
+        label: `Ref ${i + 1} (${label})`,
+        value: scoreParts.length ? scoreParts.join(', ') : Number(item?.score ?? 0).toFixed(1),
+      };
+    });
+  }
+
+  getKmeansClusterEntries(): { key: string; label: string; value: string }[] {
+    const countsRows = this.sideOutputs['kmeans_counts'];
+    const percentageRows = this.sideOutputs['kmeans_percentages'];
+    if (!Array.isArray(countsRows) || countsRows.length === 0) return [];
+    const idx = Math.min(this.previewImageIndex, countsRows.length - 1);
+    const counts = countsRows[idx];
+    const percentages = Array.isArray(percentageRows)
+      ? percentageRows[Math.min(this.previewImageIndex, percentageRows.length - 1)]
+      : [];
+    if (!Array.isArray(counts)) return [];
+    return counts.map((count, i) => {
+      const pct = Array.isArray(percentages) && percentages[i] != null ? Number(percentages[i]) : null;
+      return {
+        key: `cluster_${i + 1}`,
+        label: `Klaszter ${i + 1}`,
+        value: pct == null || Number.isNaN(pct) ? `${count} px` : `${count} px (${pct.toFixed(1)}%)`,
+      };
+    });
+  }
+
   getLatestCurveFit(): CurveFitData | null {
     const fits = this.sideOutputs['curve_fits'];
     if (!Array.isArray(fits) || fits.length === 0) return null;
@@ -3180,230 +3704,6 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return preds;
   }
 
-  isJetSoftKey(key: string): boolean {
-    return key.includes('soft_membership_jet');
-  }
-
-  getGrayMapDisplayOptions(): Array<{ key: string; label: string }> {
-    if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') return [];
-
-    const previewIndex = Math.max(0, this.previewImageIndex || 0);
-    const options: Array<{ key: string; label: string }> = [];
-
-    if (this.getGrayMapSoftMembershipItems(previewIndex).length > 0) {
-      options.push({ key: 'soft_membership_jet', label: 'Soft membership' });
-    }
-
-    if (this.getGrayMapComponentItems('component_map_jet_base64', 'component_map_jet', 'Komponens térkép JET', previewIndex).length > 0) {
-      options.push({ key: 'component_map_jet', label: 'Komponens térkép JET' });
-    }
-
-    if (this.getGrayMapComponentItems('hard_jet_base64', 'hard_jet', 'Hard térkép JET', previewIndex).length > 0) {
-      options.push({ key: 'hard_jet', label: 'Hard térkép JET' });
-    }
-
-    if (this.getGrayMapBase64Item('component_map_base64', previewIndex)) {
-      options.push({ key: 'component_map_legacy', label: 'Komponens térkép' });
-    }
-
-    if (this.getGrayMapBase64Item('hard_composite_rgb_base64', previewIndex)) {
-      options.push({ key: 'hard_composite_rgb_legacy', label: 'Hard kompozit' });
-    }
-
-    if (this.getGrayMapBase64Item('soft_membership_base64', previewIndex)) {
-      options.push({ key: 'soft_membership_legacy', label: 'Soft membership' });
-    }
-
-    return options;
-  }
-
-  getGrayMapImageItems(): Array<{ key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string }> {
-    if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') return [];
-
-    const familyKey = this.getGrayMapResolvedFamilyKey();
-    const previewIndex = Math.max(0, this.previewImageIndex || 0);
-
-    if (familyKey === 'soft_membership_jet') {
-      return this.getGrayMapSoftMembershipItems(previewIndex);
-    }
-
-    if (familyKey === 'soft_membership_legacy') {
-      const src = this.getGrayMapBase64Item('soft_membership_base64', previewIndex);
-      return src ? [{ key: `soft_membership_legacy:${previewIndex}`, familyKey: 'soft_membership_legacy', label: 'Soft membership', src }] : [];
-    }
-
-    if (familyKey === 'component_map_legacy') {
-      const src = this.getGrayMapBase64Item('component_map_base64', previewIndex);
-      return src ? [{ key: `component_map_legacy:${previewIndex}`, familyKey: 'component_map_legacy', label: 'Komponens térkép', src }] : [];
-    }
-
-    if (familyKey === 'hard_composite_rgb_legacy') {
-      const src = this.getGrayMapBase64Item('hard_composite_rgb_base64', previewIndex);
-      return src ? [{ key: `hard_composite_rgb_legacy:${previewIndex}`, familyKey: 'hard_composite_rgb_legacy', label: 'Hard kompozit', src }] : [];
-    }
-
-    if (familyKey === 'component_map_jet') {
-      return this.getGrayMapComponentItems('component_map_jet_base64', 'component_map_jet', 'Komponens térkép JET', previewIndex);
-    }
-
-    if (familyKey === 'hard_jet') {
-      return this.getGrayMapComponentItems('hard_jet_base64', 'hard_jet', 'Hard térkép JET', previewIndex);
-    }
-
-    return [];
-  }
-
-  onGrayMapSelectionChange(key: string): void {
-    this.grayMapSelectionInitialized = true;
-    this.showGrayMapInPreview(key, 0);
-  }
-
-  showGrayMapInPreview(key: string, componentIndex: number = 0): void {
-    if (this.isPreviewMode) return;
-
-    const item = this.getGrayMapPreviewItem(key, componentIndex);
-    if (!item) return;
-
-    this.selectedGrayMapKey = item.familyKey;
-    this.selectedGrayMapComponentIndex = item.componentIndex ?? 0;
-    this.pipelineState.setPreviewImageOverride(item.src, false);
-  }
-
-  private getGrayMapResolvedFamilyKey(): string {
-    const options = this.getGrayMapDisplayOptions();
-    if (!options.length) return '';
-
-    const selected = options.find((option) => option.key === this.selectedGrayMapKey);
-    if (selected) return selected.key;
-
-    return options[0].key;
-  }
-
-  private getGrayMapComponentItems<T extends 'component_map_jet' | 'hard_jet' | 'soft_membership_jet'>(
-    sourceKey: 'component_map_jet_base64' | 'hard_jet_base64' | 'soft_membership_jet_base64' | 'soft_membership_base64',
-    familyKey: T,
-    label: string,
-    imageIndex: number,
-  ): Array<{ key: string; familyKey: T; componentIndex: number; componentCount: number; label: string; src: string }> {
-    const source = this.sideOutputs[sourceKey];
-    if (!Array.isArray(source) || source.length === 0) return [];
-
-    const idx = Math.max(0, Math.min(imageIndex, source.length - 1));
-    const imageComponents = source[idx];
-    const componentStrings = Array.isArray(imageComponents)
-      ? imageComponents
-      : (typeof imageComponents === 'string' && imageComponents.trim() ? [imageComponents] : []);
-
-    if (componentStrings.length === 0) return [];
-
-    return componentStrings
-      .map((item, componentIndex) => {
-        if (typeof item !== 'string' || !item.trim()) return null;
-        return {
-          key: `${familyKey}:${idx}:${componentIndex}`,
-          familyKey,
-          componentIndex,
-          componentCount: componentStrings.length,
-          label: `${label} - komponens ${componentIndex + 1}`,
-          src: `data:image/jpeg;base64,${item}`,
-        };
-      })
-      .filter((item): item is {
-        key: string;
-        familyKey: T;
-        componentIndex: number;
-        componentCount: number;
-        label: string;
-        src: string;
-      } => item !== null);
-  }
-
-  private getGrayMapSoftMembershipItems(imageIndex: number): Array<{ key: string; familyKey: 'soft_membership_jet'; componentIndex: number; componentCount: number; label: string; src: string }> {
-    const sourceKey = this.sideOutputs['soft_membership_jet_base64'] ? 'soft_membership_jet_base64' : 'soft_membership_base64';
-    return this.getGrayMapComponentItems(sourceKey, 'soft_membership_jet', 'Komponens', imageIndex);
-  }
-
-  private getGrayMapPreviewItem(
-    key: string,
-    componentIndex: number,
-  ): { key: string; familyKey: string; componentIndex?: number; componentCount?: number; label: string; src: string } | null {
-    const familyKey: 'soft_membership_jet' | 'soft_membership_legacy' | 'component_map_legacy' | 'hard_composite_rgb_legacy' | 'component_map_jet' | 'hard_jet' =
-      key === 'soft_membership_jet' || key === 'component_map_jet' || key === 'hard_jet' ||
-      key === 'soft_membership_legacy' || key === 'component_map_legacy' || key === 'hard_composite_rgb_legacy'
-        ? key
-        : (this.getGrayMapResolvedFamilyKey() as 'soft_membership_jet' | 'soft_membership_legacy' | 'component_map_legacy' | 'hard_composite_rgb_legacy' | 'component_map_jet' | 'hard_jet');
-
-    if (familyKey === 'soft_membership_jet') {
-      const items = this.getGrayMapSoftMembershipItems(Math.max(0, this.previewImageIndex || 0));
-      if (!items.length) return null;
-      const idx = Math.max(0, Math.min(componentIndex, items.length - 1));
-      return items[idx] ?? null;
-    }
-
-    if (familyKey === 'soft_membership_legacy') {
-      const src = this.getGrayMapBase64Item('soft_membership_base64', Math.max(0, this.previewImageIndex || 0));
-      return src ? {
-        key: `soft_membership_legacy:${this.previewImageIndex || 0}`,
-        familyKey,
-        label: 'Soft membership',
-        src,
-      } : null;
-    }
-
-    if (familyKey === 'component_map_legacy') {
-      const src = this.getGrayMapBase64Item('component_map_base64', Math.max(0, this.previewImageIndex || 0));
-      return src ? {
-        key: `component_map_legacy:${this.previewImageIndex || 0}`,
-        familyKey,
-        label: 'Komponens térkép',
-        src,
-      } : null;
-    }
-
-    if (familyKey === 'hard_composite_rgb_legacy') {
-      const src = this.getGrayMapBase64Item('hard_composite_rgb_base64', Math.max(0, this.previewImageIndex || 0));
-      return src ? {
-        key: `hard_composite_rgb_legacy:${this.previewImageIndex || 0}`,
-        familyKey,
-        label: 'Hard kompozit',
-        src,
-      } : null;
-    }
-
-    const items = this.getGrayMapComponentItems(
-      familyKey === 'component_map_jet' ? 'component_map_jet_base64' : 'hard_jet_base64',
-      familyKey as 'component_map_jet' | 'hard_jet',
-      familyKey === 'component_map_jet' ? 'Komponens térkép JET' : 'Hard térkép JET',
-      Math.max(0, this.previewImageIndex || 0),
-    );
-
-    if (!items.length) return null;
-    const idx = Math.max(0, Math.min(componentIndex, items.length - 1));
-    return items[idx] ?? null;
-  }
-
-  private syncGrayMapPreview(): void {
-    if (this.isPreviewMode) return;
-    if (this.step?.step_def_id !== 'gray_map' && this.step?.step_def_id !== 'rgb_cls_reference_mapping') return;
-
-    const options = this.getGrayMapDisplayOptions();
-    if (!options.length) return;
-
-    if (!this.grayMapSelectionInitialized) {
-      const preferred = options.find((option) => option.key === 'soft_membership_jet') ?? options[0];
-      this.selectedGrayMapKey = preferred.key;
-      this.selectedGrayMapComponentIndex = 0;
-      this.grayMapSelectionInitialized = true;
-    }
-
-    const item = this.getGrayMapPreviewItem(this.selectedGrayMapKey, this.selectedGrayMapComponentIndex);
-    if (!item) return;
-
-    this.selectedGrayMapKey = item.familyKey;
-    this.selectedGrayMapComponentIndex = item.componentIndex ?? 0;
-    this.pipelineState.setPreviewImageOverride(item.src, false);
-  }
-
   getGrayMapSummary(): string {
     if (this.step?.step_def_id !== 'gray_map') return '';
 
@@ -3418,27 +3718,6 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius)) return '';
 
     return `Körközép: (${cx.toFixed(1)}, ${cy.toFixed(1)}), sugár: ${radius.toFixed(1)} px`;
-  }
-
-  private getGrayMapBase64Item(
-    key: 'hard_composite_rgb_base64' | 'component_map_base64' | 'soft_membership_base64' | 'hard_jet_base64' | 'component_map_jet_base64',
-    imageIndex: number,
-  ): string | null {
-    const source = this.sideOutputs[key];
-    if (!Array.isArray(source) || source.length === 0) return null;
-
-    const idx = Math.max(0, Math.min(imageIndex, source.length - 1));
-    const item = source[idx];
-    if (typeof item === 'string' && item.trim()) {
-      return `data:image/jpeg;base64,${item}`;
-    }
-
-    if (Array.isArray(item)) {
-      const first = item.find((value) => typeof value === 'string' && value.trim());
-      return typeof first === 'string' && first.trim() ? `data:image/jpeg;base64,${first}` : null;
-    }
-
-    return null;
   }
 
   // ── dual_map helpers ──────────────────────────────────────────────────────
@@ -3771,6 +4050,26 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   };
 
   getFilteredOptions(param: ParamSchema): string[] {
+    if (this.step?.step_def_id === 'pseudo_image' &&
+        ['blue_source', 'green_source', 'red_source'].includes(param.name)) {
+      const imageCount = Math.max(1, this.loadedImageNames.length);
+      return Array.from({ length: imageCount }, (_, index) =>
+        ['B', 'G', 'R', 'GRAY'].map(channel => `${index + 1}-${channel}`)
+      ).flat();
+    }
+    if (this.step?.step_def_id === 'reference_color_align' && param.name === 'reference_branch') {
+      const pipeline = this.pipelineState.getPipeline();
+      const available: string[] = [];
+      for (let i = 0; i < pipeline.steps.length; i++) {
+        if (pipeline.steps[i].step_def_id !== 'load_image' || pipeline.steps[i].enabled === false) continue;
+        const end = pipeline.steps.findIndex((candidate, index) => index > i && candidate.step_def_id === 'load_image');
+        const branchEnd = end < 0 ? pipeline.steps.length : end;
+        if (pipeline.steps.slice(i + 1, branchEnd).some(candidate => candidate.step_def_id === 'reference_crop' && candidate.enabled !== false)) {
+          available.push(pipeline.steps[i].instance_id);
+        }
+      }
+      return ['auto', ...available];
+    }
     if (this.step?.step_def_id === 'select_channel' && param.name === 'channel') {
       const space = this.getParamValue('space') ?? 'GRAY';
       return this.CHANNEL_MAP[space] ?? param.options ?? [];
@@ -3782,6 +4081,37 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   getOptionDisplayLabel(param: ParamSchema, option: string): string {
+    if (this.step?.step_def_id === 'pseudo_image' &&
+        ['blue_source', 'green_source', 'red_source'].includes(param.name)) {
+      const [imageNumber, channel] = option.split('-', 2);
+      const imageName = this.loadedImageNames[Number(imageNumber) - 1];
+      return imageName ? `${imageNumber}. kép (${imageName}) – ${channel}` : `${imageNumber}. kép – ${channel}`;
+    }
+    if (this.step?.step_def_id === 'reference_color_align' && param.name === 'reference_branch') {
+      if (option === 'auto') return 'Regi referencia cropok';
+      const pipeline = this.pipelineState.getPipeline();
+      const branchStarts = pipeline.steps.filter(candidate => candidate.step_def_id === 'load_image');
+      const index = branchStarts.findIndex(candidate => candidate.instance_id === option);
+      return pipeline.branch_names?.[option] ?? `Ag ${index + 1}`;
+    }
+    if (this.step?.step_def_id === 'reference_color_align' && param.name === 'mode') {
+      const map: Record<string, string> = {
+        location: 'Csak tonusillesztes',
+        location_scale: 'Tonus- es szinillesztes',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'cluster_reference_map' && param.name === 'center_mode') {
+      const map: Record<string, string> = {
+        min_max_midpoint: 'Minimum és maximum közepe',
+        cluster_median: 'Klaszter mediánja',
+        reference_mean: 'Referencia átlaga',
+        reference_mean_half: 'Referenciaátlag fele',
+      };
+      return map[option] ?? option;
+    }
+
     if (this.step?.step_def_id === 'apply_blur' && param.name === 'method') {
       const map: Record<string, string> = {
         gaussian: 'Gauss elmosás',
@@ -3831,6 +4161,32 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       const map: Record<string, string> = {
         image: 'Korrigált kép',
         histogram: 'Korrigált hisztogram',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'kmeans_cluster' && param.name === 'init_mode') {
+      const map: Record<string, string> = {
+        auto: 'Automatikus',
+        reference_fixed: 'Fix referencia cropok',
+        reference_seeded: 'Referenciaval inditott k-means',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'kmeans_cluster' && param.name === 'output_mode') {
+      const map: Record<string, string> = {
+        palette: 'Kontrasztos paletta',
+        centroid: 'Klaszterkozep szine',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'kmeans_cluster' && param.name === 'background') {
+      const map: Record<string, string> = {
+        black: 'Fekete',
+        white: 'Feher',
+        original: 'Eredeti kep',
       };
       return map[option] ?? option;
     }

@@ -38,6 +38,11 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2102": "Érvénytelen színtér megadva.",
     "E2103": "Érvénytelen csatorna megadva.",
     "E2104": "Színtér konverzió sikertelen.",
+    # pseudo_image
+    "E2150": "A pszeudokép előállításához legalább egy betöltött kép szükséges.",
+    "E2151": "Az egyik forráskép formátuma nem támogatott.",
+    "E2152": "A két forráskép mérete nem egyezik.",
+    "E2153": "Érvénytelen pszeudokép-csatorna lett kiválasztva.",
     # apply_threshold
     "E2201": "Nincsenek feldolgozandó képek.",
     "E2202": "A képek nem egycsatornásak, küszöbölés előtt csatorna kiválasztás szükséges.",
@@ -80,6 +85,15 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2603": "Hiányzó vagy érvénytelen maszkok. Futtassa előbb a ROI vagy maszkoló lépést.",
     "E2604": "A kép és a maszk mérete nem egyezik.",
     "E2605": "Érvénytelen numerikus lista a gray_map node paramétereiben.",
+    # label-based cluster map
+    "E3721": "Hiányzik a k-közép klaszterezés eredménye. A Map node-ot k-közép node után helyezze el.",
+    "E3722": "Válasszon legalább egy referencia labelt.",
+    "E3723": "Érvénytelen térkép színskála.",
+    "E3724": "A kép és a k-közép label map mérete nem egyezik.",
+    "E3725": "A kiválasztott labelekhez nem tartozik referencia pixel.",
+    "E3726": "Érvénytelen klaszterközép-számítási mód.",
+    "E3727": "A referenciaklaszter érvénytelen, vagy nem tartalmaz pixelt.",
+    "E3728": "A térkép szorzójának 0 és 1 közé kell esnie.",
     # fit_curve
     "E2701": "Nincsenek eredmények (results) az adatokban.",
     "E2702": "Az X tengely változó nem található.",
@@ -230,6 +244,25 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E3605": "Az elmosás kernel méretnek páratlan pozitív számnak kell lennie.",
     "E3606": "Üres kép a kör detektálás bemeneteként.",
     "E3607": "Nem támogatott képformátum.",
+    # kmeans_cluster
+    "E3701": "Nincsenek feldolgozando kepek.",
+    "E3702": "Ervenytelen klaszterszam (2 es 32 kozotti egesz szam szukseges).",
+    "E3703": "Ervenytelen szinter (BGR, HSV, LAB vagy GRAY szukseges).",
+    "E3704": "Ervenytelen k-kozep futtatasi parameter.",
+    "E3705": "Ervenytelen kimeneti szinezes.",
+    "E3706": "Ervenytelen hatter beallitas.",
+    "E3707": "Ures kep a k-kozep klaszterezes bemenetekent.",
+    "E3708": "Nem tamogatott kepformatum a k-kozep klaszterezeshez.",
+    "E3709": "A kep es a maszk merete nem egyezik.",
+    "E3710": "Tul keves ervenyes pixel van a megadott klaszterszamhoz.",
+    "E3711": "Ervenytelen referencia hasznalati mod.",
+    "E3712": "Nincs eleg referencia crop a referencia-alapu klaszterezeshez.",
+    "E3713": "A referencia cropok nem fednek le minden klasztert a kepen.",
+    "E3541": "A referenciaszin-illesztes referenciaja nem erheto el. Valasszon egy kepbetoltesi agat, vagy a regi modhoz tegyen ele Reference crop node-ot.",
+    "E3542": "Ervenytelen kep vagy beallitas a referenciaszin-illeszteshez.",
+    "E3543": "A legsotetebb es legvilagosabb referencia fenyessege nem kulonbozik elegge.",
+    "E3544": "A kivalasztott illesztendo ag elso kepe nem toltheto be.",
+    "E3545": "A referenciaszin-illesztes bemeneten nem talalhatok Reference crop kivagasok.",
 }
 
 
@@ -304,10 +337,72 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
 
     # Copy serializable results
     results = data.get("results", {})
-    _skip_result_keys = {"range_masks", "region_masks"}
+    _skip_result_keys = {
+        "range_masks", "region_masks", "cluster_map_raw",
+        "cluster_map_components_raw", "cluster_map_remainder_raw",
+    }
     for key, val in results.items():
         if key in _skip_result_keys:
             side[f"{key}_count"] = len(val) if isinstance(val, list) else 0
+            continue
+        elif key == "cluster_map_component_images":
+            import cv2
+            import base64
+
+            encoded_rows = []
+            for row in val if isinstance(val, list) else []:
+                encoded_row = []
+                for img in row if isinstance(row, list) else []:
+                    if img is None or not hasattr(img, "shape"):
+                        encoded_row.append(None)
+                        continue
+                    arr = np.asarray(img)
+                    if arr.dtype != np.uint8:
+                        arr = np.clip(arr, 0, 255).astype(np.uint8)
+                    if arr.ndim == 2:
+                        arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+                    ok, png = cv2.imencode(".png", arr, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+                    encoded_row.append(base64.b64encode(png.tobytes()).decode("ascii") if ok else None)
+                encoded_rows.append(encoded_row)
+            side["cluster_map_component_images_base64"] = encoded_rows
+            continue
+        elif key in {"cluster_map_images"}:
+            import cv2
+            import base64
+            encoded = []
+            for img in val if isinstance(val, list) else []:
+                if img is None or not hasattr(img, "shape"):
+                    encoded.append(None)
+                    continue
+                arr = np.asarray(img)
+                if arr.dtype != np.uint8:
+                    arr = np.clip(arr, 0, 255).astype(np.uint8)
+                if arr.ndim == 2:
+                    arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+                ok, png = cv2.imencode(".png", arr, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+                encoded.append(base64.b64encode(png.tobytes()).decode("ascii") if ok else None)
+            side[f"{key}_base64"] = encoded
+            continue
+        elif key in {
+            "kmeans_source_images", "kmeans_labeled_images", "kmeans_overlay_images",
+            "cluster_map_overlay_images", "reference_color_align_source_images",
+            "reference_color_align_aligned_images",
+        }:
+            import cv2
+            import base64
+            encoded = []
+            for img in val if isinstance(val, list) else []:
+                if img is None or not hasattr(img, "shape"):
+                    encoded.append(None)
+                    continue
+                arr = np.asarray(img)
+                if arr.dtype != np.uint8:
+                    arr = np.clip(arr, 0, 255).astype(np.uint8)
+                if arr.ndim == 2:
+                    arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+                ok, jpeg = cv2.imencode(".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                encoded.append(base64.b64encode(jpeg.tobytes()).decode("ascii") if ok else None)
+            side[f"{key}_base64"] = encoded
             continue
         elif key == "circle_overlay":
             # Convert circle overlay images to base64
@@ -322,6 +417,48 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
                             b64_str = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
                             circle_overlay_b64.append(b64_str)
             side["circle_overlay_base64"] = circle_overlay_b64
+            continue
+        elif key == "reference_crops":
+            import cv2
+            import base64
+
+            crop_rows = []
+            if isinstance(val, list):
+                for row in val:
+                    encoded_row = []
+                    if isinstance(row, list):
+                        for img in row:
+                            if img is None or not hasattr(img, 'shape'):
+                                encoded_row.append(None)
+                                continue
+                            arr = img
+                            if arr.dtype != np.uint8:
+                                arr = np.clip(arr, 0, 255).astype(np.uint8)
+                            if arr.ndim == 2:
+                                arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+                            success, jpeg_buf = cv2.imencode('.jpg', arr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                            encoded_row.append(base64.b64encode(jpeg_buf.tobytes()).decode('ascii') if success else None)
+                    crop_rows.append(encoded_row)
+            side["reference_crops_base64"] = crop_rows
+            continue
+        elif key == "reference_crop_overlays":
+            import cv2
+            import base64
+
+            overlays = []
+            if isinstance(val, list):
+                for img in val:
+                    if img is None or not hasattr(img, 'shape'):
+                        overlays.append(None)
+                        continue
+                    arr = img
+                    if arr.dtype != np.uint8:
+                        arr = np.clip(arr, 0, 255).astype(np.uint8)
+                    if arr.ndim == 2:
+                        arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+                    success, jpeg_buf = cv2.imencode('.jpg', arr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    overlays.append(base64.b64encode(jpeg_buf.tobytes()).decode('ascii') if success else None)
+            side["reference_crop_overlays_base64"] = overlays
             continue
         elif key in {"gray_source_images", "rgb_source_images"}:
             # Dual-map original-image previews: encode each as a plain JPEG.
@@ -479,6 +616,327 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
     return side
 
 
+def _encode_preview_image_from_data(data: Optional[dict], requested_index: int = 0) -> Optional[dict]:
+    if not data or not data.get("images"):
+        return None
+
+    images = data.get("images", [])
+    if not images:
+        return None
+
+    if len(images) == 1:
+        img_idx = 0
+    else:
+        img_idx = max(0, min(requested_index, len(images) - 1))
+
+    img = images[img_idx]
+    if img is None or not hasattr(img, "shape"):
+        return None
+
+    arr = img
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+    is_grayscale = arr.ndim == 2
+    if is_grayscale:
+        img_enc = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+    else:
+        img_enc = arr
+
+    import base64
+    success, jpeg_buf = cv2.imencode(".jpg", img_enc, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not success:
+        return None
+
+    paths = data.get("_original_paths", data.get("paths", [])) or []
+    source_name = ""
+    if paths:
+        source_idx = max(0, min(requested_index, len(paths) - 1))
+        try:
+            import os
+            source_name = os.path.basename(paths[source_idx])
+        except Exception:
+            source_name = str(paths[source_idx])
+
+    return {
+        "image_base64": base64.b64encode(jpeg_buf.tobytes()).decode("ascii"),
+        "image_width": int(arr.shape[1]),
+        "image_height": int(arr.shape[0]),
+        "is_grayscale": bool(is_grayscale),
+        "image_count": int(data.get("_original_count", len(images))),
+        "source_name": source_name,
+    }
+
+
+def _encode_reference_sequence_preview_from_data(data: Optional[dict], requested_index: int = 0) -> Optional[dict]:
+    if not data:
+        return None
+
+    rows = data.get("results", {}).get("reference_crops")
+    if not isinstance(rows, list) or not rows:
+        return None
+
+    row_idx = 0 if len(rows) == 1 else max(0, min(requested_index, len(rows) - 1))
+    row = rows[row_idx]
+    if not isinstance(row, list) or not row:
+        return None
+
+    tiles = []
+    tile_h = 96
+    gap = 6
+    pad = 8
+    label_h = 20
+    for idx, crop in enumerate(row):
+        if crop is None or not hasattr(crop, "shape"):
+            continue
+        arr = crop
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        if arr.ndim == 2:
+            arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+        h, w = arr.shape[:2]
+        if h <= 0 or w <= 0:
+            continue
+        scale = tile_h / float(h)
+        tile_w = max(1, int(round(w * scale)))
+        resized = cv2.resize(arr, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
+        tile = np.full((tile_h + label_h, tile_w, 3), 24, dtype=np.uint8)
+        tile[:tile_h, :tile_w] = resized
+        cv2.putText(
+            tile,
+            str(idx + 1),
+            (4, tile_h + 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (220, 220, 220),
+            1,
+            cv2.LINE_AA,
+        )
+        tiles.append(tile)
+
+    if not tiles:
+        return None
+
+    width = pad * 2 + sum(tile.shape[1] for tile in tiles) + gap * (len(tiles) - 1)
+    height = pad * 2 + tile_h + label_h
+    canvas = np.full((height, width, 3), 16, dtype=np.uint8)
+    x = pad
+    for tile in tiles:
+        canvas[pad:pad + tile.shape[0], x:x + tile.shape[1]] = tile
+        x += tile.shape[1] + gap
+
+    import base64
+    success, jpeg_buf = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not success:
+        return None
+
+    return {
+        "image_base64": base64.b64encode(jpeg_buf.tobytes()).decode("ascii"),
+        "image_width": int(canvas.shape[1]),
+        "image_height": int(canvas.shape[0]),
+        "is_grayscale": False,
+        "image_count": int(data.get("_original_count", len(data.get("images", [])))),
+        "source_name": "Reference sequence",
+    }
+
+
+def _find_branch_start(steps, step_index: int) -> int:
+    for idx in range(min(step_index, len(steps) - 1), -1, -1):
+        if steps[idx].step_def_id == "load_image":
+            return idx
+    return 0
+
+
+def _find_branch_end_before_merge(steps, step_index: int, merge_step_index: int) -> int:
+    branch_start = _find_branch_start(steps, step_index)
+    branch_end = len(steps)
+    for idx in range(branch_start + 1, len(steps)):
+        if steps[idx].step_def_id == "load_image":
+            branch_end = idx
+            break
+
+    if branch_start <= merge_step_index < branch_end:
+        return max(branch_start, merge_step_index - 1)
+    return max(branch_start, branch_end - 1)
+
+
+def _build_branch_document(doc: PipelineDocument, start_index: int, end_index: int) -> PipelineDocument:
+    branch_steps = doc.steps[start_index:end_index]
+    branch_ids = {step.instance_id for step in branch_steps}
+    branch_connections = [
+        connection for connection in (doc.connections or [])
+        if connection.get("from_instance_id") in branch_ids
+        and connection.get("to_instance_id") in branch_ids
+    ]
+    return PipelineDocument(
+        schema_version=doc.schema_version,
+        name=doc.name,
+        description=doc.description,
+        steps=branch_steps,
+        connections=branch_connections,
+        created_at=doc.created_at,
+        modified_at=doc.modified_at,
+    )
+
+
+def _build_branch_merge_preview(
+    doc: PipelineDocument,
+    merge_step_index: int,
+    current_data: Optional[dict],
+    single_image_index: int,
+    omitted_indices: Optional[list],
+    thumbnail_max_dim: int,
+) -> dict:
+    requested_index = max(0, single_image_index if single_image_index >= 0 else 0)
+    current_start = _find_branch_start(doc.steps, merge_step_index)
+    merge_step = doc.steps[merge_step_index] if 0 <= merge_step_index < len(doc.steps) else None
+
+    panels = []
+    branch_errors = []
+    merge_input_data = []
+    branch_reference_sources = []
+    non_reference_input_data = None
+
+    connected_indices = []
+    if merge_step is not None:
+        id_to_index = {step.instance_id: idx for idx, step in enumerate(doc.steps)}
+        for connection in doc.connections or []:
+            if (
+                connection.get("to_instance_id") == merge_step.instance_id
+                and connection.get("kind") == "merge"
+            ):
+                source_index = id_to_index.get(connection.get("from_instance_id"))
+                if source_index is not None and source_index != merge_step_index:
+                    if source_index < merge_step_index and _find_branch_start(doc.steps, source_index) == current_start:
+                        continue
+                    connected_indices.append(source_index)
+
+    # Backward-compatible fallback: if no explicit merge inputs are wired,
+    # compare against the previous load_image branch.
+    if not connected_indices:
+        previous_start = -1
+        for idx in range(current_start - 1, -1, -1):
+            if doc.steps[idx].step_def_id == "load_image":
+                previous_start = idx
+                break
+        if previous_start >= 0:
+            connected_indices.append(current_start - 1)
+
+    seen_indices = set()
+    for panel_number, source_index in enumerate(connected_indices, start=1):
+        if source_index in seen_indices or source_index < 0:
+            continue
+        seen_indices.add(source_index)
+        source_preview_index = _find_branch_end_before_merge(doc.steps, source_index, merge_step_index)
+        source_start = _find_branch_start(doc.steps, source_preview_index)
+        source_doc = _build_branch_document(doc, source_start, source_preview_index + 1)
+        source_result = execute_pipeline(
+            source_doc,
+            up_to_step=len(source_doc.steps) - 1,
+            single_image_index=single_image_index,
+            omitted_indices=omitted_indices,
+            thumbnail_max_dim=thumbnail_max_dim,
+        )
+        if source_result.success:
+            if isinstance(source_result.data, dict):
+                merge_input_data.append(source_result.data)
+                first_result = source_result
+                if requested_index != 0:
+                    first_result = execute_pipeline(
+                        source_doc,
+                        up_to_step=len(source_doc.steps) - 1,
+                        single_image_index=0,
+                        omitted_indices=omitted_indices,
+                        thumbnail_max_dim=thumbnail_max_dim,
+                    )
+                first_images = first_result.data.get("images") if first_result.success and isinstance(first_result.data, dict) else None
+                branch_start_id = doc.steps[source_start].instance_id
+                branch_reference_sources.append({
+                    "id": branch_start_id,
+                    "label": doc.branch_names.get(branch_start_id) or f"Ag {len(branch_reference_sources) + 1}",
+                    "image": first_images[0] if isinstance(first_images, list) and first_images else None,
+                })
+            source_step_id = doc.steps[source_preview_index].step_def_id
+            if (
+                source_step_id != "reference_sequence"
+                and non_reference_input_data is None
+                and isinstance(source_result.data, dict)
+            ):
+                non_reference_input_data = source_result.data
+            if source_step_id == "reference_sequence":
+                source_panel = _encode_reference_sequence_preview_from_data(source_result.data, requested_index)
+            else:
+                source_panel = _encode_preview_image_from_data(source_result.data, requested_index)
+            if source_panel:
+                source_defn = STEP_DEFINITIONS.get(doc.steps[source_preview_index].step_def_id)
+                source_panel["label"] = source_defn.name if source_defn else f"Bemenet {panel_number}"
+                panels.append(source_panel)
+        else:
+            branch_errors.append({
+                "source_index": source_index,
+                "errors": [err.to_dict() for err in source_result.errors],
+            })
+
+    current_preview_index = _find_branch_end_before_merge(doc.steps, merge_step_index, merge_step_index)
+    current_doc = _build_branch_document(doc, current_start, current_preview_index + 1)
+    current_first_data = current_data
+    if requested_index != 0:
+        current_first_result = execute_pipeline(
+            current_doc,
+            up_to_step=len(current_doc.steps) - 1,
+            single_image_index=0,
+            omitted_indices=omitted_indices,
+            thumbnail_max_dim=thumbnail_max_dim,
+        )
+        if current_first_result.success:
+            current_first_data = current_first_result.data
+    current_first_images = current_first_data.get("images") if isinstance(current_first_data, dict) else None
+    current_start_id = doc.steps[current_start].instance_id
+    branch_reference_sources.append({
+        "id": current_start_id,
+        "label": doc.branch_names.get(current_start_id) or f"Ag {len(branch_reference_sources) + 1}",
+        "image": current_first_images[0] if isinstance(current_first_images, list) and current_first_images else None,
+    })
+    current_step_id = doc.steps[current_preview_index].step_def_id
+    if current_step_id == "reference_sequence":
+        current_panel = _encode_reference_sequence_preview_from_data(current_data, requested_index)
+    else:
+        current_panel = _encode_preview_image_from_data(current_data, requested_index)
+    if current_panel:
+        current_defn = STEP_DEFINITIONS.get(doc.steps[current_preview_index].step_def_id)
+        current_panel["label"] = current_defn.name if current_defn else "Aktualis ag"
+        panels.append(current_panel)
+
+    preview = {
+        "panels": panels,
+        "selected_image_index": requested_index,
+        "has_merge_inputs": bool(connected_indices),
+        # Internal execution payload; removed before the public preview result is stored.
+        "_merge_input_data": merge_input_data,
+        "_branch_reference_sources": branch_reference_sources,
+    }
+    # A reference-sequence branch supplies auxiliary reference data, not the
+    # image stream that downstream image-processing nodes should consume.
+    # When such a branch owns the merge node, promote the first explicitly
+    # connected non-reference branch to the primary stream and retain the
+    # current reference branch as an auxiliary merge input.
+    if (
+        current_step_id == "reference_sequence"
+        and non_reference_input_data is not None
+        and isinstance(current_data, dict)
+    ):
+        preview["_merge_primary_data"] = non_reference_input_data
+        preview["_merge_input_data"] = [
+            branch_data
+            for branch_data in merge_input_data
+            if branch_data is not non_reference_input_data
+        ]
+        preview["_merge_input_data"].append(current_data)
+    if branch_errors:
+        preview["branch_errors"] = branch_errors
+    return preview
+
+
 def execute_pipeline(
     doc: PipelineDocument,
     up_to_step: int = -1,
@@ -506,9 +964,20 @@ def execute_pipeline(
         up_to_step = len(doc.steps) - 1
 
     data: Optional[dict] = None
+    # A reference sequence is a collection-level view: loading only the
+    # currently selected image would hide references located on other images.
+    sequence_preview_all_images = (
+        doc.steps[up_to_step].step_def_id == "reference_sequence"
+        or any(
+            step.enabled and step.step_def_id == "pseudo_image"
+            for step in doc.steps[:up_to_step + 1]
+        )
+    )
 
     for i in range(up_to_step + 1):
         step_inst = doc.steps[i]
+        if not step_inst.enabled:
+            continue
         defn = STEP_DEFINITIONS.get(step_inst.step_def_id)
         if defn is None:
             return PipelineResult(
@@ -546,16 +1015,75 @@ def execute_pipeline(
             )
 
         params = _clamp_params(step_inst.step_def_id, step_inst.param_values)
+        params = dict(params) if isinstance(params, dict) else {}
+        params["_step_instance_id"] = step_inst.instance_id
+        params["_step_index"] = i
+        params["_step_def_id"] = step_inst.step_def_id
 
         # Pass single_image_index hint to load_image executor
-        if step_inst.step_def_id == "load_image" and single_image_index >= 0:
-            params = dict(params)
+        if (step_inst.step_def_id == "load_image"
+                and single_image_index >= 0
+                and not sequence_preview_all_images):
             params["_single_image_index"] = single_image_index
 
         # Pass thumbnail_max_dim hint to load_image executor
         if step_inst.step_def_id == "load_image" and thumbnail_max_dim > 0:
-            params = dict(params) if not isinstance(params, dict) else params
             params["_thumbnail_max_dim"] = thumbnail_max_dim
+
+        if step_inst.step_def_id == "branch_merge":
+            branch_merge_preview = _build_branch_merge_preview(
+                doc,
+                i,
+                data,
+                single_image_index,
+                omitted_indices,
+                thumbnail_max_dim,
+            )
+            params["_branch_merge_inputs"] = branch_merge_preview.pop("_merge_input_data", [])
+            params["_branch_reference_sources"] = branch_merge_preview.pop("_branch_reference_sources", [])
+            merge_primary_data = branch_merge_preview.pop("_merge_primary_data", None)
+            if isinstance(merge_primary_data, dict):
+                data = merge_primary_data
+            params["_branch_merge_preview"] = branch_merge_preview
+
+        # Reference colour alignment may read the first image of any earlier
+        # load-image branch directly; a branch_merge node is not required.
+        if step_inst.step_def_id == "reference_color_align":
+            reference_branch = str(params.get("reference_branch", "auto"))
+            if reference_branch != "auto":
+                branch_start = next((
+                    idx for idx, candidate in enumerate(doc.steps)
+                    if candidate.instance_id == reference_branch
+                    and candidate.step_def_id == "load_image"
+                    and candidate.enabled
+                ), -1)
+                if branch_start >= 0:
+                    branch_end = next((idx for idx in range(branch_start + 1, len(doc.steps)) if doc.steps[idx].step_def_id == "load_image"), len(doc.steps))
+                    crop_index = next((
+                        idx for idx in range(branch_end - 1, branch_start, -1)
+                        if doc.steps[idx].step_def_id == "reference_crop" and doc.steps[idx].enabled
+                    ), -1)
+                    if crop_index >= 0:
+                        source_doc = _build_branch_document(doc, branch_start, crop_index + 1)
+                        source_result = execute_pipeline(
+                            source_doc,
+                            up_to_step=len(source_doc.steps) - 1,
+                            # A reference-crop branch is a reference set: every
+                            # image contributes its crop, independently of which
+                            # target image is currently shown in the preview.
+                            single_image_index=-1,
+                            omitted_indices=None,
+                            thumbnail_max_dim=thumbnail_max_dim,
+                        )
+                        source_results = source_result.data.get("results") if source_result.success and isinstance(source_result.data, dict) else None
+                        crop_rows = source_results.get("reference_crops") if isinstance(source_results, dict) else None
+                        if isinstance(crop_rows, list) and crop_rows:
+                            data.setdefault("results", {})["reference_crops"] = crop_rows
+                            data["results"]["reference_crop_squares"] = source_results.get("reference_crop_squares")
+                            data.setdefault("meta", {})["selected_reference_crop_branch"] = {
+                                "id": reference_branch,
+                                "label": doc.branch_names.get(reference_branch) or f"Ag {sum(1 for candidate in doc.steps[:branch_start + 1] if candidate.step_def_id == 'load_image')}",
+                            }
 
         try:
             data = executor(data, params)
@@ -603,6 +1131,7 @@ def execute_pipeline(
         # After load_image, optionally trim to a single image for faster preview
         if (step_inst.step_def_id == "load_image"
                 and single_image_index >= 0
+                and not sequence_preview_all_images
                 and data is not None
                 and data.get("images")):
             if not data.get("_single_image_loaded"):

@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "name": "k",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "1daf8192-6233-44d3-8b6a-17851d816dec",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/Lilla/Desktop/Barack2/all_barack/balra.jpg",
+        "file_order": ""
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "3c335bb8-dc22-4877-870d-6571cdfbf9af",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "space": "GRAY",
+        "channel": "GRAY"
+      },
+      "order": 1
+    },
+    {
+      "instance_id": "854487cb-41da-40c5-a621-ba1b936ec093",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/Lilla/Desktop/Barack2/all_barack/Image__2026-06-22__12-01-35.jpg",
+        "file_order": ""
+      },
+      "order": 2
+    },
+    {
+      "instance_id": "4d75d063-83db-4315-bee7-5fc3725b63ec",
+      "step_def_id": "select_channel",
+      "param_values": {
+        "space": "GRAY",
+        "channel": "GRAY"
+      },
+      "order": 3
+    },
+    {
+      "instance_id": "83db4afa-0444-4d58-ade3-e0a309fd74e0",
+      "step_def_id": "reference_crop",
+      "param_values": {
+        "crop_size": 64,
+        "show_references": false,
+        "reference_squares": "[{\"x\":546,\"y\":606,\"size\":64,\"name\":\"\"},{\"x\":222,\"y\":410,\"size\":64,\"name\":\"\"},{\"x\":1033,\"y\":445,\"size\":64,\"name\":\"\"}]"
+      },
+      "order": 4
+    },
+    {
+      "instance_id": "44a38c26-badd-41f0-a9c5-78040534603f",
+      "step_def_id": "reference_sequence",
+      "param_values": {
+        "component": "GRAY",
+        "direction": "ascending"
+      },
+      "order": 5
+    },
+    {
+      "instance_id": "528474ae-e65b-46a5-b2db-85625df382e7",
+      "step_def_id": "branch_merge",
+      "param_values": {},
+      "order": 6
+    },
+    {
+      "instance_id": "d410e67d-deae-4628-b2d6-8453de67127c",
+      "step_def_id": "kmeans_cluster",
+      "param_values": {
+        "k": 3,
+        "color_space": "GRAY",
+        "init_mode": "reference_fixed",
+        "attempts": 3,
+        "max_iter": 30,
+        "epsilon": 1,
+        "sort_by_brightness": true,
+        "output_mode": "palette",
+        "background": "black"
+      },
+      "order": 7
+    }
+  ],
+  "connections": [
+    {
+      "from_instance_id": "44a38c26-badd-41f0-a9c5-78040534603f",
+      "to_instance_id": "5e59999d-d305-4b83-89a5-13f7e4569935",
+      "kind": "merge"
+    },
+    {
+      "from_instance_id": "3c335bb8-dc22-4877-870d-6571cdfbf9af",
+      "to_instance_id": "528474ae-e65b-46a5-b2db-85625df382e7",
+      "kind": "merge"
+    }
+  ],
+  "created_at": "2026-07-06T15:24:42.402410+00:00",
+  "modified_at": "2026-07-06T15:24:42.402410+00:00"
+}

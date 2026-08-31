@@ -84,14 +84,13 @@
 .creator-center {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
 }
 
 .preview-area {
-  flex: 2;
+  flex: 1;
   background: #292929;
   border: 1px solid #494949;
   border-radius: 8px;
@@ -99,14 +98,37 @@
   min-height: 0;
 }
 
+.center-resizer {
+  height: 8px;
+  flex: 0 0 8px;
+  cursor: row-resize;
+  position: relative;
+}
+
+.center-resizer::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 64px;
+  height: 2px;
+  transform: translateX(-50%);
+  background: #555;
+  border-radius: 2px;
+}
+
+.center-resizer:hover::before,
+.center-resizer.resizing::before {
+  background: #7aa2d6;
+}
+
 .canvas-area {
-  flex: 1;
+  flex: 0 0 auto;
   background: #292929;
   border: 1px solid #494949;
   border-radius: 8px;
   overflow: hidden;
   min-height: 120px;
-  max-height: 200px;
 }
 
 /* Dialogs */
@@ -141,6 +163,23 @@
   font-weight: 600;
   color: #e0e0e0;
   margin-bottom: 12px;
+}
+
+.new-recipe-dialog {
+  max-width: 360px;
+}
+
+.dialog-message {
+  margin: 0 0 18px;
+  color: #cfcfcf;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.dialog-warning {
+  display: block;
+  margin-top: 6px;
+  color: #f59e0b;
 }
 
 .dialog-input {

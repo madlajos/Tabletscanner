@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "name": "a",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "14c4d1a3-a60a-491e-91ce-f6d2ab7ad5b4",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/Lilla/Desktop/REF_2604/Jard/crop_k",
+        "file_order": ""
+      },
+      "order": 0
+    },
+    {
+      "instance_id": "368c41bf-7180-4b15-97eb-fe36e638e70e",
+      "step_def_id": "dual_map",
+      "param_values": {
+        "initial_centroids": "80, 53, 42",
+        "rgb_references": "255,255,119,255,255,123, 255,255, 42",
+        "hard_weights": "1,1,1",
+        "hard_threshold": 0.1,
+        "c1_threshold": 0.29,
+        "c2_threshold": 0.55,
+        "sort_centroids": false,
+        "auto_detect_channels": true,
+        "color_channel_threshold": 20,
+        "gray_image_indices": "",
+        "rgb_image_indices": "",
+        "cross_mask": "none",
+        "cross_mask_component": 1,
+        "sub_initial_centroids": "",
+        "sub_rgb_references": "",
+        "debug": false
+      },
+      "order": 1
+    }
+  ],
+  "created_at": "2026-04-27T00:32:30.817313+00:00",
+  "modified_at": "2026-04-27T00:32:30.817313+00:00"
+}

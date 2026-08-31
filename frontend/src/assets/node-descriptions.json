@@ -494,6 +494,78 @@
       ]
     }
   },
+  "reference_crop": {
+    "purpose": "Tobb azonos meretu referencia-negyzet kijelolese egy kepen, majd ezek kivagott kepreszleteinek gyors osszehasonlitasa.",
+    "usage": "Add meg a negyzet meretet pixelben, majd a kepen kattintassal helyezz el referencia-negyzeteket. A kijelolesek huzassal mozgathatok, jobb klikkel torolhetok. A Kivagott referenciak mutatasa gomb a kijelolt reszeket egy sorban jeleniti meg; visszakapcsolva a teljes kepen latszanak a kijelolesek.",
+    "inputs": "Kepek",
+    "parameters": [
+      {
+        "name": "Negyzet merete",
+        "description": "A kijelolt referencia-negyzetek oldalhossza pixelben. A meret minden kijelolesre egyforman ervenyes."
+      },
+      {
+        "name": "Kivagott referenciak mutatasa",
+        "description": "Bekapcsolva a teljes kep helyett a kivagott referencia-reszletek jelennek meg egy sorba rendezve."
+      }
+    ],
+    "outputs": "Az eredeti kepek valtozatlanul tovabbmennek a fo lancban, a kivagott referencia-reszletek mellekkimenetkent jelennek meg.",
+    "placement": {
+      "before": "Kepet eloallito node szukseges elotte.",
+      "after": "Kep bemenetet fogado node-ok helyezhetok utana.",
+      "restrictions": [
+        "A kijelolesek ervenyes kepen beluli koordinatak legyenek.",
+        "Ha nincs kijeloles, a node a kepet valtozatlanul adja tovabb."
+      ]
+    }
+  },
+  "reference_sequence": {
+    "purpose": "A referencia-kivagasok, vagy Reference crop nelkul a teljes kepek sorba rendezese egy valasztott szinkomponens atlaga alapjan.",
+    "usage": "Helyezd a kepbetoltes utan barhova. Ha van elotte Reference crop, annak osszes kijeloleset egy kozos sorozatkent kezeli; ha nincs, minden teljes kep egy referencia lesz. Valaszd ki, melyik komponens atlaga szerint rendezzen, vagy hasznalj RGB_ALL, HSV_ALL, LAB_ALL modot, ha egy szinter mindharom komponenset egyszerre szeretned latni.",
+    "inputs": "Kepek, opcionalisan Reference crop eredmenyekkel",
+    "parameters": [
+      {
+        "name": "Rendezes komponense",
+        "description": "Az a szin- vagy fenyessegkomponens, amelynek atlagat a node minden cropra kiszamolja. RGB_ALL, HSV_ALL es LAB_ALL modban az adott szinter mindharom komponense kulon diagramon jelenik meg."
+      },
+      {
+        "name": "Rendezes iranya",
+        "description": "Novekvo vagy csokkeno sorrend a kiszamolt komponens-atlagok alapjan."
+      }
+    ],
+    "outputs": "A fo kep-lanc valtozatlanul tovabbmegy, a referencia-cropok pedig rendezett sorrendben, komponens-atlagokkal es differenciakkal jelennek meg mellekkimenetkent.",
+    "placement": {
+      "before": "A Reference crop opcionalisan helyezheto ele; nelkule a teljes kepeket hasznalja.",
+      "after": "Kep bemenetet fogado node-ok helyezhetok utana, mert a fo kepkimenet valtozatlan marad.",
+      "restrictions": [
+        "A kulon kepeken levo cropok egyetlen kozos referenciasorozatba kerulnek.",
+        "Crop nelkul minden betoltott teljes kep egy referenciaelem."
+      ]
+    }
+  },
+  "reference_color_align": {
+    "purpose": "A fo kep robusztus sotet, kozepes es vilagos tonusainak illesztese a referencia cropok LAB medianjaihoz.",
+    "usage": "Harom cropnal a forras 20., 50. es 80. percentilise rendre a sotet, kozepes es vilagos referencia celtonusahoz igazodik, teljes 0-255 nyujtas nelkul.",
+    "inputs": "Kepek es egy korabbi Reference crop eredmenye",
+    "parameters": [
+      {
+        "name": "Illesztes erossege",
+        "description": "Nullanal nincs korrekcio, egynel a teljes kiszamitott korrekcio ervenyesul."
+      },
+      {
+        "name": "Sotet / vilagos referencia celertéke",
+        "description": "A legsotetebb es legvilagosabb crop uj LAB L vegpontja. Alapertelmezetten 0 es 255."
+      }
+    ],
+    "outputs": "A referencia vegpontok alapjan atskálazott fokepek es ugyanazzal a transzformacioval modositott referencia cropok.",
+    "placement": {
+      "before": "Reference crop node szukseges elotte.",
+      "after": "Reference sequence vagy referencia-alapu K-kozep node ajanlott utana.",
+      "restrictions": [
+        "A cropok LAB L median szerint sotettol vilagosig rendezodnek.",
+        "A szinillesztes tonuspozicio-fuggo interpolacio, nem globalis atlag/szoras transzfer."
+      ]
+    }
+  },
   "scale_bar_overlay": {
     "purpose": "A képre rajzolt, húzható skálasáv megjelenítése kalibrált pixels/mm érték alapján.",
     "usage": "A node a mérésből kapott pixels/mm értéket használja a skálasáv hosszának kiszámításához. A pozíció az előnézeten húzással módosítható, a betűtípus, betűméret és megjelenés pedig külön paraméterekből állítható.",
@@ -523,6 +595,90 @@
       "restrictions": [
         "A node csak akkor rajzol értelmes skálát, ha a pixels/mm érték meg van adva.",
         "Az előnézeten a node kiválasztásakor húzással módosítható a pozíciója."
+      ]
+    }
+  },
+  "kmeans_cluster": {
+    "purpose": "Pixelek automatikus csoportositasa k-kozep klaszterezessel. A node a kep szineit vagy intenzitasait K darab klaszterbe sorolja, es szinezett klaszterterkepet keszit.",
+    "usage": "Valaszd ki a klaszterek szamat es a szinteret. BGR altalanos szines kepekhez, HSV szinarnyalat/telitettseg alapu szetvalasztashoz, LAB perceptualis szinkulonbsegekhez, GRAY pedig intenzitas alapu klaszterezeshez hasznos. Ha korabban ROI vagy tartomany maszk keszult, a node csak a maszkolt teruleten klaszterez.",
+    "inputs": "Kepek vagy szurke arnyalatos kepek",
+    "parameters": [
+      {
+        "name": "Klaszterek szama",
+        "description": "A keresett csoportok szama. Tipikusan 2-6 kozotti ertekekkel erdemes kezdeni."
+      },
+      {
+        "name": "Szinter",
+        "description": "A pixeljellemzok tere: BGR, HSV, LAB vagy GRAY."
+      },
+      {
+        "name": "Referenciak hasznalata",
+        "description": "Automatikus modban a node maga keresi a klasztereket. Fix referencia modban a Reference crop / Reference sequence kivagasok atlagai lesznek a klaszterkozepontok. Referenciaval inditott modban ezekkel indul a k-means, de a kozepontok futas kozben finomodhatnak."
+      },
+      {
+        "name": "Referencia forras node",
+        "description": "Kivalaszthato, melyik korabbi Reference crop vagy Reference sequence node eredmenyet hasznalja a klaszterezes. Auto modban a pipeline aktualis referencia eredmenyet veszi."
+      },
+      {
+        "name": "Probalkozasok / Max. iteracio / Pontossag",
+        "description": "Az optimalizalas stabilitasat es futasidejet szabalyozzak. Tobb probalkozas stabilabb eredmenyt adhat, de lassabb."
+      },
+      {
+        "name": "Kimeneti szinezes",
+        "description": "Paletta modban kontrasztos jeloloszinek jelennek meg, centroid modban a klaszterek atlagos szine latszik."
+      },
+      {
+        "name": "Hatter",
+        "description": "Maszk hasznalata eseten a maszkon kivuli terulet fekete, feher vagy az eredeti kep lehet."
+      }
+    ],
+    "outputs": "Szinezett klaszterterkep. Mellekeredmenykent klaszter indexek, kozeppontok, pixelszamok, szazalekos aranyok es compactness ertekek.",
+    "placement": {
+      "before": "Kepet eloallito node szukseges elotte. ROI vagy Tartomany maszk utan celzott teruleten dolgozik.",
+      "after": "Kep bemenetet fogado node-ok helyezhetok utana.",
+      "restrictions": [
+        "Referencia-alapu modhoz legyen elotte Reference crop, opcionálisan Reference sequence node.",
+        "A klaszterek szama nem lehet nagyobb, mint az ervenyes pixelek szama.",
+        "Maszk hasznalatakor a maszk meretenek egyeznie kell a kep meretevel."
+      ]
+    }
+  },
+  "pseudo_image": {
+    "purpose": "Tetszoleges szamu betoltott kep csatornaibol egyetlen szines pszeudokep osszeallitasa.",
+    "usage": "Tolts be egy vagy tobb kepet, majd valaszd ki kulon a kimeneti kek, zold es piros csatorna forrasat. Az 5-B peldaul az otodik kep kek csatornajat jelenti.",
+    "inputs": "Egy vagy tobb szines vagy szurkearnyalatos kep. A kivalasztott forraskepek pixelmerete egyezzen meg.",
+    "parameters": [
+      {
+        "name": "Kimeneti kek/zold/piros csatorna",
+        "description": "Mindharom kimeneti csatornahoz az elso vagy masodik kep B, G, R vagy szurkearnyalatos csatornaja valaszthato."
+      },
+      {
+        "name": "Egyutt mozgo retegek es kozos X/Y eltolas",
+        "description": "Checkboxokkal jelolheto ki, hogy a kek, zold es piros reteg kozul melyek mozogjanak egyutt. A kozos pozitiv X jobbra, a pozitiv Y lefele mozgat."
+      }
+    ],
+    "outputs": "Egy haromcsatornas BGR pszeudokep.",
+    "placement": {
+      "before": "Kozvetlenul egy vagy tobb kepet betolto Kep betoltese node utan hasznalhato.",
+      "after": "Barmely szines kepet fogado node helyezheto utana.",
+      "restrictions": [
+        "Legalabb egy kep szukseges.",
+        "A kivalasztott forraskepek szelessegenek es magassaganak egyeznie kell."
+      ]
+    }
+  },
+  "branch_merge": {
+    "purpose": "Ket feldolgozasi ag eredmenyenek osszehozasa es gyors vizualis osszehasonlitasa.",
+    "usage": "Helyezd a masodik ag vegere. A node kijelolesekor az elonezet osztott nezetre valt: bal oldalon az elozo ag kivalasztott kepe es adatai, jobb oldalon az aktualis ag kivalasztott kepe es adatai latszanak.",
+    "inputs": "Kepet ado feldolgozasi agak",
+    "parameters": [],
+    "outputs": "A masodik ag kepe valtozatlanul tovabbmegy a fo lancban, az osszehasonlito elonezet mellekkimenetkent jelenik meg.",
+    "placement": {
+      "before": "Legalabb ket load_image alapu ag es kepet eloallito elozo node javasolt.",
+      "after": "Kep bemenetet fogado node-ok helyezhetok utana.",
+      "restrictions": [
+        "Az osztott elonezethez a node elott legyen egy korabbi ag.",
+        "A node nem keveri ossze fizikailag a pixeleket, hanem a ket ag eredmenyet previewban hozza egymas melle."
       ]
     }
   }

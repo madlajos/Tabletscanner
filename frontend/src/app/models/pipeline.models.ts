@@ -39,6 +39,16 @@ export interface StepInstance {
   step_def_id: string;
   param_values: Record<string, any>;
   order: number;
+  /** Disabled steps stay in the recipe but are bypassed during execution. */
+  enabled?: boolean;
+}
+
+export interface PipelineConnection {
+  from_instance_id: string;
+  to_instance_id: string;
+  from_port?: string;
+  to_port?: string;
+  kind?: 'primary' | 'secondary' | 'merge';
 }
 
 export interface PipelineDocument {
@@ -46,6 +56,9 @@ export interface PipelineDocument {
   name: string;
   description: string;
   steps: StepInstance[];
+  connections?: PipelineConnection[];
+  /** User-defined branch names, keyed by the branch's first step instance id. */
+  branch_names?: Record<string, string>;
   created_at: string;
   modified_at: string;
 }
@@ -88,6 +101,7 @@ export function createStepInstance(stepDefId: string, order: number, defaults?: 
     step_def_id: stepDefId,
     param_values: defaults ? { ...defaults } : {},
     order,
+    enabled: true,
   };
 }
 
@@ -97,6 +111,8 @@ export function createEmptyPipeline(name: string = ''): PipelineDocument {
     name,
     description: '',
     steps: [],
+    connections: [],
+    branch_names: {},
     created_at: '',
     modified_at: '',
   };
