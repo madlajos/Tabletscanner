@@ -1,4 +1,4 @@
-"""Build one false-colour BGR image from channels of two input images."""
+"""Build false-colour BGR images from consecutive three-image groups."""
 
 import cv2
 import numpy as np
@@ -46,11 +46,38 @@ def _shift_channel(channel, offset_x, offset_y):
     return shifted
 
 
+def _scale_channel(channel, scale_percent):
+    """Scale a channel around its image centre while preserving canvas size."""
+    height, width = channel.shape[:2]
+    scale = float(scale_percent) / 100.0
+    centre = ((width - 1) / 2.0, (height - 1) / 2.0)
+    matrix = cv2.getRotationMatrix2D(centre, 0, scale)
+    return cv2.warpAffine(
+        channel,
+        matrix,
+        (width, height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+
+
+def _multiply_channel(channel, multiplier):
+    """Apply an intensity multiplier without overflowing uint8 channels."""
+    return np.clip(channel.astype(np.float32) * float(multiplier), 0, 255).astype(np.uint8)
+
+
 def create_pseudo_image(
     data,
     blue_source="1-B",
     green_source="1-G",
     red_source="1-R",
+    blue_scale_percent=100.0,
+    green_scale_percent=100.0,
+    red_scale_percent=100.0,
+    blue_multiplier=1.0,
+    green_multiplier=1.0,
+    red_multiplier=1.0,
     move_blue=False,
     move_green=False,
     move_red=False,
@@ -58,7 +85,7 @@ def create_pseudo_image(
     offset_y=0,
     **_,
 ):
-    """Compose the output B, G and R planes from the first two loaded images."""
+    """Apply one three-image channel recipe to every consecutive image trio."""
     if not isinstance(data, dict) or data.get("error"):
         return data
 
@@ -66,49 +93,71 @@ def create_pseudo_image(
     if not images:
         data["error"] = "E2150"
         return data
+    if len(images) % 3:
+        data["error"] = "E2154"
+        return data
 
-    output_channels = []
-    selectors_and_move_flags = (
-        (blue_source, bool(move_blue)),
-        (green_source, bool(move_green)),
-        (red_source, bool(move_red)),
+    selectors_transforms = (
+        (blue_source, blue_scale_percent, blue_multiplier, bool(move_blue)),
+        (green_source, green_scale_percent, green_multiplier, bool(move_green)),
+        (red_source, red_scale_percent, red_multiplier, bool(move_red)),
     )
-    for selector, should_move in selectors_and_move_flags:
+    parsed_selectors = []
+    for selector, scale_percent, multiplier, should_move in selectors_transforms:
         try:
             image_number, channel = str(selector).upper().split("-", 1)
-            image_index = int(image_number) - 1
-            if not 0 <= image_index < len(images) or channel not in (*_CHANNEL_INDEX, "GRAY"):
+            relative_index = int(image_number) - 1
+            if not 0 <= relative_index < 3 or channel not in (*_CHANNEL_INDEX, "GRAY"):
                 raise ValueError
         except (TypeError, ValueError):
             data["error"] = "E2153"
             return data
+        parsed_selectors.append((relative_index, channel, scale_percent, multiplier, should_move))
 
-        extracted = _extract_channel(images[image_index], channel)
-        if extracted is None:
-            data["error"] = "E2151"
-            return data
-        if output_channels and extracted.shape[:2] != output_channels[0].shape[:2]:
-            data["error"] = "E2152"
-            return data
-        output_channels.append(
-            _shift_channel(extracted, offset_x, offset_y) if should_move else extracted
-        )
+    output_images = []
+    for group_start in range(0, len(images), 3):
+        output_channels = []
+        for relative_index, channel, scale_percent, multiplier, should_move in parsed_selectors:
+            extracted = _extract_channel(images[group_start + relative_index], channel)
+            if extracted is None:
+                data["error"] = "E2151"
+                return data
+            if output_channels and extracted.shape[:2] != output_channels[0].shape[:2]:
+                data["error"] = "E2152"
+                return data
+            transformed = _multiply_channel(_scale_channel(extracted, scale_percent), multiplier)
+            output_channels.append(
+                _shift_channel(transformed, offset_x, offset_y) if should_move else transformed
+            )
+        output_images.append(cv2.merge(output_channels))
 
     source_paths = data.get("paths") or []
     data["_original_paths"] = list(source_paths)
-    data["images"] = [cv2.merge(output_channels)]
-    data["count"] = 1
-    data["paths"] = source_paths[:1]
+    data["images"] = output_images
+    data["count"] = len(output_images)
+    data["paths"] = source_paths[::3]
     data.setdefault("meta", {})["pseudo_image"] = {
         "blue_source": blue_source,
         "green_source": green_source,
         "red_source": red_source,
+        "scale_percent": {
+            "blue": float(blue_scale_percent),
+            "green": float(green_scale_percent),
+            "red": float(red_scale_percent),
+        },
+        "multiplier": {
+            "blue": float(blue_multiplier),
+            "green": float(green_multiplier),
+            "red": float(red_multiplier),
+        },
         "moving_layers": {
             "blue": bool(move_blue),
             "green": bool(move_green),
             "red": bool(move_red),
         },
         "offset": {"x": int(offset_x), "y": int(offset_y)},
+        "group_size": 3,
+        "group_count": len(output_images),
     }
     data.setdefault("history", []).append("create_pseudo_image")
     return data

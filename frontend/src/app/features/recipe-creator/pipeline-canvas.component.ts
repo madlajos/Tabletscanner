@@ -220,9 +220,9 @@ import { StepCardComponent } from './step-card.component';
                             <div
                               class="sec-card"
                               [class.selected]="selectedIndex === sec.pipelineIndex"
-                              [class.compare-selected]="splitPreviewStepIndex === sec.pipelineIndex"
+                              [class.compare-selected]="splitPreviewStepIndex === sec.pipelineIndex || selectedNodeIds.has(sec.step.instance_id)"
                               [class.disabled-step]="sec.step.enabled === false"
-                              (click)="onSelectSecondary(sec.pipelineIndex)"
+                              (click)="onSelectSecondary(sec.pipelineIndex, $event)"
                               (dblclick)="onCompare(sec.pipelineIndex); $event.stopPropagation()"
                               (contextmenu)="onSecondaryContextMenu($event, sec.pipelineIndex)"
                             >
@@ -884,11 +884,18 @@ export class PipelineCanvasComponent implements OnInit, OnDestroy, AfterViewInit
     return this.validationErrors.some((e) => e.step_index === index);
   }
 
-  onSelect(node: MainChainNode, event: MouseEvent): void {
+  onSelect(node: Pick<MainChainNode, 'step' | 'pipelineIndex'>, event: MouseEvent): void {
     const additive = event.ctrlKey || event.metaKey;
     const range = event.shiftKey;
 
-    if ((additive || range) && node.step.step_def_id !== 'load_image') {
+    if (additive || range) {
+      if (!this.selectedNodeIds.size && this.selectedIndex >= 0) {
+        const previous = this.pipelineState.getPipeline().steps[this.selectedIndex];
+        if (previous) {
+          this.selectedNodeIds = new Set([previous.instance_id]);
+          this.selectionAnchorId = previous.instance_id;
+        }
+      }
       event.preventDefault();
       event.stopPropagation();
 
@@ -914,13 +921,7 @@ export class PipelineCanvasComponent implements OnInit, OnDestroy, AfterViewInit
           this.selectedNodeIds = new Set([node.step.instance_id]);
         }
       } else {
-        const selectedBranch = this.getSelectionSourceBranch();
-        const nodeBranch = this.branchRows.find((candidate) =>
-          candidate.nodes.some((item) => item.step.instance_id === node.step.instance_id)
-        );
-        const selected = selectedBranch && selectedBranch.id !== nodeBranch?.id
-          ? new Set<string>()
-          : new Set(this.selectedNodeIds);
+        const selected = new Set(this.selectedNodeIds);
         selected.has(node.step.instance_id)
           ? selected.delete(node.step.instance_id)
           : selected.add(node.step.instance_id);
@@ -929,6 +930,17 @@ export class PipelineCanvasComponent implements OnInit, OnDestroy, AfterViewInit
 
       this.selectionAnchorId = node.step.instance_id;
       this.pipelineState.selectStep(node.pipelineIndex);
+      if (this.selectedNodeIds.size === 2) {
+        const indices = this.pipelineState.getPipeline().steps
+          .map((step, index) => this.selectedNodeIds.has(step.instance_id) ? index : -1)
+          .filter((index) => index >= 0);
+        const second = indices.includes(node.pipelineIndex) ? node.pipelineIndex : indices[1];
+        const first = indices.find((index) => index !== second);
+        if (first !== undefined) {
+          if (second !== node.pipelineIndex) this.pipelineState.selectStep(second);
+          this.pipelineState.requestSplitPreview(second, first);
+        }
+      }
       return;
     }
 
@@ -936,9 +948,9 @@ export class PipelineCanvasComponent implements OnInit, OnDestroy, AfterViewInit
     this.pipelineState.selectStep(node.pipelineIndex);
   }
 
-  onSelectSecondary(index: number): void {
-    this.clearNodeSelection();
-    this.pipelineState.selectStep(index);
+  onSelectSecondary(index: number, event: MouseEvent): void {
+    const step = this.pipelineState.getPipeline().steps[index];
+    if (step) this.onSelect({ step, pipelineIndex: index }, event);
   }
 
   canCopySelectionTo(branch: BranchRow): boolean {
@@ -957,7 +969,9 @@ export class PipelineCanvasComponent implements OnInit, OnDestroy, AfterViewInit
   private getSelectionSourceBranch(): BranchRow | null {
     if (!this.selectedNodeIds.size) return null;
     return this.branchRows.find((branch) =>
-      branch.nodes.some((node) => this.selectedNodeIds.has(node.step.instance_id))
+      [...this.selectedNodeIds].every((id) => branch.nodes.some(
+        (node) => node.step.instance_id === id && node.step.step_def_id !== 'load_image'
+      ))
     ) ?? null;
   }
 

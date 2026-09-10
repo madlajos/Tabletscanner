@@ -1,5 +1,12 @@
 {
   "W1205": "A Z korrekció elérte a mozgáshatárt ({target_z} mm). A felvétel itt készül. Hiányzó Z eltolás: {missing_offset_mm} mm.",
+  "E3611": "Érvénytelen keresési csatorna (GRAY, R, G vagy B szükséges).",
+  "E2307": "Érvénytelen hisztogram-megjelenítési mód.",
+  "E2308": "A CSV-csoportok száma egyezzen a képek számával; minden képhez adjon meg egy nem üres csoportnevet.",
+  "E2309": "A hisztogramok osztásszáma nem egyezik, ezért nem vonhatók össze.",
+  "E2508": "Érvénytelen intenzitásmegjelenítési mód.",
+  "E2509": "A CSV-csoportok száma egyezzen a képek számával; minden képhez adjon meg egy nem üres csoportnevet.",
+  "E2510": "Csak azonos csatornaszámú képek intenzitása vonható össze.",
   "E1401": "Hiányzó lámpabeállítások a lámpa felkapcsolásához",
   "E1501": "A BGR képsorozat nem indítható, mert egy másik művelet folyamatban van.",
   "E1502": "Rendelje a Piros, Zöld és Kék szűrőt a szűrőváltóhoz. UV mérésnél a 255/310 nm lámpához 255 nm, a 365 nm lámpához 365 nm szűrő is szükséges.",

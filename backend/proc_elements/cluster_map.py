@@ -6,7 +6,7 @@ import numpy as np
 from itertools import permutations
 
 
-MATLAB_EPS_IQR = 1e-6
+MATLAB_EPS_IQR = 1e-12
 SOFT_SPATIAL_SIGMA = 1.0
 DISPLAY_SPATIAL_SIGMA = 2.0
 CLUSTER_PALETTE_BGR = np.asarray([
@@ -313,8 +313,55 @@ def _match_clusters_to_references(cluster_brightness, reference_centroids, refer
     ]
 
 
-def _membership_from_existing_labels(gray, roi_mask, labels_arr, cluster_labels):
-    """Build ordered soft memberships from the upstream hard segmentation."""
+def _reference_models_from_crops(crops, reference_info, fallback_centers):
+    """Return direct pixel-distance models keyed by reference identity."""
+    fallback_centers = np.asarray(fallback_centers, dtype=np.float32).reshape(-1)
+    models = {}
+    for crop, info in zip(crops, reference_info):
+        original_index = int(info["original_index"])
+        values = _to_gray(crop).reshape(-1).astype(np.float32) / 255.0
+        values = values[np.isfinite(values)]
+        if values.size:
+            center = float(np.median(values))
+            mean = float(np.mean(values))
+            q25, q75 = np.percentile(values, [25.0, 75.0])
+            spread = float(q75 - q25)
+        elif original_index < fallback_centers.size:
+            center = float(fallback_centers[original_index])
+            mean = center
+            spread = 0.0
+        else:
+            continue
+        models[original_index] = {
+            "center": center, "mean": mean, "spread": spread,
+        }
+
+    return models
+
+
+def _apply_center_mode(models, center_mode, gray, labels_arr):
+    """Apply the operator-selected center rule and derive reference widths."""
+    configured = [dict(model) for model in models]
+    for component_index, model in enumerate(configured):
+        cluster_values = np.asarray(gray)[labels_arr == component_index + 1]
+        if center_mode == "cluster_median" and cluster_values.size:
+            model["center"] = float(np.median(cluster_values)) / 255.0
+        elif center_mode == "min_max_midpoint" and cluster_values.size:
+            model["center"] = float(
+                (np.min(cluster_values) + np.max(cluster_values)) / 2.0
+            ) / 255.0
+        elif center_mode == "reference_mean_half":
+            model["center"] = float(model.get("mean", model["center"])) / 2.0
+        elif center_mode == "reference_mean":
+            model["center"] = float(model.get("mean", model["center"]))
+
+    return configured
+
+
+def _membership_from_existing_labels(
+    gray, roi_mask, labels_arr, cluster_labels, reference_models=None,
+):
+    """Build memberships over fixed upstream k-means label regions."""
     intensity = np.asarray(gray, dtype=np.float32) / 255.0
     roi_mask = np.asarray(roi_mask, dtype=bool)
     labels_arr = np.asarray(labels_arr)
@@ -338,49 +385,77 @@ def _membership_from_existing_labels(gray, roi_mask, labels_arr, cluster_labels)
         iqrs.append(iqr)
         denoms.append(denom)
 
-    brightness_order = np.argsort(np.asarray(medians), kind="stable")
-    ordered_centers = np.asarray(medians, dtype=np.float32)[brightness_order]
+    if reference_models is None:
+        model_centers = np.asarray(medians, dtype=np.float32)
+        model_spreads = np.asarray(denoms, dtype=np.float32)
+    else:
+        if len(reference_models) != len(cluster_labels):
+            return None
+        model_centers = np.asarray(
+            [model["center"] for model in reference_models], dtype=np.float32,
+        )
+        model_spreads = np.asarray(
+            [model["spread"] for model in reference_models], dtype=np.float32,
+        )
+        model_amplitudes = np.asarray(
+            [model.get("amplitude", 1.0) for model in reference_models], dtype=np.float32,
+        )
+        if not np.all(np.isfinite(model_centers)) or not np.all(np.isfinite(model_spreads)):
+            return None
+        model_spreads = np.maximum(model_spreads, MATLAB_EPS_IQR)
+        model_amplitudes = np.clip(model_amplitudes, 0.0, 1.0)
+    if reference_models is None:
+        model_amplitudes = np.ones(len(cluster_labels), dtype=np.float32)
+
+    brightness_order = np.argsort(model_centers, kind="stable")
+    brightness_ranks = np.empty(len(cluster_labels), dtype=np.int32)
+    brightness_ranks[brightness_order] = np.arange(1, len(cluster_labels) + 1)
     membership_debug = [None] * len(cluster_labels)
-    for brightness_rank, original_index in enumerate(brightness_order):
-        center = float(ordered_centers[brightness_rank])
-        left_center = (
-            float(ordered_centers[brightness_rank - 1])
-            if brightness_rank > 0 else None
-        )
-        right_center = (
-            float(ordered_centers[brightness_rank + 1])
-            if brightness_rank + 1 < len(ordered_centers) else None
-        )
-        if len(ordered_centers) == 1:
-            mu = np.ones_like(intensity, dtype=np.float32)
-            membership_type = "single_component"
-        elif brightness_rank == 0:
-            mu = np.ones_like(intensity, dtype=np.float32)
-            between = (intensity > center) & (intensity < right_center)
-            mu[intensity >= right_center] = 0.0
-            mu[between] = (right_center - intensity[between]) / max(
-                right_center - center, np.finfo(np.float32).eps,
+    for component_index in range(len(cluster_labels)):
+        center = float(model_centers[component_index])
+        if reference_models is not None:
+            lower_centers = model_centers[model_centers < center]
+            upper_centers = model_centers[model_centers > center]
+            left_center = (
+                float(np.max(lower_centers)) if lower_centers.size else None
             )
-            membership_type = "left_shoulder"
-        elif brightness_rank == len(ordered_centers) - 1:
-            mu = np.zeros_like(intensity, dtype=np.float32)
-            between = (intensity > left_center) & (intensity < center)
-            mu[intensity >= center] = 1.0
-            mu[between] = (intensity[between] - left_center) / max(
-                center - left_center, np.finfo(np.float32).eps,
+            right_center = (
+                float(np.min(upper_centers)) if upper_centers.size else None
             )
-            membership_type = "right_shoulder"
+
+            mu = np.ones_like(intensity, dtype=np.float32)
+            if left_center is not None:
+                left_width = center - left_center
+                mu = np.minimum(
+                    mu,
+                    np.clip((intensity - left_center) / left_width, 0.0, 1.0),
+                )
+            if right_center is not None:
+                right_width = right_center - center
+                mu = np.minimum(
+                    mu,
+                    np.clip((right_center - intensity) / right_width, 0.0, 1.0),
+                )
+            mu *= float(model_amplitudes[component_index])
         else:
-            z = (intensity - center) / denoms[int(original_index)]
-            mu = np.exp(-0.5 * z * z).astype(np.float32)
-            membership_type = "gaussian_median_iqr"
-        raw[..., int(original_index)] = np.clip(mu, 0.0, 1.0)
-        membership_debug[int(original_index)] = {
-            "brightness_rank": int(brightness_rank + 1),
+            sigma = float(model_spreads[component_index])
+            z = (intensity - center) / sigma
+            mu = (
+                np.exp(-0.5 * z * z) * float(model_amplitudes[component_index])
+            ).astype(np.float32)
+            left_center = None
+            right_center = None
+        mu[~roi_mask] = 0.0
+        raw[..., component_index] = mu
+        membership_debug[component_index] = {
+            "brightness_rank": int(brightness_ranks[component_index]),
             "center": center,
             "left_neighbor_center": left_center,
             "right_neighbor_center": right_center,
-            "membership_type": membership_type,
+            "membership_type": (
+                "piecewise_linear_between_reference_centers"
+                if reference_models is not None else "gaussian_median_iqr"
+            ),
         }
     raw[~roi_mask] = 0.0
     sum_mu = np.sum(raw, axis=2, keepdims=True)
@@ -412,7 +487,19 @@ def _membership_from_existing_labels(gray, roi_mask, labels_arr, cluster_labels)
             "assigned_max": float(np.max(assigned_values)) if assigned_values.size else None,
             "median": medians[component_index],
             "iqr": iqrs[component_index],
-            "denom_used": denoms[component_index],
+            "denom_used": float(model_spreads[component_index]),
+            "reference_center": (
+                float(model_centers[component_index])
+                if reference_models is not None else None
+            ),
+            "reference_spread": (
+                float(model_spreads[component_index])
+                if reference_models is not None else None
+            ),
+            "reference_amplitude": (
+                float(model_amplitudes[component_index])
+                if reference_models is not None else None
+            ),
             "raw_membership_min": float(np.min(raw_values)) if raw_values.size else 0.0,
             "raw_membership_max": float(np.max(raw_values)) if raw_values.size else 0.0,
             "raw_membership_mean": float(np.mean(raw_values)) if raw_values.size else 0.0,
@@ -433,10 +520,133 @@ def _membership_from_existing_labels(gray, roi_mask, labels_arr, cluster_labels)
         "component_medians": np.asarray(medians, dtype=np.float32),
         "component_iqrs": np.asarray(iqrs, dtype=np.float32),
         "component_denoms": np.asarray(denoms, dtype=np.float32),
+        "component_model_centers": model_centers,
+        "component_model_spreads": model_spreads,
+        "component_model_amplitudes": model_amplitudes,
         "component_statistics": component_statistics,
         "membership_raw": raw,
         "membership_normalized": normalized,
         "hard_labels": labels_arr.copy(),
+    }
+
+
+def _membership_from_fixed_centroids(gray, roi_mask, initial_centroids):
+    """Reproduce the MATLAB fixed-centroid assignment and memberships."""
+    intensity = np.asarray(gray, dtype=np.float64) / 255.0
+    roi_mask = np.asarray(roi_mask, dtype=bool)
+    centers_fix = np.asarray(initial_centroids, dtype=np.float64).reshape(-1)
+    if centers_fix.size == 0 or not np.any(roi_mask):
+        return None
+
+    distances = np.abs(intensity[roi_mask][:, None] - centers_fix[None, :])
+    fixed_cluster_map = np.zeros(intensity.shape, dtype=np.uint8)
+    fixed_cluster_map[roi_mask] = np.argmin(distances, axis=1).astype(np.uint8) + 1
+
+    order = np.argsort(centers_fix, kind="stable")
+    component_map = np.zeros(intensity.shape, dtype=np.uint8)
+    for component_index, fixed_index in enumerate(order):
+        component_map[fixed_cluster_map == fixed_index + 1] = component_index + 1
+
+    component_count = int(centers_fix.size)
+    membership = np.zeros(intensity.shape + (component_count,), dtype=np.float64)
+    medians = np.zeros(component_count, dtype=np.float64)
+    iqrs = np.zeros(component_count, dtype=np.float64)
+    denoms = np.full(component_count, MATLAB_EPS_IQR, dtype=np.float64)
+
+    for component_index in range(component_count):
+        values = intensity[component_map == component_index + 1]
+        if not values.size:
+            continue
+        medians[component_index] = np.median(values)
+        q25, q75 = np.percentile(values, [25.0, 75.0])
+        iqrs[component_index] = q75 - q25
+        denoms[component_index] = max(iqrs[component_index], MATLAB_EPS_IQR)
+
+    sorted_centers = centers_fix[order]
+    anchor_floors = np.zeros(component_count, dtype=np.float64)
+    for component_index in range(component_count):
+        if not np.any(component_map == component_index + 1):
+            continue
+        z = (intensity - medians[component_index]) / denoms[component_index]
+        mu = np.exp(-0.5 * z * z)
+        other_centers = np.delete(sorted_centers, component_index)
+        if other_centers.size:
+            other_responses = np.exp(
+                -0.5 * (
+                    (other_centers - medians[component_index])
+                    / denoms[component_index]
+                ) ** 2
+            )
+            anchor_floors[component_index] = float(np.max(other_responses))
+            mu = np.clip(
+                (mu - anchor_floors[component_index])
+                / max(1.0 - anchor_floors[component_index], np.finfo(float).eps),
+                0.0,
+                1.0,
+            )
+        mu[~roi_mask] = 0.0
+        membership[..., component_index] = mu
+
+    sum_mu = np.sum(membership, axis=2)
+    membership_norm = np.zeros_like(membership)
+    for component_index in range(component_count):
+        component = membership[..., component_index]
+        membership_norm[..., component_index][roi_mask] = (
+            component[roi_mask] / (sum_mu[roi_mask] + np.finfo(float).eps)
+        )
+
+    statistics = []
+    roi_pixel_count = max(int(np.count_nonzero(roi_mask)), 1)
+    for component_index in range(component_count):
+        component_mask = component_map == component_index + 1
+        values = intensity[component_mask]
+        raw_values = membership[..., component_index][roi_mask]
+        normalized_values = membership_norm[..., component_index][roi_mask]
+        pixel_count = int(np.count_nonzero(component_mask))
+        statistics.append({
+            "cluster_label": component_index + 1,
+            "label": component_index + 1,
+            "brightness_rank": component_index + 1,
+            "center": float(medians[component_index]),
+            "left_neighbor_center": None,
+            "right_neighbor_center": None,
+            "membership_type": "gaussian_median_iqr",
+            "pixel_count": pixel_count,
+            "pixel_fraction": pixel_count / roi_pixel_count,
+            "assigned_min": float(np.min(values)) if values.size else None,
+            "assigned_max": float(np.max(values)) if values.size else None,
+            "median": float(medians[component_index]),
+            "iqr": float(iqrs[component_index]),
+            "denom_used": float(denoms[component_index]),
+            "other_centroid_zero_floor": float(anchor_floors[component_index]),
+            "raw_membership_min": float(np.min(raw_values)) if raw_values.size else 0.0,
+            "raw_membership_max": float(np.max(raw_values)) if raw_values.size else 0.0,
+            "raw_membership_mean": float(np.mean(raw_values)) if raw_values.size else 0.0,
+            "normalized_membership_min": float(np.min(normalized_values)) if normalized_values.size else 0.0,
+            "normalized_membership_max": float(np.max(normalized_values)) if normalized_values.size else 0.0,
+            "normalized_membership_mean": float(np.mean(normalized_values)) if normalized_values.size else 0.0,
+            "membership_mean": float(np.mean(normalized_values)) if normalized_values.size else 0.0,
+            "raw_mean": float(np.mean(raw_values)) if raw_values.size else 0.0,
+            "normalized_mean": float(np.mean(normalized_values)) if normalized_values.size else 0.0,
+            "final_similarity_mean": float(np.mean(normalized_values)) if normalized_values.size else 0.0,
+            "raw_max": float(np.max(raw_values)) if raw_values.size else 0.0,
+            "normalized_max": float(np.max(normalized_values)) if normalized_values.size else 0.0,
+            "final_similarity_max": float(np.max(normalized_values)) if normalized_values.size else 0.0,
+        })
+
+    return {
+        "cluster_labels": list(range(1, component_count + 1)),
+        "fixed_cluster_map": fixed_cluster_map,
+        "component_map": component_map,
+        "component_medians": medians.astype(np.float32),
+        "component_iqrs": iqrs.astype(np.float32),
+        "component_denoms": denoms,
+        "component_statistics": statistics,
+        "membership_raw": membership.astype(np.float32),
+        "membership_normalized": membership_norm.astype(np.float32),
+        "hard_labels": component_map.copy(),
+        "centroid_order": (order + 1).astype(np.uint8),
+        "other_centroid_zero_floors": anchor_floors,
     }
 
 
@@ -454,10 +664,20 @@ def _membership_context(feature, labels_arr, config):
     if membership_result is None:
         return None
     cluster_labels = membership_result["cluster_labels"]
+    model_centers = membership_result.get(
+        "component_model_centers", membership_result["component_medians"],
+    )
+    model_spreads = membership_result.get(
+        "component_model_spreads", membership_result["component_denoms"],
+    )
+    model_amplitudes = membership_result.get(
+        "component_model_amplitudes", np.ones(len(cluster_labels), dtype=np.float32),
+    )
     models = {
         label: {
-            "center": np.asarray([membership_result["component_medians"][index]], dtype=np.float32),
-            "scale": np.asarray([membership_result["component_denoms"][index]], dtype=np.float32),
+            "center": np.asarray([model_centers[index]], dtype=np.float32),
+            "scale": np.asarray([model_spreads[index]], dtype=np.float32),
+            "amplitude": float(model_amplitudes[index]),
             "pixel_count": int(np.count_nonzero(labels_arr == label)),
         }
         for index, label in enumerate(cluster_labels)
@@ -474,26 +694,38 @@ def _membership_context(feature, labels_arr, config):
 def _component_similarity(feature, labels_arr, config):
     labels = _parse_labels(config.get("selected_labels", "1"))
     reference_labels = _parse_labels(config.get("reference_label", "1"))
-    if not labels or len(reference_labels) != 1:
+    if not labels or len(reference_labels) not in {1, 2}:
         return None
-    reference_label = reference_labels[0]
     context = config.get("_membership_context")
     if context is None:
         context = _membership_context(feature, labels_arr, config)
     if context is None:
         return None
-    cluster_labels, models, raw_memberships, _normalized_memberships, roi_mask = context
-    if reference_label not in cluster_labels:
+    cluster_labels, models, raw_memberships, normalized_memberships, roi_mask = context
+    if any(label not in cluster_labels for label in reference_labels):
         return None
-    reference_index = cluster_labels.index(reference_label)
-    similarity = raw_memberships[..., reference_index].copy().astype(np.float32)
-    evaluation_mask = (
-        np.isin(labels_arr, labels)
-        if bool(config.get("hard_label_mask", False))
-        else roi_mask
-    )
+    if len(reference_labels) == 1:
+        reference_label = reference_labels[0]
+        reference_index = cluster_labels.index(reference_label)
+        similarity = raw_memberships[..., reference_index].copy().astype(np.float32)
+        reference = np.asarray([models[reference_label]["center"][0]], dtype=np.float32)
+    else:
+        gray = feature[..., 0] if feature.ndim == 3 else feature
+        intensity = np.asarray(gray, dtype=np.float32) / 255.0
+        reference_mask = np.isin(labels_arr, reference_labels) & roi_mask
+        reference_pixels = intensity[reference_mask]
+        if not reference_pixels.size:
+            return None
+        center = float(np.median(reference_pixels))
+        q25, q75 = np.percentile(reference_pixels, [25.0, 75.0])
+        denom = max(float(q75 - q25), MATLAB_EPS_IQR)
+        z = (intensity - center) / denom
+        similarity = np.exp(-0.5 * z * z).astype(np.float32)
+        reference = np.asarray([center], dtype=np.float32)
+    # Reference maps are continuous fields over the complete upstream ROI.
+    # K-means labels identify/reference the channels but do not mask pixels.
+    evaluation_mask = roi_mask
     similarity[~evaluation_mask] = 0.0
-    reference = np.asarray([models[reference_label]["center"][0]], dtype=np.float32)
     return similarity.astype(np.float32), reference, labels, evaluation_mask
 
 
@@ -512,6 +744,11 @@ def _normalize_soft_components(component_maps, roi_mask):
         normalized[..., component].astype(np.float32)
         for component in range(normalized.shape[2])
     ]
+
+
+def _jet_display_curve(values):
+    """Pass normalized membership directly to JET, preserving all gradients."""
+    return np.clip(np.asarray(values, dtype=np.float32), 0.0, 1.0)
 
 
 def _palette_bgr(component_count):
@@ -609,10 +846,10 @@ def cluster_reference_map(
         data["error"] = "E3722"
         return data
     reference_labels = _parse_labels(reference_label)
-    if len(reference_labels) != 1:
+    if len(reference_labels) not in {1, 2}:
         data["error"] = "E3727"
         return data
-    reference_label_value = reference_labels[0]
+    reference_label_serialized = ",".join(str(label) for label in reference_labels)
 
     cv_maps = {"turbo": cv2.COLORMAP_TURBO, "jet": cv2.COLORMAP_JET, "viridis": cv2.COLORMAP_VIRIDIS}
     if colormap not in cv_maps:
@@ -666,7 +903,7 @@ def cluster_reference_map(
         else:
             gray = image.astype(np.float32)
         feature = gray[..., None].astype(np.float32)
-        _, crop_debug = _reference_crop_context(results, index)
+        reference_crops, crop_debug = _reference_crop_context(results, index)
         reference_result = _reference_centroids_with_identity(results, index)
         if reference_result is None:
             data["error"] = "E3727"
@@ -691,15 +928,29 @@ def cluster_reference_map(
             data["error"] = "E3727"
             return data
         reference_cluster_mappings.append(cluster_reference_mapping)
+        models_by_original_index = _reference_models_from_crops(
+            reference_crops, crop_debug.get("reference_info", []), initial_centroids,
+        )
+        matched_reference_models = [
+            models_by_original_index.get(item["reference_original_index"], {
+                "center": item["reference_centroid_normalized"],
+                "spread": 3.0 / 255.0,
+            })
+            for item in cluster_reference_mapping
+        ]
+        matched_reference_models = _apply_center_mode(
+            matched_reference_models, center_mode, gray, labels_arr,
+        )
         membership_result = _membership_from_existing_labels(
             gray, roi_mask, labels_arr, cluster_labels,
+            reference_models=matched_reference_models,
         )
         if membership_result is None:
             data["error"] = "E3727"
             return data
-        soft_memberships = _smooth_memberships_for_visualization(
-            membership_result["membership_normalized"], roi_mask,
-        )
+        # Show the absolute membership directly, without nonlinear display
+        # curves or spatial smoothing before the JET colour map.
+        soft_memberships = membership_result["membership_raw"].copy()
         display_memberships = _smooth_absolute_memberships_for_display(
             membership_result["membership_raw"], roi_mask,
         )
@@ -724,13 +975,13 @@ def cluster_reference_map(
         ])
         current_config = {
             "selected_labels": ",".join(str(label) for label in labels),
-            "reference_label": str(reference_label_value),
+            "reference_label": reference_label_serialized,
             "center_mode": center_mode,
             "map_multiplier": multiplier,
             "invert": bool(invert),
             "cluster_labels": cluster_labels,
             "_membership_result": membership_result,
-            "hard_label_mask": False,
+            "hard_label_mask": True,
         }
         membership_context = _membership_context(feature, labels_arr, current_config)
         current_config["_membership_context"] = membership_context
@@ -765,6 +1016,7 @@ def cluster_reference_map(
                 "label": int(label),
                 "center": [float(value) for value in context_models[label]["center"]],
                 "scale": [float(value) for value in context_models[label]["scale"]],
+                "amplitude": float(context_models[label]["amplitude"]),
                 "pixel_count": int(context_models[label]["pixel_count"]),
             }
             for label in membership_context[0]
@@ -773,14 +1025,16 @@ def cluster_reference_map(
         component_configs = []
         for component_index, config in enumerate(accepted):
             component_config = dict(config)
-            component_config["hard_label_mask"] = False
+            component_config["hard_label_mask"] = True
             component_config["_membership_context"] = membership_context
             component_result = _component_similarity(feature, labels_arr, component_config)
             if component_result is None:
                 continue
-            candidate, _, component_labels, _ = component_result
+            candidate, component_reference, component_labels, _ = component_result
             component_candidates.append(candidate)
-            component_configs.append((component_index, config, component_labels))
+            component_configs.append((
+                component_index, config, component_labels, component_reference,
+            ))
 
         if bool(remainder_as_last):
             remainder_candidate = np.zeros(labels_arr.shape, dtype=np.float32)
@@ -798,22 +1052,28 @@ def cluster_reference_map(
         # applied later and never alter these values or the remainder.
         component_maps = component_candidates
         component_info = []
-        for normalized_index, (component_index, config, component_labels) in enumerate(component_configs):
+        for normalized_index, (component_index, config, component_labels, component_reference) in enumerate(component_configs):
             allocated = component_maps[normalized_index]
-            accepted_reference_label = int(
-                _parse_labels(config.get("reference_label", "1"))[0]
-            )
-            accepted_reference = cluster_reference_mapping[
-                accepted_reference_label - 1
+            accepted_reference_labels = _parse_labels(config.get("reference_label", "1"))
+            accepted_references = [
+                cluster_reference_mapping[label - 1]
+                for label in accepted_reference_labels
             ]
+            combined_reference = len(accepted_references) == 2
             component_info.append({
                 "index": component_index,
                 "name": str(config.get("name") or f"Komponens {component_index + 1}"),
                 "selected_labels": component_labels,
-                "reference_label": accepted_reference_label,
-                "original_reference_index": accepted_reference["reference_original_index"],
-                "reference_name": accepted_reference["reference_name"],
-                "reference_centroid": accepted_reference["reference_centroid"],
+                "reference_label": ",".join(str(label) for label in accepted_reference_labels),
+                "original_reference_index": (
+                    [item["reference_original_index"] for item in accepted_references]
+                    if combined_reference else accepted_references[0]["reference_original_index"]
+                ),
+                "reference_name": " + ".join(item["reference_name"] for item in accepted_references),
+                "reference_centroid": (
+                    float(component_reference[0] * 255.0)
+                    if combined_reference else accepted_references[0]["reference_centroid"]
+                ),
                 "map_multiplier": float(config.get("map_multiplier", 1.0)),
                 "coverage_percent": float(np.mean(allocated[labels_arr > 0]) * 100.0) if np.any(labels_arr > 0) else 0.0,
                 "is_remainder": False,
@@ -840,13 +1100,22 @@ def cluster_reference_map(
                 display_similarity[roi_mask] = 1.0 - similarity[roi_mask]
             display_similarity = display_similarity * remainder_visual_multiplier
         else:
-            reference_index = cluster_labels.index(reference_label_value)
-            display_similarity = display_memberships[..., reference_index].copy()
+            if len(reference_labels) == 1:
+                reference_index = cluster_labels.index(reference_labels[0])
+                display_similarity = soft_memberships[..., reference_index].copy()
+                display_similarity[~reference_mask] = 0.0
+            else:
+                display_similarity = current_similarity.copy()
             if bool(invert):
                 display_similarity[reference_mask] = 1.0 - display_similarity[reference_mask]
             display_similarity = display_similarity * multiplier
-        raw = np.rint(np.clip(display_similarity, 0.0, 1.0) * 255.0).astype(np.uint8)
+        jet_similarity = _jet_display_curve(display_similarity)
+        raw = np.rint(jet_similarity * 255.0).astype(np.uint8)
         mapped = cv2.applyColorMap(raw, cv_maps[colormap])
+        # OpenCV's colour maps render value 0 as a real colour (dark blue for
+        # JET). Pixels excluded by an upstream mask are not map values, so keep
+        # them visually black instead of letting them enter the colour scale.
+        mapped[~roi_mask] = 0
         evaluation_mask = (labels_arr > 0) if bool(remainder_as_last) else reference_mask
         source_bgr = image[..., :3].astype(np.uint8) if image.ndim == 3 else cv2.cvtColor(
             image.astype(np.uint8), cv2.COLOR_GRAY2BGR,
@@ -854,14 +1123,20 @@ def cluster_reference_map(
         soft_bgr, soft_overlay = _soft_palette_visualization(
             soft_memberships, palette_bgr, roi_mask, source_bgr,
         )
-        reference_index = cluster_labels.index(reference_label_value)
-        display_alpha = soft_memberships[..., reference_index].copy()
+        if len(reference_labels) == 1:
+            reference_index = cluster_labels.index(reference_labels[0])
+            display_alpha = soft_memberships[..., reference_index].copy()
+            cluster_color = palette_bgr[reference_index]
+        else:
+            display_alpha = current_similarity.copy()
+            cluster_color = np.mean([
+                palette_bgr[cluster_labels.index(label)] for label in reference_labels
+            ], axis=0)
         if bool(invert):
             display_alpha[roi_mask] = 1.0 - display_alpha[roi_mask]
         display_alpha *= multiplier
         display_alpha[~roi_mask] = 0.0
         alpha = display_alpha[..., None]
-        cluster_color = palette_bgr[reference_index]
         reference_overlay = (
             source_bgr.astype(np.float32) * (1.0 - alpha)
             + cluster_color[None, None, :] * alpha
@@ -875,7 +1150,7 @@ def cluster_reference_map(
         overlay = heatmap_overlay if bool(remainder_as_last) else reference_overlay
 
         raw_maps.append(similarity.astype(np.float32))
-        display_raw_maps.append(display_similarity.astype(np.float32))
+        display_raw_maps.append(jet_similarity.astype(np.float32))
         output_images.append(primary_image)
         overlay_images.append(overlay)
         heatmap_images.append(mapped)
@@ -903,10 +1178,12 @@ def cluster_reference_map(
                 component_display = component_display * np.clip(
                     float(component_config.get("map_multiplier", 1.0)), 0.0, 1.0,
                 )
-            component_images.append(cv2.applyColorMap(
-                np.rint(np.clip(component_display, 0.0, 1.0) * 255.0).astype(np.uint8),
+            component_image = cv2.applyColorMap(
+                np.rint(_jet_display_curve(component_display) * 255.0).astype(np.uint8),
                 cv_maps[colormap],
-            ))
+            )
+            component_image[~roi_mask] = 0
+            component_images.append(component_image)
         component_images_all.append(component_images)
         component_info_all.append(component_info)
         remainder_maps.append(
@@ -933,7 +1210,7 @@ def cluster_reference_map(
     results["cluster_map_reference"] = references
     results["cluster_map_label_values"] = label_values_all
     results["cluster_map_selected_labels"] = labels
-    results["cluster_map_reference_label"] = reference_label_value
+    results["cluster_map_reference_label"] = reference_label_serialized
     results["cluster_map_components_raw"] = component_maps_all
     results["cluster_map_component_images"] = component_images_all
     results["cluster_map_component_info"] = component_info_all
@@ -999,7 +1276,7 @@ def cluster_reference_map(
     data["count"] = len(output_images)
     data.setdefault("meta", {})["cluster_reference_map"] = {
         "selected_labels": labels,
-        "reference_label": reference_label_value,
+        "reference_label": reference_label_serialized,
         "center_mode": center_mode,
         "map_multiplier": multiplier,
         "remainder_name": str(remainder_name or "Maradék"),
@@ -1007,38 +1284,40 @@ def cluster_reference_map(
         "remainder_invert": bool(remainder_invert),
         "colormap": colormap,
         "invert": bool(invert),
-        "algorithm": "ordered_hybrid_membership_from_upstream_kmeans_labels",
+        "algorithm": "upstream_kmeans_labels_with_piecewise_linear_reference_membership",
         "initial_assignment": "upstream_kmeans_label_maps",
-        "membership": "ordered_shoulders_with_gaussian_middle",
-        "spread_estimator": "IQR_for_middle_components",
+        "membership": "piecewise_linear_between_reference_centers",
+        "spread_estimator": "adjacent_reference_center_distance",
+        "amplitude_estimator": "unit_amplitude",
         "initial_centroid_source": "reference_sequence_or_reference_crops",
         "soft_manual_thresholds": False,
         "legacy_hard_thresholds": False,
         "manual_spread_scaling": False,
-        "normalization": "per_pixel_sum_to_one",
+        "normalization": "absolute_reference_membership",
         "hard_output": "upstream_kmeans_label_maps",
-        "membership_method": "hybrid_shoulders_gaussian_middle",
-        "extreme_cluster_membership": "monotonic_shoulders",
-        "middle_cluster_membership": "gaussian_median_iqr",
-        "primary_similarity": "absolute_raw_membership",
+        "membership_method": "piecewise_linear_between_reference_centers",
+        "extreme_cluster_membership": "piecewise_linear_shoulder",
+        "middle_cluster_membership": "piecewise_linear_triangle",
+        "primary_similarity": "absolute_reference_membership",
         "per_pixel_normalization_used_for_primary": False,
-        "display_spatial_smoothing": "gaussian_membership_only",
-        "display_spatial_sigma": DISPLAY_SPATIAL_SIGMA,
+        "display_spatial_smoothing": "none",
+        "display_spatial_sigma": 0.0,
         "manual_thresholds": False,
-        "soft_normalization": "per_pixel_sum_to_one",
-        "hard_label_mask": False,
+        "soft_normalization": "none_absolute_membership",
+        "hard_label_mask": True,
         "soft_membership": True,
         "component_weights": [1.0, 1.0, 1.0],
         "intensity_scale": "0_to_1",
         "eps_iqr": MATLAB_EPS_IQR,
+        "jet_display_curve": "identity",
         "reference_models": reference_models_debug,
         "visualization": "soft_membership_blend",
         "primary_visualization": "heatmap",
         "overlay_is_primary": False,
         "cluster_map_contains_source_pixels": False,
         "palette_color_order": "BGR",
-        "soft_spatial_smoothing": True,
-        "soft_spatial_sigma": SOFT_SPATIAL_SIGMA,
+        "soft_spatial_smoothing": False,
+        "soft_spatial_sigma": 0.0,
         "hard_boundaries_drawn": False,
         "heatmap_mode": "optional_debug",
     }
