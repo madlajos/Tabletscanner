@@ -1,5 +1,6 @@
 import { CommonModule, DecimalPipe } from '@angular/common';
 import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { PreviewMediaZoomDirective } from './preview-media-zoom.directive';
 
 export interface CharacterizedParticle {
@@ -32,7 +33,7 @@ interface DistributionGroup {
 @Component({
   selector: 'app-particle-size-distribution-preview',
   standalone: true,
-  imports: [CommonModule, DecimalPipe, PreviewMediaZoomDirective],
+  imports: [CommonModule, DecimalPipe, FormsModule, PreviewMediaZoomDirective],
   template: `
     <div class="distribution-preview">
       <section class="image-panel">
@@ -96,8 +97,10 @@ interface DistributionGroup {
               <text x="600" y="205" text-anchor="end">{{ rangeMax | number:'1.0-2' }} {{ unit }}</text>
               <text x="44" y="20" text-anchor="end">{{ numberMax | number:'1.0-1' }}%</text>
               <text x="44" y="188" text-anchor="end">0%</text>
-              <text class="editable-axis-label" x="325" y="218" text-anchor="middle" tabindex="0" (click)="editAxisLabel('x')" (keydown.enter)="editAxisLabel('x')">{{ xAxisLabel }}</text>
-              <text class="editable-axis-label" x="12" y="100" text-anchor="middle" transform="rotate(-90 12 100)" tabindex="0" (click)="editAxisLabel('numberY')" (keydown.enter)="editAxisLabel('numberY')">{{ numberYAxisLabel }}</text>
+              @if (editingAxis === 'x') { <foreignObject x="205" y="195" width="240" height="25"><input style="width:100%;background:#202020;color:#fff;text-align:center" [(ngModel)]="xAxisLabel" (blur)="finishAxisEdit()" (keydown.enter)="finishAxisEdit()" autofocus /></foreignObject> }
+              @else { <text class="editable-axis-label" x="325" y="218" text-anchor="middle" tabindex="0" (click)="editAxisLabel('x')" (keydown.enter)="editAxisLabel('x')">{{ xAxisLabel }}</text> }
+              @if (editingAxis === 'numberY') { <foreignObject x="-108" y="88" width="240" height="25" transform="rotate(-90 12 100)"><input style="width:100%;background:#202020;color:#fff;text-align:center" [(ngModel)]="numberYAxisLabel" (blur)="finishAxisEdit()" (keydown.enter)="finishAxisEdit()" autofocus /></foreignObject> }
+              @else { <text class="editable-axis-label" x="12" y="100" text-anchor="middle" transform="rotate(-90 12 100)" tabindex="0" (click)="editAxisLabel('numberY')" (keydown.enter)="editAxisLabel('numberY')">{{ numberYAxisLabel }}</text> }
             </svg>
           </div>
 
@@ -112,8 +115,10 @@ interface DistributionGroup {
               <text x="600" y="205" text-anchor="end">{{ rangeMax | number:'1.0-2' }} {{ unit }}</text>
               <text x="44" y="20" text-anchor="end">{{ volumeMax | number:'1.0-1' }}%</text>
               <text x="44" y="188" text-anchor="end">0%</text>
-              <text class="editable-axis-label" x="325" y="218" text-anchor="middle" tabindex="0" (click)="editAxisLabel('x')" (keydown.enter)="editAxisLabel('x')">{{ xAxisLabel }}</text>
-              <text class="editable-axis-label" x="12" y="100" text-anchor="middle" transform="rotate(-90 12 100)" tabindex="0" (click)="editAxisLabel('volumeY')" (keydown.enter)="editAxisLabel('volumeY')">{{ volumeYAxisLabel }}</text>
+              @if (editingAxis === 'x') { <foreignObject x="205" y="195" width="240" height="25"><input style="width:100%;background:#202020;color:#fff;text-align:center" [(ngModel)]="xAxisLabel" (blur)="finishAxisEdit()" (keydown.enter)="finishAxisEdit()" autofocus /></foreignObject> }
+              @else { <text class="editable-axis-label" x="325" y="218" text-anchor="middle" tabindex="0" (click)="editAxisLabel('x')" (keydown.enter)="editAxisLabel('x')">{{ xAxisLabel }}</text> }
+              @if (editingAxis === 'volumeY') { <foreignObject x="-108" y="88" width="240" height="25" transform="rotate(-90 12 100)"><input style="width:100%;background:#202020;color:#fff;text-align:center" [(ngModel)]="volumeYAxisLabel" (blur)="finishAxisEdit()" (keydown.enter)="finishAxisEdit()" autofocus /></foreignObject> }
+              @else { <text class="editable-axis-label" x="12" y="100" text-anchor="middle" transform="rotate(-90 12 100)" tabindex="0" (click)="editAxisLabel('volumeY')" (keydown.enter)="editAxisLabel('volumeY')">{{ volumeYAxisLabel }}</text> }
             </svg>
           </div>
 
@@ -186,6 +191,7 @@ interface DistributionGroup {
   `],
 })
 export class ParticleSizeDistributionPreviewComponent {
+  editingAxis: 'x' | 'numberY' | 'volumeY' | null = null;
   xAxisLabel = 'Szemcseméret';
   numberYAxisLabel = 'Szám szerinti eloszlás (%)';
   volumeYAxisLabel = 'Térfogat szerinti eloszlás (%)';
@@ -247,12 +253,6 @@ export class ParticleSizeDistributionPreviewComponent {
     return Math.max(...values.map(Number).filter(Number.isFinite), 1);
   }
 
-  editAxisLabel(axis: 'x' | 'numberY' | 'volumeY'): void {
-    const current = axis === 'x' ? this.xAxisLabel : axis === 'numberY' ? this.numberYAxisLabel : this.volumeYAxisLabel;
-    const edited = window.prompt('Tengely címe:', current)?.trim();
-    if (!edited) return;
-    if (axis === 'x') this.xAxisLabel = edited;
-    else if (axis === 'numberY') this.numberYAxisLabel = edited;
-    else this.volumeYAxisLabel = edited;
-  }
+  editAxisLabel(axis: 'x' | 'numberY' | 'volumeY'): void { this.editingAxis = axis; }
+  finishAxisEdit(): void { this.editingAxis = null; }
 }
