@@ -67,5 +67,54 @@ class RotatedRectangleCropTests(unittest.TestCase):
         self.assertLess(float(right[..., 0].mean()), 15.0)
 
 
+class CropAndMaskTests(unittest.TestCase):
+    def test_crop_applies_ellipse_mask_and_crops_the_active_mask(self):
+        image = np.full((80, 100, 3), 120, dtype=np.uint8)
+        roi = {
+            "type": "ellipse",
+            "cx": 50,
+            "cy": 40,
+            "rx": 20,
+            "ry": 10,
+            "angle": 0.0,
+        }
+
+        result = mask_roi(
+            _pipeline_data(image),
+            roi=roi,
+            output_mode="crop",
+            apply_mask=True,
+        )
+
+        cropped = result["images"][0]
+        active_mask = result["meta"]["active_masks"][0]
+        self.assertEqual(cropped.shape[:2], active_mask.shape)
+        self.assertEqual(int(cropped[0, 0, 0]), 0)
+        self.assertEqual(int(cropped[cropped.shape[0] // 2, cropped.shape[1] // 2, 0]), 120)
+        self.assertEqual(int(active_mask[0, 0]), 0)
+        self.assertEqual(int(active_mask[active_mask.shape[0] // 2, active_mask.shape[1] // 2]), 255)
+
+    def test_crop_without_apply_mask_keeps_pixels_outside_ellipse(self):
+        image = np.full((80, 100, 3), 120, dtype=np.uint8)
+        roi = {
+            "type": "ellipse",
+            "cx": 50,
+            "cy": 40,
+            "rx": 20,
+            "ry": 10,
+            "angle": 0.0,
+        }
+
+        result = mask_roi(
+            _pipeline_data(image),
+            roi=roi,
+            output_mode="crop",
+            apply_mask=False,
+        )
+
+        self.assertEqual(int(result["images"][0][0, 0, 0]), 120)
+        self.assertNotIn("active_masks", result["meta"])
+
+
 if __name__ == "__main__":
     unittest.main()

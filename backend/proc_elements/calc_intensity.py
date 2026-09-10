@@ -1,26 +1,18 @@
 import numpy as np
+from proc_elements.intensity_summary import build_intensity_summary
+from proc_elements.mask_utils import get_pipeline_masks
 
 
 def _get_masks_from_pipeline(data):
     """
     Retrieve masks from the pipeline in priority order.
     Returns a list of masks parallel to data["images"], or None if no masks found.
-    Priority: range_masks > masks > active_masks > (generate full mask)
+    Recognizes range, circle, ROI, region and active masks. If there is no
+    earlier mask, it generates a full-image mask.
     """
-    if data["results"] is None:
-        return None
-    
-    # Try to get range_masks (from apply_range_mask)
-    if "range_masks" in data["results"]:
-        return data["results"]["range_masks"]
-    
-    # Try to get masks (from detect_circles with apply_mask=True)
-    if "masks" in data["results"]:
-        return data["results"]["masks"]
-    
-    # Try to get active_masks from meta
-    if "meta" in data and "active_masks" in data["meta"]:
-        return data["meta"]["active_masks"]
+    masks = get_pipeline_masks(data)
+    if masks is not None:
+        return masks
     
     # Generate full masks (include all pixels)
     masks = []
@@ -30,7 +22,8 @@ def _get_masks_from_pipeline(data):
     return masks
 
 
-def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False):
+def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False,
+                              display_mode='per_image', group_labels='[]'):
 
     if data["error"] is not None:
         return data
@@ -47,12 +40,12 @@ def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False
         return data
 
     for p in percentiles:
-        if not isinstance(p, (int, float)) or p < 0 or p > 100:
+        if not isinstance(p, (int, float)) or not np.isfinite(p) or p < 0 or p > 100:
             data["error"] = "E2504"
             return data
 
     masks = _get_masks_from_pipeline(data)
-    if masks is None or len(masks) == 0:
+    if masks is None or len(masks) != len(data['images']):
         data["error"] = "E2502"
         return data
 
@@ -130,6 +123,9 @@ def calculate_intensity_stats(data, percentiles=(5, 25, 50, 75, 95), debug=False
             stats.append(stat)
 
     data["results"]["intensity_stats"] = stats
+    build_intensity_summary(data, masks, percentiles, display_mode, group_labels)
+    if data['error']:
+        return data
     data["meta"]["intensity_stats"] = {
         "percentiles": tuple(percentiles)
     }

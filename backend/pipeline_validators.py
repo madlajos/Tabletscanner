@@ -1,6 +1,7 @@
 """
 Pipeline validation: structural and parameter validation for pipeline documents.
 """
+import re
 from typing import List
 from pipeline_types import StepError, StepInstance, PipelineDocument
 from pipeline_steps import STEP_DEFINITIONS
@@ -69,22 +70,6 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
                         step_def_id=step_inst.step_def_id,
                         error_code="E3004",
                         message=f"A(z) '{defn.name}' lépéshez szükséges egy '{sec_name}' lépés előtte.",
-                    ))
-
-        # Validate color_thresh specific requirements
-        if step_inst.step_def_id == "color_thresh":
-            # Find the preceding select_channel step
-            preceding_steps = {s.step_def_id: s for s in doc.steps[:i] if s.enabled}
-            if "select_channel" in preceding_steps:
-                select_channel_step = preceding_steps["select_channel"]
-                channel = select_channel_step.param_values.get("channel", "")
-                # Check if "ALL" option is chosen
-                if channel != "ALL":
-                    errors.append(StepError(
-                        step_index=i,
-                        step_def_id="color_thresh",
-                        error_code="E3005",
-                        message="A 'Szín alapú küszöb' lépéshez a megelőző 'Színtér konverzió' lépésnél az 'ALL' (összes csatorna) opciót kell választani.",
                     ))
 
         # Validate parameters
@@ -168,6 +153,20 @@ def _validate_params(step_index: int, inst: StepInstance, defn) -> List[StepErro
                     ))
 
         elif ps.type == "enum":
+            # Sources are positions inside a three-image group; execution
+            # repeats the same relative choices for every consecutive group.
+            if inst.step_def_id == "pseudo_image" and ps.name in (
+                "blue_source", "green_source", "red_source"
+            ):
+                if not isinstance(value, str) or not re.fullmatch(r"[1-3]-(B|G|R|GRAY)", value):
+                    errors.append(StepError(
+                        step_index=step_index,
+                        step_def_id=inst.step_def_id,
+                        error_code="E3003",
+                        message=f"'{ps.label}' érvénytelen kép/csatorna: {value}. Formátum: 1-B, 2-GRAY vagy 3-R.",
+                        param_name=ps.name,
+                    ))
+                continue
             if ps.options and str(value) not in ps.options:
                 errors.append(StepError(
                     step_index=step_index,

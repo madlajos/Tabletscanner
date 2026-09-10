@@ -4329,7 +4329,10 @@ def preview_pipeline():
         }), 200
 
     # Build response: JPEG image + side outputs from the data dict
-    side_outputs = pipeline_engine.extract_side_outputs(result.data)
+    side_outputs = pipeline_engine.extract_side_outputs(
+        result.data,
+        preview_image_index=preview_image_index,
+    )
 
     response_data = {
         'success': True,
@@ -4344,8 +4347,34 @@ def preview_pipeline():
         preview_step < len(doc.steps) and 
         doc.steps[preview_step].step_def_id == 'detect_circles'
     )
+    current_step_is_manual_alignment = (
+        preview_step >= 0
+        and preview_step < len(doc.steps)
+        and doc.steps[preview_step].step_def_id == 'manual_image_alignment'
+    )
+    current_step_is_reference_resize = (
+        preview_step >= 0
+        and preview_step < len(doc.steps)
+        and doc.steps[preview_step].step_def_id == 'resize_to_reference'
+    )
+    comparison_previews = (
+        result.data.get("results", {}).get(
+            "manual_alignment_previews" if current_step_is_manual_alignment else "reference_resize_previews", []
+        )
+        if result.data and (current_step_is_manual_alignment or current_step_is_reference_resize) else []
+    )
     
-    if (result.data and current_step_is_detect_circles and 
+    if comparison_previews:
+        img_idx = max(0, min(preview_image_index, len(comparison_previews) - 1))
+        img = comparison_previews[img_idx]
+        success_enc, jpeg_buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if success_enc:
+            import base64
+            response_data['image_base64'] = base64.b64encode(jpeg_buf.tobytes()).decode('ascii')
+            response_data['image_width'] = img.shape[1]
+            response_data['image_height'] = img.shape[0]
+            response_data['is_grayscale'] = img.ndim == 2
+    elif (result.data and current_step_is_detect_circles and
         side_outputs.get("circle_overlay_base64") and len(side_outputs["circle_overlay_base64"]) > 0):
         # Use circle overlay image only if detect_circles is the current step
         img_idx = max(0, min(preview_image_index, len(side_outputs["circle_overlay_base64"]) - 1))

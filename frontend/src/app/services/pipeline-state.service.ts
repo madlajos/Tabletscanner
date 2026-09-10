@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { BehaviorSubject, Subject, debounceTime } from 'rxjs';
+import { BehaviorSubject, Subject, Subscription, debounceTime } from 'rxjs';
 import {
   StepDefinition,
   StepInstance,
@@ -11,6 +11,7 @@ import {
   createEmptyPipeline,
 } from '../models/pipeline.models';
 import { RecipeService } from './recipe.service';
+import { PipelineErrors } from './pipeline-errors';
 
 type PortDirection = 'source' | 'transform' | 'sink';
 
@@ -33,6 +34,9 @@ const STEP_IO_OVERRIDES: Record<string, StepIoOverride> = {
 
 @Injectable({ providedIn: 'root' })
 export class PipelineStateService {
+  private readonly pipelineErrors = new PipelineErrors();
+  private validationSubscription?: Subscription;
+  private previewSubscription?: Subscription;
   private readonly HISTORY_LIMIT = 50;
   private undoStack: PipelineDocument[] = [];
   private redoStack: PipelineDocument[] = [];
@@ -138,7 +142,7 @@ export class PipelineStateService {
   expandedChart$ = this.expandedChartSubject.asObservable();
 
   /** Double-clicked node whose input/output should be shown in split preview. */
-  private splitPreviewRequestSubject = new Subject<number>();
+  private splitPreviewRequestSubject = new Subject<readonly [number, number] | null>();
   splitPreviewRequest$ = this.splitPreviewRequestSubject.asObservable();
   private splitPreviewStepIndexSubject = new BehaviorSubject<number>(-1);
   splitPreviewStepIndex$ = this.splitPreviewStepIndexSubject.asObservable();
@@ -153,9 +157,24 @@ export class PipelineStateService {
 
   /** Steps that aggregate across all images and must not use single-image mode. */
   private readonly AGGREGATING_STEPS = new Set([
-    'fit_curve', 'predict_node', 'add_sequence_values', 'histogram_pca', 'detect_circles',
+    'fit_curve', 'predict_node', 'add_sequence_values', 'histogram_pca',
     'dual_map',   // needs all images to auto-detect gray/RGB pairs
   ]);
+
+  private requiresAllImages(step: StepInstance): boolean {
+    if (step.step_def_id === 'calculate_histograms') {
+      return (step.param_values?.['display_mode'] ?? 'per_image') !== 'per_image';
+    }
+    if (step.step_def_id === 'calculate_intensity_stats') {
+      return (step.param_values?.['display_mode'] ?? 'per_image') !== 'per_image';
+    }
+    if (this.AGGREGATING_STEPS.has(step.step_def_id)) return true;
+    if (step.step_def_id === 'characterize_particles') {
+      const mode = step.param_values?.['distribution_mode'] ?? 'pooled';
+      return mode === 'pooled' || mode === 'overlay';
+    }
+    return false;
+  }
 
   private shouldPreviewRoiOutput(step: StepInstance | null): boolean {
     if (!step || step.step_def_id !== 'mask_rect_roi') return false;
@@ -165,6 +184,7 @@ export class PipelineStateService {
   constructor(private recipeService: RecipeService) {
     // Auto-preview on pipeline change (debounced)
     this.pipelineChangedSubject.pipe(debounceTime(400)).subscribe(() => {
+      this.validate();
       // Skip auto-preview for fit_curve (manual play/apply button)
       const idx = this.selectedStepIndexSubject.value;
       const pipeline = this.getPipeline();
@@ -413,6 +433,21 @@ export class PipelineStateService {
     this.updateSteps(steps);
   }
 
+  /** Persist preview-only controls without rerunning the processing pipeline. */
+  updatePreviewParams(index: number, paramValues: Record<string, any>): void {
+    const pipeline = this.getPipeline();
+    if (index < 0 || index >= pipeline.steps.length) return;
+    const steps = pipeline.steps.map((step, i) => i === index
+      ? { ...step, param_values: { ...paramValues } }
+      : step);
+    steps.forEach((step, i) => (step.order = i));
+    this.undoStack.push(this.clonePipeline(pipeline));
+    if (this.undoStack.length > this.HISTORY_LIMIT) this.undoStack.shift();
+    this.redoStack = [];
+    this.pipelineSubject.next({ ...pipeline, steps });
+    this.dirtySubject.next(true);
+  }
+
   /** Move one contiguous branch (or another contiguous step range) as a single unit. */
   moveStepRange(fromIndex: number, toIndexExclusive: number, targetIndex: number): void {
     const pipeline = this.getPipeline();
@@ -499,6 +534,9 @@ export class PipelineStateService {
   }
 
   selectStep(index: number): void {
+    this.splitPreviewRequestSubject.next(null);
+    this.previewSubscription?.unsubscribe();
+    this.previewLoadingSubject.next(false);
     this.clearToolboxPreviewStep();
     const pipeline = this.getPipeline();
     if (index !== this.splitPreviewStepIndexSubject.value) {
@@ -543,6 +581,7 @@ export class PipelineStateService {
 
   /** Preview a specific step index (used to show input image for ROI editing). */
   requestPreviewForStep(stepIndex: number, forceAllImages: boolean = false): void {
+    this.previewSubscription?.unsubscribe();
     const pipeline = this.getPipeline();
     const imageIndex = this.previewImageIndexSubject.value;
 
@@ -554,7 +593,7 @@ export class PipelineStateService {
     }
 
     const step = pipeline.steps[stepIndex];
-    const isAggregating = this.AGGREGATING_STEPS.has(step.step_def_id);
+    const isAggregating = this.requiresAllImages(step);
     const singleImageOnly = !forceAllImages && !isAggregating;
     const selectedStep = this.selectedStepIndexSubject.value >= 0 && this.selectedStepIndexSubject.value < pipeline.steps.length
       ? pipeline.steps[this.selectedStepIndexSubject.value]
@@ -572,11 +611,12 @@ export class PipelineStateService {
       ? { pipeline, stepIndex, startIndex: 0 }
       : this.createBranchPreviewContext(pipeline, stepIndex);
 
-    this.recipeService.previewStep(previewContext.pipeline, previewContext.stepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
+    this.previewSubscription = this.recipeService.previewStep(previewContext.pipeline, previewContext.stepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
       next: (res: PreviewResponse) => {
+        if (pipeline !== this.getPipeline()) return;
         this.previewLoadingSubject.next(false);
         if (res.success) {
-          this.validationErrorsSubject.next([]);
+          this.recordPreviewErrors(pipeline, previewContext.startIndex, stepIndex, []);
           if (res.image_base64) {
             this.previewImageSubject.next('data:image/jpeg;base64,' + res.image_base64);
           } else {
@@ -589,7 +629,7 @@ export class PipelineStateService {
             this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
           }
         } else {
-          this.validationErrorsSubject.next(this.mapPreviewErrors(res.errors || [], previewContext.startIndex));
+          this.recordPreviewErrors(pipeline, previewContext.startIndex, stepIndex, this.mapPreviewErrors(res.errors || [], previewContext.startIndex));
           this.previewImageSubject.next(null);
           this.previewImageOverrideSubject.next(null);
           this.dualMapPreviewSubject.next(null);
@@ -598,15 +638,20 @@ export class PipelineStateService {
           this.sideOutputsSubject.next({});
         }
       },
-      error: () => { this.previewLoadingSubject.next(false); },
+      error: () => {
+        this.previewLoadingSubject.next(false);
+        this.recordPreviewErrors(pipeline, stepIndex, stepIndex, [{ step_index: stepIndex, step_def_id: step.step_def_id,
+          error_code: 'E3005', message: 'Az előnézet kérése sikertelen. Ellenőrizze a backend kapcsolatát, majd próbálja újra.' }]);
+      },
     });
   }
 
-  requestSplitPreview(stepIndex: number): void {
+  requestSplitPreview(stepIndex: number, firstIndex = stepIndex - 1): void {
     const pipeline = this.getPipeline();
-    if (stepIndex < 0 || stepIndex >= pipeline.steps.length) return;
+    if (firstIndex < 0 || firstIndex >= pipeline.steps.length || firstIndex === stepIndex
+      || stepIndex < 0 || stepIndex >= pipeline.steps.length) return;
     this.splitPreviewStepIndexSubject.next(stepIndex);
-    this.splitPreviewRequestSubject.next(stepIndex);
+    this.splitPreviewRequestSubject.next([firstIndex, stepIndex]);
   }
 
   getPreviewContext(stepIndex: number): {
@@ -703,6 +748,10 @@ export class PipelineStateService {
   }
 
   newPipeline(): void {
+    this.previewSubscription?.unsubscribe();
+    this.validationSubscription?.unsubscribe();
+    this.previewLoadingSubject.next(false);
+    this.pipelineErrors.reset();
     this.clearHistory();
     this.pipelineSubject.next(createEmptyPipeline());
     this.selectedStepIndexSubject.next(-1);
@@ -717,6 +766,10 @@ export class PipelineStateService {
   }
 
   loadPipeline(doc: PipelineDocument): void {
+    this.previewSubscription?.unsubscribe();
+    this.previewLoadingSubject.next(false);
+    this.pipelineErrors.reset();
+    this.validationErrorsSubject.next([]);
     this.clearHistory();
     const normalized = this.normalizePipelineDocument(doc);
     this.pipelineSubject.next(normalized);
@@ -811,15 +864,22 @@ export class PipelineStateService {
   }
 
   private updatePipeline(pipeline: PipelineDocument): void {
+    this.previewSubscription?.unsubscribe();
+    this.previewLoadingSubject.next(false);
     this.undoStack.push(this.clonePipeline(this.getPipeline()));
     if (this.undoStack.length > this.HISTORY_LIMIT) this.undoStack.shift();
     this.redoStack = [];
     this.pipelineSubject.next(pipeline);
+    this.pipelineErrors.setValidation([]);
+    this.validationErrorsSubject.next(this.pipelineErrors.all(pipeline));
     this.dirtySubject.next(true);
     this.pipelineChangedSubject.next();
   }
 
   private restoreHistoryState(pipeline: PipelineDocument): void {
+    this.previewSubscription?.unsubscribe();
+    this.previewLoadingSubject.next(false);
+    this.pipelineErrors.reset();
     const restored = this.clonePipeline(pipeline);
     restored.steps.forEach((step, index) => (step.order = index));
     this.pipelineSubject.next(restored);
@@ -880,9 +940,9 @@ export class PipelineStateService {
       .slice(branchStartIndex, stepIndex + 1)
       .some((step) =>
         step.enabled !== false
-        && step.step_def_id === 'reference_color_align'
+        && ['reference_color_align', 'manual_image_alignment', 'automatic_image_alignment', 'resize_to_reference'].includes(step.step_def_id)
         && !!step.param_values?.['reference_branch']
-        && step.param_values['reference_branch'] !== 'auto'
+        && (step.step_def_id !== 'reference_color_align' || step.param_values['reference_branch'] !== 'auto')
       );
     if (dependsOnExternalReferenceBranch) {
       return { pipeline, stepIndex, startIndex: 0 };
@@ -950,6 +1010,7 @@ export class PipelineStateService {
   // --- Preview ---
 
   requestPreview(forceAllImages: boolean = false): void {
+    this.previewSubscription?.unsubscribe();
     const pipeline = this.getPipeline();
     const stepIndex = this.selectedStepIndexSubject.value;
     const imageIndex = this.previewImageIndexSubject.value;
@@ -969,7 +1030,7 @@ export class PipelineStateService {
         ? Math.max(0, stepIndex - 1)
         : stepIndex;
     const previewStep = pipeline.steps[previewStepIndex];
-    const isAggregating = this.AGGREGATING_STEPS.has(previewStep.step_def_id);
+    const isAggregating = this.requiresAllImages(previewStep);
     const singleImageOnly = !forceAllImages && !isAggregating;
     const scaleBarOverlay =
       step.step_def_id === 'save_images' || step.step_def_id === 'save_array'
@@ -986,11 +1047,12 @@ export class PipelineStateService {
       ? { pipeline, stepIndex: previewStepIndex, startIndex: 0 }
       : this.createBranchPreviewContext(pipeline, previewStepIndex);
 
-    this.recipeService.previewStep(previewContext.pipeline, previewContext.stepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
+    this.previewSubscription = this.recipeService.previewStep(previewContext.pipeline, previewContext.stepIndex, imageIndex, singleImageOnly, omittedArr, scaleBarOverlay).subscribe({
       next: (res: PreviewResponse) => {
+        if (pipeline !== this.getPipeline()) return;
         this.previewLoadingSubject.next(false);
         if (res.success) {
-          this.validationErrorsSubject.next([]);
+          this.recordPreviewErrors(pipeline, previewContext.startIndex, previewStepIndex, []);
           if (res.image_base64) {
             this.previewImageSubject.next('data:image/jpeg;base64,' + res.image_base64);
           } else {
@@ -1003,7 +1065,7 @@ export class PipelineStateService {
             this.imageDimsSubject.next({ w: res.image_width, h: res.image_height });
           }
         } else {
-          this.validationErrorsSubject.next(this.mapPreviewErrors(res.errors || [], previewContext.startIndex));
+          this.recordPreviewErrors(pipeline, previewContext.startIndex, previewStepIndex, this.mapPreviewErrors(res.errors || [], previewContext.startIndex));
           this.previewImageSubject.next(null);
           this.previewImageOverrideSubject.next(null);
           this.dualMapPreviewSubject.next(null);
@@ -1014,6 +1076,9 @@ export class PipelineStateService {
       },
       error: (err) => {
         this.previewLoadingSubject.next(false);
+        this.recordPreviewErrors(pipeline, previewStepIndex, previewStepIndex, [{ step_index: previewStepIndex,
+          step_def_id: previewStep.step_def_id, error_code: 'E3005',
+          message: 'Az előnézet kérése sikertelen. Ellenőrizze a backend kapcsolatát, majd próbálja újra.' }]);
         console.error('Preview failed:', err);
       },
     });
@@ -1023,12 +1088,21 @@ export class PipelineStateService {
 
   validate(): void {
     const pipeline = this.getPipeline();
-    this.recipeService.validatePipeline(pipeline).subscribe({
+    this.validationSubscription?.unsubscribe();
+    this.validationSubscription = this.recipeService.validatePipeline(pipeline).subscribe({
       next: (res) => {
-        this.validationErrorsSubject.next(res.errors || []);
+        if (pipeline !== this.getPipeline()) return;
+        this.pipelineErrors.setValidation(res.errors || []);
+        this.validationErrorsSubject.next(this.pipelineErrors.all(pipeline));
       },
       error: (err) => console.error('Validation failed:', err),
     });
+  }
+
+  private recordPreviewErrors(pipeline: PipelineDocument, start: number, end: number, errors: StepError[]): void {
+    if (pipeline !== this.getPipeline()) return;
+    this.pipelineErrors.recordPreview(pipeline, start, end, errors);
+    this.validationErrorsSubject.next(this.pipelineErrors.all(pipeline));
   }
 
   /** Get validation errors for a specific step. */
@@ -1155,10 +1229,6 @@ export class PipelineStateService {
       return 'HISTOGRAM';
     }
 
-    if (defn.id === 'calculate_intensity_stats') {
-      return 'SCALAR';
-    }
-
     if (defn.id === 'histogram_equalization') {
       const selected = String(step?.param_values?.['output_mode'] ?? '').trim();
       if (selected === 'histogram') return 'HISTOGRAM';
@@ -1169,11 +1239,19 @@ export class PipelineStateService {
     }
 
     if (defn.id === 'apply_threshold') {
+      const channel = String(step?.param_values?.['channel'] ?? 'GRAY').trim();
+      if (channel === 'R' || channel === 'G' || channel === 'B') {
+        return 'IMAGE';
+      }
       const selected = String(step?.param_values?.['mode'] ?? '').trim();
       if (selected === 'trunc' || selected === 'tozero' || selected === 'tozero_inv') {
         return 'GRAYSCALE';
       }
       return 'MASK';
+    }
+
+    if (defn.id === 'color_thresh') {
+      return step?.param_values?.['output_mode'] === 'applied' ? 'IMAGE' : 'MASK';
     }
 
     const override = STEP_IO_OVERRIDES[defn.id];

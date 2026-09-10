@@ -3,6 +3,18 @@ import numpy as np
 import cv2
 
 
+def get_pipeline_masks(data: dict):
+    """Return the masks produced by an earlier pipeline step, if any."""
+    results = data.get("results") or {}
+    for key in ("range_masks", "masks", "roi_masks", "region_masks"):
+        masks = results.get(key)
+        if isinstance(masks, list):
+            return masks
+
+    masks = (data.get("meta") or {}).get("active_masks")
+    return masks if isinstance(masks, list) else None
+
+
 def get_active_masks(data: dict) -> list:
     """Get active masks from the pipeline data if they exist."""
     if "meta" in data and "active_masks" in data["meta"]:

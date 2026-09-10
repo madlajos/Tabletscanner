@@ -15,10 +15,12 @@ def detect_circles(
     accumulator_threshold=20,
     polarity="dark",
     radius_multiplier=1.0,
+    radius_adjustment_percent=100.0,
     apply_mask=False,
     mask_background="black",
     invert_mask=False,
-    debug=False
+    debug=False,
+    detection_channel="GRAY"
 ):
     """
     Kördetektálás OpenCV HoughCircles-szel.
@@ -87,6 +89,21 @@ def detect_circles(
         data["error"] = "E3608"
         return data
 
+    if detection_channel not in ("GRAY", "R", "G", "B"):
+        data["error"] = "E3611"
+        return data
+
+    try:
+        radius_adjustment_percent = float(radius_adjustment_percent)
+    except (TypeError, ValueError):
+        radius_adjustment_percent = 100.0
+
+    if not np.isfinite(radius_adjustment_percent) or radius_adjustment_percent <= 0:
+        data["error"] = "E3608"
+        return data
+
+    radius_scale = radius_multiplier * radius_adjustment_percent / 100.0
+
     if mask_background not in ["black", "white"]:
         data["error"] = "E3609"
         return data
@@ -134,7 +151,7 @@ def detect_circles(
                     r = int(round(c[2] / scale))
                 else:
                     x, y, r = int(c[0]), int(c[1]), int(c[2])
-                adjusted_r = max(1, int(r * radius_multiplier))
+                adjusted_r = max(1, int(round(r * radius_scale)))
                 results.append({
                     "center_x": x,
                     "center_y": y,
@@ -221,7 +238,12 @@ def detect_circles(
             gray = img
             vis = cached_cvtColor(data, img, cv2.COLOR_GRAY2BGR, "cvtColor_GRAY2BGR")
         elif len(img.shape) == 3 and img.shape[2] == 3:
-            gray = cached_cvtColor(data, img, cv2.COLOR_BGR2GRAY, "cvtColor_BGR2GRAY")
+            # Only detection (including radius refinement) uses this plane.
+            # Visualization and masking continue to use the original image.
+            if detection_channel == "GRAY":
+                gray = cached_cvtColor(data, img, cv2.COLOR_BGR2GRAY, "cvtColor_BGR2GRAY")
+            else:
+                gray = np.ascontiguousarray(img[:, :, {"B": 0, "G": 1, "R": 2}[detection_channel]])
             vis = img.copy()
         else:
             data["error"] = "E3607"
@@ -246,7 +268,10 @@ def detect_circles(
                     int(_refine_radius(gray, best_circle["center_x"], best_circle["center_y"], raw_radius))
                 )
             best_circle["raw_radius"] = raw_radius
-            best_circle["radius"] = max(1, int(raw_radius * radius_multiplier))
+            best_circle["radius"] = max(
+                1,
+                int(round(raw_radius * radius_scale)),
+            )
             circles_img = [best_circle]
 
         current_mask = None
@@ -302,6 +327,7 @@ def detect_circles(
     
     
     data["meta"]["detect_circles"] = {
+        "detection_channel": detection_channel,
         "dp": float(dp),
         "min_dist": float(min_dist),
         "detect_scale": float(scale),
@@ -312,6 +338,7 @@ def detect_circles(
         "accumulator_threshold": float(accumulator_threshold),
         "polarity": polarity,
         "radius_multiplier": float(radius_multiplier),
+        "radius_adjustment_percent": float(radius_adjustment_percent),
         "apply_mask": bool(apply_mask),
         "mask_background": str(mask_background),
         "invert_mask": bool(invert_mask)

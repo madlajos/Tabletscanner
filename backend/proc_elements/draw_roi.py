@@ -108,6 +108,18 @@ def _crop_to_roi(img, mask, roi):
     return _crop_to_mask_bbox(img, mask)
 
 
+def _apply_mask(img, mask, background_color):
+    """Keep masked pixels and fill the rest with the configured background."""
+    if background_color == 0:
+        return cv2.bitwise_and(img, img, mask=mask)
+
+    bg = np.full_like(img, background_color)
+    inv_mask = cv2.bitwise_not(mask)
+    fg = cv2.bitwise_and(img, img, mask=mask)
+    bg_part = cv2.bitwise_and(bg, bg, mask=inv_mask)
+    return cv2.add(fg, bg_part)
+
+
 def _resolve_outline_color_value(img, shape_outline_color):
     color_value = 255 if str(shape_outline_color).lower() in ("fehér", "feher", "white") else 0
     if img.ndim == 2:
@@ -236,7 +248,8 @@ def mask_roi(
                 masks.append(np.zeros((H, W), dtype=np.uint8))
                 continue
 
-        mask = _build_mask(current_roi, H, W)
+        geometry_mask = _build_mask(current_roi, H, W)
+        mask = geometry_mask
 
         if invert_mask:
             mask = cv2.bitwise_not(mask)
@@ -244,18 +257,15 @@ def mask_roi(
         if shape_only:
             output_images.append(_draw_roi_outline(img, current_roi, shape_outline_color, shape_outline_thickness))
         elif crop_mode:
-            output_images.append(_crop_to_roi(img, mask, current_roi))
+            crop_source = _apply_mask(img, mask, background_color) if apply_mask else img
+            output_images.append(_crop_to_roi(crop_source, geometry_mask, current_roi))
+
+            # Active masks must have the same dimensions as the cropped image so
+            # downstream mask-aware steps can consume the combined crop+mask result.
+            cropped_mask = _crop_to_roi(mask, geometry_mask, current_roi)
+            mask = np.where(cropped_mask > 127, 255, 0).astype(np.uint8)
         elif apply_mask:
-            # Apply mask: keep ROI, fill outside with background_color
-            if background_color == 0:
-                result = cv2.bitwise_and(img, img, mask=mask)
-            else:
-                bg = np.full_like(img, background_color)
-                inv_mask = cv2.bitwise_not(mask)
-                fg = cv2.bitwise_and(img, img, mask=mask)
-                bg_part = cv2.bitwise_and(bg, bg, mask=inv_mask)
-                result = cv2.add(fg, bg_part)
-            output_images.append(result)
+            output_images.append(_apply_mask(img, mask, background_color))
         else:
             output_images.append(img)
 

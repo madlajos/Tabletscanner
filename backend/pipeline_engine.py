@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PROC_ELEMENT_MESSAGES: dict[str, str] = {
+    # geometric image alignment
+    "E4101": "Nincs illeszthető bemeneti kép.",
+    "E4102": "Nincs kiválasztott vagy elérhető referencia-képág.",
+    "E4103": "Az objektum geometriai illesztése nem sikerült.",
+    # resize to another image branch
+    "E3911": "Nincs átméretezhető bemeneti kép.",
+    "E3912": "Nincs kiválasztott vagy elérhető referencia-képág.",
+    "E3913": "Érvénytelen interpolációs mód.",
+    "E3914": "A referencia méretére történő átméretezés nem sikerült.",
+    "E3915": "A nagyítás százalékának nullánál nagyobbnak kell lennie.",
     # load_image
     "E2001": "A betöltés után nem áll rendelkezésre egyetlen kép sem.",
     "E2002": "Érvénytelen vagy nem létező útvonal.",
@@ -43,6 +53,16 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2151": "Az egyik forráskép formátuma nem támogatott.",
     "E2152": "A két forráskép mérete nem egyezik.",
     "E2153": "Érvénytelen pszeudokép-csatorna lett kiválasztva.",
+    "E2154": "A pszeudokép lépés hármasával dolgozza fel a képeket; a képek számának hárommal oszthatónak kell lennie.",
+    # automatic RGB composite
+    "E2160": "Az automatikus RGB képhez három elérhető forráskép szükséges.",
+    "E2161": "Érvénytelen RGB forráskép-sorszám.",
+    "E2162": "Az egyik RGB forráskép formátuma nem támogatott.",
+    "E2163": "Az RGB forrásképek mérete nem egyezik.",
+    "E2164": "Érvénytelen skálakeresési tartomány.",
+    "E2170": "A fókuszegyesítéshez legalább két forráskép szükséges.",
+    "E2171": "A fókuszsorozat egyik képformátuma nem támogatott.",
+    "E2172": "A fókuszsorozat képeinek mérete vagy csatornaszáma nem egyezik.",
     # apply_threshold
     "E2201": "Nincsenek feldolgozandó képek.",
     "E2202": "A képek nem egycsatornásak, küszöbölés előtt csatorna kiválasztás szükséges.",
@@ -53,6 +73,9 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2304": "Érvénytelen hisztogram tartomány.",
     "E2305": "Hisztogram számítás sikertelen.",
     "E2306": "Váratlan hiba a hisztogram számítás során.",
+    "E2307": "Érvénytelen hisztogram-megjelenítési mód.",
+    "E2308": "A CSV-csoportok száma egyezzen a képek számával; minden képhez adjon meg egy nem üres csoportnevet.",
+    "E2309": "A hisztogramok osztásszáma nem egyezik, ezért nem vonhatók össze.",
     # apply_range_mask
     "E2401": "Hiányzó hisztogramok. Futtassa előbb a 'Hisztogram' lépést.",
     "E2402": "Üres vagy érvénytelen hisztogram adatok.",
@@ -66,6 +89,9 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     "E2505": "Nincsenek érvényes pixelek a maszkban.",
     "E2506": "Intenzitás statisztika számítás sikertelen.",
     "E2507": "Váratlan hiba az intenzitás statisztika számítás során.",
+    "E2508": "Érvénytelen intenzitásmegjelenítési mód.",
+    "E2509": "A CSV-csoportok száma egyezzen a képek számával; minden képhez adjon meg egy nem üres csoportnevet.",
+    "E2510": "Csak azonos csatornaszámú képek intenzitása vonható össze.",
     # add_sequence_values
     "E2631": "Nincsenek feldolgozandó képek.",
     "E2632": "Hiányzó változó név.",
@@ -231,12 +257,17 @@ PROC_ELEMENT_MESSAGES: dict[str, str] = {
     # characterize_particles
     "E3100": "Hiányzó szemcse adatok. Futtassa előbb a 'Szemcsedetektálás' lépést.",
     "E3108": "Érvénytelen oszlop lista (list vagy tuple szükséges).",
+    "E3109": "Érvénytelen szemcseméret-mérőszám.",
+    "E3110": "Érvénytelen szemcseméret-eloszlási mód.",
+    "E3111": "Érvénytelen szemcseméret-egység.",
+    "E3112": "Adja meg az ismert hossz pozitív pixelszámát és méretét µm-ben, vagy használjon érvényes korábbi pixel/mm kalibrációt.",
     # histogram_pca
     "E2405": "Legalább 2 minta szükséges a PCA-hoz.",
     "E2406": "Érvénytelen komponensszám (pozitív egész szám szükséges).",
     "E2407": "SVD számítás sikertelen.",
     "E2408": "Érvénytelen előfeldolgozási módszer.",
     # detect_circles
+    "E3611": "Érvénytelen keresési csatorna (GRAY, R, G vagy B szükséges).",
     "E3601": "Nincsenek feldolgozandó képek.",
     "E3602": "Érvénytelen polaritás (dark, bright vagy both szükséges).",
     "E3603": "A sugár értékeknek egész számnak kell lenniük.",
@@ -323,12 +354,14 @@ def _serialize_value(val: Any) -> Any:
     return val
 
 
-def extract_side_outputs(data: Optional[dict]) -> dict:
+def extract_side_outputs(data: Optional[dict], preview_image_index: int = -1) -> dict:
     """
     Extract JSON-serializable side outputs from the pipeline data dict.
 
     Skips large arrays (masks, images) and returns results, meta,
-    and scalar summaries.
+    and scalar summaries. When *preview_image_index* is provided, image-only
+    overlays are encoded only for that image; a preview response never needs
+    every full-resolution overlay in the batch.
     """
     if data is None:
         return {}
@@ -340,8 +373,42 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
     _skip_result_keys = {
         "range_masks", "region_masks", "cluster_map_raw",
         "cluster_map_components_raw", "cluster_map_remainder_raw",
+        "particle_table",
     }
     for key, val in results.items():
+        if key == "reference_resize_layers" and isinstance(val, dict):
+            import base64
+            import cv2 as layer_cv2
+            selected = max(0, preview_image_index)
+
+            def _encode_layer(rows):
+                if not isinstance(rows, list) or not rows:
+                    return None
+                image = rows[min(selected, len(rows) - 1)]
+                if image is None or not hasattr(image, "shape"):
+                    return None
+                array = np.asarray(image)
+                if array.ndim == 2:
+                    array = layer_cv2.cvtColor(array, layer_cv2.COLOR_GRAY2BGR)
+                ok, encoded = layer_cv2.imencode(".jpg", array, [layer_cv2.IMWRITE_JPEG_QUALITY, 90])
+                return base64.b64encode(encoded.tobytes()).decode("ascii") if ok else None
+
+            side["reference_resize_layers_base64"] = {
+                "image": _encode_layer(val.get("images")),
+                "reference": _encode_layer(val.get("references")),
+            }
+            continue
+        if key == "particle_size_distribution" and isinstance(val, dict) and val.get("mode") == "per_image":
+            val = dict(val)
+            rows = val.get("particles", [])
+            if preview_image_index >= 0:
+                rows = [row for row in rows if row.get("image_index") == preview_image_index]
+                groups = val.get("groups", [])
+                if len(groups) > 1:
+                    val["groups"] = [group for group in groups if group.get("image_index") == preview_image_index]
+            val["particles"] = rows
+        if key in ("manual_alignment_previews", "reference_resize_previews"):
+            continue
         if key in _skip_result_keys:
             side[f"{key}_count"] = len(val) if isinstance(val, list) else 0
             continue
@@ -410,7 +477,11 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
             import base64
             circle_overlay_b64 = []
             if isinstance(val, list):
-                for img in val:
+                overlay_images = val
+                if preview_image_index >= 0 and val:
+                    selected_index = min(preview_image_index, len(val) - 1)
+                    overlay_images = [val[selected_index]]
+                for img in overlay_images:
                     if img is not None and hasattr(img, 'shape'):
                         success, jpeg_buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
                         if success:
@@ -595,6 +666,32 @@ def extract_side_outputs(data: Optional[dict]) -> dict:
             "particle_characterization_overlay",
         }
         filtered_meta = {k: v for k, v in meta.items() if k not in _skip_meta_keys}
+        # Particle processing keeps detailed measurements and full contours for
+        # downstream pipeline steps. The browser overlay only needs a compact
+        # polygon and selection state, so do not serialize the analytical data
+        # (often several MB for noisy images) into every preview response.
+        particles = filtered_meta.get("particles")
+        if isinstance(particles, list):
+            if preview_image_index >= 0 and particles:
+                selected_index = 0 if len(particles) == 1 else min(preview_image_index, len(particles) - 1)
+                particle_rows = [particles[selected_index]]
+            else:
+                particle_rows = particles
+            filtered_meta["particles"] = [
+                [
+                    {
+                        "particle_id": particle.get("particle_id"),
+                        "polygon": particle.get("polygon", []),
+                        "passed_filters": bool(particle.get("passed_filters", False)),
+                        "excluded": bool(particle.get("excluded", False)),
+                    }
+                    for particle in row
+                    if isinstance(particle, dict)
+                ]
+                for row in particle_rows
+                if isinstance(row, list)
+            ]
+            filtered_meta.pop("particles_filtered", None)
         side["meta"] = _serialize_value(filtered_meta)
 
     # Image count
@@ -689,11 +786,17 @@ def _encode_reference_sequence_preview_from_data(data: Optional[dict], requested
     for idx, crop in enumerate(row):
         if crop is None or not hasattr(crop, "shape"):
             continue
-        arr = crop
+        arr = np.asarray(crop)
         if arr.dtype != np.uint8:
             arr = np.clip(arr, 0, 255).astype(np.uint8)
         if arr.ndim == 2:
             arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+        elif arr.ndim == 3 and arr.shape[2] == 1:
+            arr = cv2.cvtColor(arr[..., 0], cv2.COLOR_GRAY2BGR)
+        elif arr.ndim == 3 and arr.shape[2] == 4:
+            arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+        elif arr.ndim != 3 or arr.shape[2] != 3:
+            continue
         h, w = arr.shape[:2]
         if h <= 0 or w <= 0:
             continue
@@ -956,12 +1059,16 @@ def execute_pipeline(
     ``load_image`` step so that subsequent processing is much faster.
     Intended for montage / thumbnail preview, not analytical accuracy.
     """
-    validation_errors = validate_pipeline(doc)
-    if validation_errors:
-        return PipelineResult(success=False, errors=validation_errors)
-
     if up_to_step < 0 or up_to_step >= len(doc.steps):
         up_to_step = len(doc.steps) - 1
+
+    # A preview must not depend on unfinished downstream configuration.
+    # Keep the original document for cross-branch execution dependencies.
+    from dataclasses import replace
+    validation_doc = replace(doc, steps=doc.steps[:up_to_step + 1])
+    validation_errors = validate_pipeline(validation_doc)
+    if validation_errors:
+        return PipelineResult(success=False, errors=validation_errors)
 
     data: Optional[dict] = None
     # A reference sequence is a collection-level view: loading only the
@@ -969,7 +1076,17 @@ def execute_pipeline(
     sequence_preview_all_images = (
         doc.steps[up_to_step].step_def_id == "reference_sequence"
         or any(
-            step.enabled and step.step_def_id == "pseudo_image"
+            step.enabled and step.step_def_id == 'calculate_intensity_stats'
+            and step.param_values.get('display_mode', 'per_image') in ('pooled', 'grouped')
+            for step in doc.steps[:up_to_step + 1]
+        )
+        or any(
+            step.enabled and step.step_def_id == 'calculate_histograms'
+            and step.param_values.get('display_mode', 'per_image') in ('pooled', 'grouped')
+            for step in doc.steps[:up_to_step + 1]
+        )
+        or any(
+            step.enabled and step.step_def_id in ("pseudo_image", "focus_stack")
             for step in doc.steps[:up_to_step + 1]
         )
     )
@@ -1045,6 +1162,33 @@ def execute_pipeline(
             if isinstance(merge_primary_data, dict):
                 data = merge_primary_data
             params["_branch_merge_preview"] = branch_merge_preview
+
+        # Geometric alignment reads the selected image branch as reference.
+        if step_inst.step_def_id in ("manual_image_alignment", "automatic_image_alignment", "resize_to_reference"):
+            reference_branch = str(params.get("reference_branch", "auto"))
+            current_start = _find_branch_start(doc.steps, i)
+            branch_starts = [
+                idx for idx, candidate in enumerate(doc.steps)
+                if candidate.step_def_id == "load_image" and candidate.enabled and idx != current_start
+            ]
+            if reference_branch == "auto":
+                branch_start = next((idx for idx in reversed(branch_starts) if idx < current_start), -1)
+            else:
+                branch_start = next((idx for idx in branch_starts if doc.steps[idx].instance_id == reference_branch), -1)
+            if branch_start >= 0:
+                branch_end = next(
+                    (idx for idx in range(branch_start + 1, len(doc.steps)) if doc.steps[idx].step_def_id == "load_image"),
+                    len(doc.steps),
+                )
+                reference_doc = _build_branch_document(doc, branch_start, branch_end)
+                reference_result = execute_pipeline(
+                    reference_doc, up_to_step=len(reference_doc.steps) - 1,
+                    single_image_index=single_image_index,
+                    omitted_indices=omitted_indices,
+                    thumbnail_max_dim=thumbnail_max_dim,
+                )
+                if reference_result.success and isinstance(reference_result.data, dict):
+                    params["_alignment_reference_images"] = reference_result.data.get("images") or []
 
         # Reference colour alignment may read the first image of any earlier
         # load-image branch directly; a branch_merge node is not required.

@@ -1,3 +1,4 @@
+import { ComparisonPanel, ComparisonPanelComponent } from './comparison-panel.component';
 import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -7,6 +8,11 @@ import { PipelineStateService } from '../../services/pipeline-state.service';
 import { RecipeService } from '../../services/recipe.service';
 import { ScatterChartComponent } from './scatter-chart.component';
 import { PCAChartComponent } from './pca-chart.component';
+import { ParticleSizeDistributionPreviewComponent } from './particle-size-distribution-preview.component';
+import { IntensityPreviewComponent } from './intensity-preview.component';
+import { IntensitySummary } from '../../models/intensity.models';
+import { HistogramPreviewComponent } from './histogram-preview.component';
+import { HistogramSummary } from '../../models/histogram.models';
 
 interface ScaleBarOverlayState {
   x: number;
@@ -31,7 +37,7 @@ interface ScaleBarOverlayState {
   barColor: string;
 }
 
-interface BranchMergePanel {
+interface BranchMergePanel extends ComparisonPanel {
   label: string;
   imageSrc: string;
   sourceName: string;
@@ -51,7 +57,7 @@ interface ReferenceColorPreviewState {
 @Component({
   selector: 'app-pipeline-preview',
   standalone: true,
-  imports: [CommonModule, FormsModule, DecimalPipe, ScatterChartComponent, PCAChartComponent],
+  imports: [ComparisonPanelComponent, CommonModule, FormsModule, DecimalPipe, ScatterChartComponent, PCAChartComponent, ParticleSizeDistributionPreviewComponent, IntensityPreviewComponent, HistogramPreviewComponent],
   template: `
     <div class="preview-wrapper" #previewContainer
          (wheel)="onWheel($event)"
@@ -274,9 +280,25 @@ interface ReferenceColorPreviewState {
           </div>
         </div>
       }
+      @if (splitPreviewError) {
+        <p role="status">{{ splitPreviewError }}</p>
+      }
       <div class="preview-scroll-area" #scrollArea
            [class.zoomed]="zoomLevel > 1">
-        @if (showingMontage && montagePreview && !showGraphViewer) {
+        @if (showBranchMergeView() && !showGraphViewer) {
+          <div class="branch-merge-compare-container">
+            @for (panel of branchMergePanels; track $index) {
+              <div class="branch-merge-panel" style="min-width: 0; max-width: 100%; overflow: hidden; box-sizing: border-box;">
+                <app-comparison-panel [panel]="panel" />
+                <div class="branch-merge-meta">
+                  <span>{{ panel.sourceName || 'Kijelolt kep' }}</span>
+                  <span>{{ panel.imageWidth }} x {{ panel.imageHeight }}</span>
+                  <span>{{ panel.imageCount }} kep</span>
+                </div>
+              </div>
+            }
+          </div>
+        } @else if (showingMontage && montagePreview && !showGraphViewer) {
           <!-- Montage gallery - replaces normal preview -->
           <div class="montage-gallery-container">
             <div class="montage-gallery-wrapper">
@@ -288,6 +310,23 @@ interface ReferenceColorPreviewState {
                    style="cursor: pointer;" />
             </div>
           </div>
+        } @else if (histogramSummary && !showGraphViewer) {
+          <app-histogram-preview [imageSrc]="imageSrc" [summary]="histogramSummary"
+            [imageIndex]="currentIndex" [imageName]="imageNames[currentIndex] || ''"
+            [chartEnabled]="histogramChartEnabled" [rangeMin]="histogramRangeMin" [rangeMax]="histogramRangeMax" />
+        } @else if (intensitySummary && !showGraphViewer) {
+          <app-intensity-preview [imageSrc]="imageSrc" [summary]="intensitySummary"
+            [imageIndex]="currentIndex" [imageName]="imageNames[currentIndex] || ''"
+            [chartEnabled]="intensityChartEnabled" [chartMetric]="intensityChartMetric" />
+        } @else if (showParticleCharacterization() && !showGraphViewer) {
+          <app-particle-size-distribution-preview
+            [imageSrc]="particleMontageSrc || imageSrc"
+            [distribution]="particleSizeDistribution"
+            [montage]="!!particleMontageSrc"
+            [imageWidth]="particleImgW"
+            [imageHeight]="particleImgH"
+            (toggleExcluded)="toggleCharacterizedParticle($event)"
+          />
         } @else if (referenceColorPreview && !showGraphViewer) {
           <div class="reference-color-preview">
             <div class="reference-color-panels">
@@ -325,28 +364,8 @@ interface ReferenceColorPreviewState {
               }
             </div>
           </div>
-        } @else if (showBranchMergeView() && !showGraphViewer) {
-          <div class="branch-merge-compare-container">
-            @for (panel of branchMergePanels; track $index) {
-              <div class="branch-merge-panel">
-                <div class="branch-merge-title">{{ panel.label }}</div>
-                <img
-                  [src]="panel.imageSrc"
-                  [alt]="panel.label"
-                  class="branch-merge-image"
-                  [class.grayscale]="panel.isGrayscale"
-                  draggable="false"
-                />
-                <div class="branch-merge-meta">
-                  <span>{{ panel.sourceName || 'Kijelolt kep' }}</span>
-                  <span>{{ panel.imageWidth }} x {{ panel.imageHeight }}</span>
-                  <span>{{ panel.imageCount }} kep</span>
-                </div>
-              </div>
-            }
-          </div>
         } @else if (showKmeansComparison() && kmeansSourceSrc && kmeansOverlaySrc && !showGraphViewer) {
-          <div class="gray-map-compare-container">
+          <div class="gray-map-compare-container kmeans-preview-layout">
             <div class="gray-map-compare-panel">
               <div class="gray-map-compare-title">Eredeti kép</div>
               <img [src]="kmeansSourceSrc" alt="Eredeti kép" class="gray-map-compare-image" draggable="false" />
@@ -354,76 +373,66 @@ interface ReferenceColorPreviewState {
             <div class="gray-map-compare-panel">
               <div class="gray-map-compare-title">Klaszter overlay</div>
               <img [src]="kmeansOverlaySrc" alt="Klaszterek az eredeti képen" class="gray-map-compare-image" draggable="false" />
-              <div class="cluster-legend" aria-label="Klaszter jelmagyarázat">
-                @for (item of kmeansLegend; track item.label) {
-                  <label class="cluster-legend-item cluster-legend-item--editable" title="Kattints a klaszter szinenek modositasahoz">
-                    <span class="cluster-legend-swatch" [style.background]="item.color"></span>
-                    <span>Label {{ item.label }}</span>
-                    <input
-                      type="color"
-                      class="cluster-legend-color-input"
-                      [value]="normalizeLegendColor(item.color)"
-                      (change)="onKmeansLegendColorChange(item.label, $event)"
-                    />
-                  </label>
-                }
-              </div>
             </div>
-          </div>
-        } @else if (showClusterReferenceMap() && kmeansOverlaySrc && clusterMapSrc && !showGraphViewer) {
-          <div class="gray-map-compare-container">
-            <div class="gray-map-compare-panel">
-              <div class="gray-map-compare-title">K-közép overlay</div>
-              <img [src]="kmeansOverlaySrc" alt="K-közép klaszterek az eredeti képen" class="gray-map-compare-image" draggable="false" />
+            <div class="kmeans-summary-footer">
               <div class="cluster-legend" aria-label="Klaszter jelmagyarázat">
                 @for (item of kmeansLegend; track item.label) {
-                  <label class="cluster-legend-item cluster-legend-item--editable" title="Kattints a klaszter szinenek modositasahoz">
+                  <label class="cluster-legend-item cluster-legend-item--editable" title="Kattints a klaszter színének módosításához">
                     <span class="cluster-legend-swatch" [style.background]="item.color"></span>
-                    <span>Label {{ item.label }}</span>
-                    <input
-                      type="color"
-                      class="cluster-legend-color-input"
-                      [value]="normalizeLegendColor(item.color)"
-                      (change)="onKmeansLegendColorChange(item.label, $event)"
-                    />
+                    <span>{{ getKmeansLabelName(item.label) }}</span>
+                    <input type="color" class="cluster-legend-color-input" [value]="normalizeLegendColor(item.color)" (change)="onKmeansLegendColorChange(item.label, $event)" />
                   </label>
                 }
               </div>
-              @if (clusterMapLabelValues.length > 0) {
+              @if (kmeansClusterStats.length > 0) {
                 <div class="cluster-value-chart">
-                  @for (component of clusterMapValueComponents; track component) {
-                    <div class="reference-sequence-histogram-title">{{ component }}</div>
-                    @for (item of clusterMapLabelValues; track item.label) {
-                      <div class="reference-sequence-bar-row">
-                        <span class="reference-sequence-bar-label">Label {{ item.label }}</span>
-                        <div class="reference-sequence-bar-track">
-                          <div
-                            class="reference-sequence-bar-fill"
-                            [style.width.%]="getClusterMapValueWidth(item, component)"
-                            [style.background]="getKmeansLegendColor(item.label)"
-                          ></div>
-                        </div>
-                        <span class="reference-sequence-bar-value">
-                          {{ getClusterMapValueLabel(item, component) }}
-                        </span>
-                      </div>
-                    }
+                  <div class="reference-sequence-histogram-title">{{ kmeansColorSpace }}</div>
+                  @for (item of kmeansClusterStats; track item.label) {
+                    <div class="reference-sequence-bar-row">
+                      <span class="reference-sequence-bar-label">{{ item.name }}</span>
+                      <div class="reference-sequence-bar-track"><div class="reference-sequence-bar-fill" [style.width.%]="getKmeansStatWidth(item)" [style.background]="getKmeansLegendColor(item.label)"></div></div>
+                      <span class="reference-sequence-bar-value">{{ formatKmeansCenter(item.center) }} · {{ item.pixelCount }} px</span>
+                    </div>
                   }
                 </div>
               }
             </div>
+          </div>
+        } @else if (showClusterReferenceMap() && kmeansOverlaySrc && clusterMapSrc && !showGraphViewer) {
+          <div class="gray-map-compare-container cluster-reference-layout">
+            <div class="gray-map-compare-panel">
+              <div class="gray-map-compare-title">K-közép overlay</div>
+              <div class="cluster-overlay-layered-image">
+                <img [src]="kmeansSourceSrc || clusterMapLabelSrc" alt="A klaszterezés kiindulási képe" class="gray-map-compare-image" draggable="false" />
+                <img [src]="kmeansOverlaySrc" alt="K-közép klaszterek az eredeti képen" class="gray-map-compare-image cluster-overlay-layer" [style.opacity]="clusterOverlayOpacity" draggable="false" />
+              </div>
+            </div>
             <div class="gray-map-compare-panel">
               <div class="gray-map-compare-title cluster-map-title">
-                <span>Referencia map – aktuális maradék</span>
-                <button
-                  type="button"
-                  class="cluster-map-accept"
-                  (click)="acceptClusterMap()"
-                  [disabled]="clusterMapRemainderIsFinal"
-                  title="Aktuális térkép eltárolása"
-                >Kész</button>
+                <span>{{ showClusterReferenceMontage ? 'Referenciatérképek montázsa' : 'Referencia map – aktuális maradék' }}</span>
+                <button type="button" class="cluster-map-accept" (click)="acceptClusterMap()" [disabled]="clusterMapRemainderIsFinal" title="Aktuális térkép eltárolása">Kész</button>
               </div>
-              <img [src]="clusterMapSrc" alt="Referencia map" class="gray-map-compare-image" draggable="false" />
+              @if (showClusterReferenceMontage && clusterReferenceMontageItems.length > 0) {
+                <div class="cluster-reference-montage" aria-label="Referenciatérképek montázsa">
+                  @for (item of clusterReferenceMontageItems; track $index) {
+                    <figure><img [src]="item.src" [alt]="item.name" draggable="false" /><figcaption>{{ item.name }}</figcaption></figure>
+                  }
+                </div>
+              } @else {
+                <div class="cluster-map-with-colorbar">
+                  <img [src]="clusterMapSrc" alt="Referencia map" class="gray-map-compare-image" draggable="false" />
+                  <div class="cluster-map-colorbar" aria-label="JET színskála: 0-tól 100 százalékig">
+                    <div class="cluster-map-colorbar-gradient"></div>
+                    <div class="cluster-map-colorbar-ticks">
+                      <span>100%</span>
+                      <span>75%</span>
+                      <span>50%</span>
+                      <span>25%</span>
+                      <span>0%</span>
+                    </div>
+                  </div>
+                </div>
+              }
             </div>
           </div>
         } @else if (showGrayMapComparison() && grayMapBaseSrc && grayMapOverlaySrc && !showGraphViewer) {
@@ -551,13 +560,18 @@ interface ReferenceColorPreviewState {
         } @else if (imageSrc && !showGraphViewer) {
           <div class="image-roi-container" #imageRoiContainer>
             <img #previewImg
-              [src]="imageSrc"
+              [src]="referenceResizeDisplaySrc || imageSrc"
               alt="Pipeline előnézet"
               class="preview-image"
               [class.grayscale]="isGrayscale"
+              [style.opacity]="referenceResizeBaseOpacity"
               draggable="false"
               (load)="onImageLoad()"
             />
+            @if (referenceResizeOverlaySrc) {
+              <img class="reference-resize-overlay" [src]="referenceResizeOverlaySrc"
+                   [style.opacity]="referenceResizeOverlayOpacity" alt="Referencia overlay" draggable="false" />
+            }
             @if (referenceCropActive) {
               <svg class="reference-crop-overlay"
                    [attr.viewBox]="'0 0 ' + referenceCropImgW + ' ' + referenceCropImgH"
@@ -1019,6 +1033,8 @@ interface ReferenceColorPreviewState {
       position: relative;
       width: 100%;
       height: 100%;
+      min-height: 0;
+      max-height: 100%;
       display: flex;
       flex-direction: column;
       background: #1a1a1a;
@@ -1094,6 +1110,53 @@ interface ReferenceColorPreviewState {
       overflow: hidden;
     }
 
+    .kmeans-preview-layout {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-rows: minmax(0, 1fr) auto;
+      align-items: stretch;
+    }
+
+    .cluster-reference-layout {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: stretch;
+    }
+
+    .kmeans-summary-footer {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: auto minmax(220px, 1fr);
+      align-items: start;
+      gap: 10px;
+      max-height: 140px;
+      padding: 5px 8px;
+      overflow: auto;
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+    }
+
+    .kmeans-summary-footer .cluster-legend { font-size: 10px; gap: 3px 7px; }
+    .kmeans-summary-footer .cluster-legend-swatch { width: 9px; height: 9px; }
+    .kmeans-summary-footer .cluster-legend-item--editable { padding: 2px 4px; }
+    .kmeans-summary-footer .cluster-value-chart { padding: 5px 7px; font-size: 10px; }
+    .kmeans-summary-footer .reference-sequence-bar-row { min-height: 15px; }
+
+    .cluster-reference-montage {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      grid-auto-rows: minmax(0, 1fr);
+      gap: 8px;
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .cluster-reference-montage figure { display: flex; flex-direction: column; min-width: 0; min-height: 0; margin: 0; }
+    .cluster-reference-montage img { width: 100%; flex: 1; min-height: 0; object-fit: contain; background: #111; border-radius: 5px; }
+    .cluster-reference-montage figcaption { padding-top: 3px; color: #bfc9d8; font-size: 10px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     .gray-map-compare-title {
       font-size: 12px;
       color: #c9d4e5;
@@ -1128,6 +1191,27 @@ interface ReferenceColorPreviewState {
       cursor: default;
     }
 
+    .cluster-overlay-layered-image {
+      position: relative;
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      background: #111;
+      border-radius: 6px;
+    }
+
+    .cluster-overlay-layered-image > .gray-map-compare-image {
+      width: 100%;
+      height: 100%;
+    }
+
+    .cluster-overlay-layer {
+      position: absolute;
+      inset: 0;
+      transition: opacity 80ms linear;
+    }
+
     .gray-map-compare-image {
       flex: 1;
       min-height: 0;
@@ -1135,6 +1219,56 @@ interface ReferenceColorPreviewState {
       object-fit: contain;
       background: #111;
       border-radius: 6px;
+    }
+
+    .cluster-map-with-colorbar {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 7px;
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .cluster-map-with-colorbar > .gray-map-compare-image {
+      flex: 1;
+      width: calc(100% - 49px);
+    }
+
+    .cluster-map-colorbar {
+      display: flex;
+      align-items: stretch;
+      gap: 4px;
+      width: 42px;
+      flex-shrink: 0;
+    }
+
+    .cluster-map-colorbar-gradient {
+      width: 14px;
+      min-height: 80px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 3px;
+      background: linear-gradient(
+        to bottom,
+        #800000 0%,
+        #ff0000 12.5%,
+        #ffff00 37.5%,
+        #00ff00 50%,
+        #00ffff 62.5%,
+        #0000ff 87.5%,
+        #000080 100%
+      );
+    }
+
+    .cluster-map-colorbar-ticks {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      color: #aeb9c8;
+      font-size: 10px;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
     }
 
     .cluster-legend {
@@ -1191,13 +1325,15 @@ interface ReferenceColorPreviewState {
     /* multi-panel dual_map layout — 2-3 rows (gray / RGB / sub), columns = original + N components */
     .branch-merge-compare-container {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 12px;
       width: 100%;
       height: 100%;
       padding: 12px;
       box-sizing: border-box;
       overflow: auto;
+      min-width: 0;
+      max-width: 100%;
     }
 
     .reference-color-preview { width: 100%; height: 100%; padding: 12px; box-sizing: border-box; overflow: auto; }
@@ -1225,7 +1361,13 @@ interface ReferenceColorPreviewState {
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 6px;
       overflow: hidden;
+      min-width: 0;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
     }
+
+    .branch-merge-panel app-comparison-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-width: 100%; width: 100%; height: 100%; }
 
     .branch-merge-title {
       color: #e5e7eb;
@@ -1386,6 +1528,7 @@ interface ReferenceColorPreviewState {
 
     .image-roi-container {
       position: relative;
+      flex: none;
       overflow: visible;
     }
 
@@ -1394,6 +1537,16 @@ interface ReferenceColorPreviewState {
       max-width: 100%;
       max-height: 100%;
       object-fit: contain;
+    }
+
+    .reference-resize-overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+      user-select: none;
     }
 
     .roi-overlay {
@@ -2215,11 +2368,27 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   @ViewChild('imageRoiContainer') imageRoiContainer!: ElementRef<HTMLDivElement>;
 
   imageSrc: string | null = null;
+  referenceResizeDisplaySrc: string | null = null;
+  referenceResizeOverlaySrc: string | null = null;
+  referenceResizeOverlayOpacity = 0;
+  referenceResizeBaseOpacity = 1;
   grayMapOverlaySrc: string | null = null;
   grayMapBaseSrc: string | null = null;
   branchMergePanels: BranchMergePanel[] = [];
   splitPreviewActive = false;
   referenceColorPreview: ReferenceColorPreviewState | null = null;
+  particleSizeDistribution: any = null;
+  intensitySummary: IntensitySummary | null = null;
+  intensityChartEnabled = false;
+  intensityChartMetric = 'mean';
+  histogramSummary: HistogramSummary | null = null;
+  histogramChartEnabled = true;
+  histogramRangeMin = 0;
+  histogramRangeMax = 256;
+  particleMontageSrc: string | null = null;
+  private particleMontageKey = '';
+  private particleMontageRequestId = 0;
+  private readonly particleMontageCache = new Map<string, string>();
   readonly referenceHistogramKinds: Array<{ key: 'source' | 'reference' | 'aligned'; label: string }> = [
     { key: 'source', label: 'Eredeti' },
     { key: 'reference', label: 'Referenciák' },
@@ -2230,9 +2399,14 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   clusterMapLabelSrc: string | null = null;
   clusterMapSrc: string | null = null;
   kmeansLegend: Array<{ label: number; color: string }> = [];
+  kmeansClusterStats: Array<{ label: number; name: string; center: number; pixelCount: number }> = [];
+  kmeansColorSpace = 'GRAY';
   clusterMapLabelValues: Array<{ label: number; pixelCount: number; values: Record<string, number> }> = [];
   clusterMapValueComponents: string[] = [];
   clusterMapRemainderIsFinal = false;
+  clusterOverlayOpacity = 1;
+  showClusterReferenceMontage = false;
+  clusterReferenceMontageItems: Array<{ name: string; src: string }> = [];
   dualMapState: {
     grayBase: string | null;
     grayOverlays: string[];
@@ -2249,6 +2423,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   // Zoom/pan for gallery image
   zoomLevel = 1.0;
+  private readonly splitMediaZoom = new WeakMap<Element, number>();
   private baseFitScale = 1;
   private isDragging = false;
   private dragStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
@@ -2264,7 +2439,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private graphData: any = null;
   private graphOmittedIndices: Set<number> = new Set();
   private graphViewerStepIndex = -1;
-  private imageNames: string[] = [];
+  imageNames: string[] = [];
 
   // Graph context menu
   showGraphContextMenu = false;
@@ -2642,6 +2817,19 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     return this.kmeansLegend.find((item) => item.label === label)?.color || '#94a3b8';
   }
 
+  getKmeansLabelName(label: number): string {
+    return this.kmeansClusterStats.find((item) => item.label === label)?.name || `Label ${label}`;
+  }
+
+  getKmeansStatWidth(item: { center: number }): number {
+    const maximum = Math.max(1, ...this.kmeansClusterStats.map((entry) => Math.abs(entry.center)));
+    return Math.max(2, Math.min(100, Math.abs(item.center) / maximum * 100));
+  }
+
+  formatKmeansCenter(value: number): string {
+    return Number.isFinite(value) ? value.toFixed(2) : '-';
+  }
+
   normalizeLegendColor(color: string): string {
     if (/^#[0-9a-f]{6}$/i.test(color)) return color;
     const channels = color.match(/\d+/g)?.slice(0, 3).map(Number);
@@ -2753,9 +2941,28 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
   private splitPreviewRequestId = 0;
   private splitPreviewNodeIndex = -1;
+  splitPreviewError = '';
+  private splitPreviewSubscription?: Subscription;
+  private splitPreviewIndices: readonly [number, number] | null = null;
+  private splitPreviewPipeline: unknown;
+  private splitPreviewInstanceIds: string[] = [];
+  private splitPreviewImageIndex = -1;
 
-  private loadNodeSplitPreview(stepIndex: number): void {
-    if (!this.currentPipeline || stepIndex <= 0 || stepIndex >= this.currentPipeline.steps.length) {
+  private clearNodeSplitPreview(): void {
+    ++this.splitPreviewRequestId;
+    this.splitPreviewSubscription?.unsubscribe();
+    this.loading = false;
+    this.splitPreviewError = '';
+    this.splitPreviewIndices = null;
+    this.splitPreviewActive = false;
+    this.splitPreviewNodeIndex = -1;
+    this.branchMergePanels = [];
+  }
+
+  private loadNodeSplitPreview(indices: readonly [number, number]): void {
+    this.clearNodeSplitPreview();
+    const stepIndex = indices[1];
+    if (!this.currentPipeline || indices.some((index) => index < 0 || index >= this.currentPipeline!.steps.length)) {
       this.branchMergePanels = [];
       this.splitPreviewActive = false;
       return;
@@ -2763,7 +2970,11 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
 
     const requestId = ++this.splitPreviewRequestId;
     this.splitPreviewNodeIndex = stepIndex;
-    const indices = [stepIndex - 1, stepIndex];
+    this.splitPreviewIndices = indices;
+    const pipeline = this.currentPipeline;
+    this.splitPreviewPipeline = pipeline;
+    this.splitPreviewInstanceIds = indices.map((index) => pipeline.steps[index].instance_id);
+    this.splitPreviewImageIndex = this.currentIndex;
     const imageIndex = this.currentIndex;
     const requests = indices.map((index) => {
       const context = this.pipelineState.getPreviewContext(index);
@@ -2771,30 +2982,27 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         context.pipeline,
         context.stepIndex,
         imageIndex,
-        true,
+        false,
       );
     });
 
     this.loading = true;
-    forkJoin(requests).subscribe({
+    this.splitPreviewSubscription = forkJoin(requests).subscribe({
       next: (responses) => {
         if (requestId !== this.splitPreviewRequestId) return;
         this.loading = false;
 
-        const selectedName =
-          this.pipelineState.getStepDefinition(this.currentPipeline!.steps[stepIndex].step_def_id)?.name ||
-          this.currentPipeline!.steps[stepIndex].step_def_id;
-        const labels = [`Bemenet – ${selectedName}`, `Kimenet – ${selectedName}`];
-
         this.branchMergePanels = responses
           .map((response, index): BranchMergePanel | null => {
             if (!response.success || !response.image_base64) return null;
-            const sourceStep = this.currentPipeline!.steps[indices[index]];
+            const sourceStep = pipeline.steps[indices[index]];
             const sourceName =
               this.pipelineState.getStepDefinition(sourceStep.step_def_id)?.name ||
               sourceStep.step_def_id;
             return {
-              label: labels[index],
+              label: `${indices[index] + 1}. ${sourceName}`,
+              context: this.pipelineState.getPreviewContext(indices[index]),
+              imageIndex,
               imageSrc: `data:image/jpeg;base64,${response.image_base64}`,
               sourceName,
               imageWidth: Number(response.image_width || 0),
@@ -2806,13 +3014,19 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           .filter((panel): panel is BranchMergePanel => panel !== null);
 
         this.splitPreviewActive = this.branchMergePanels.length === 2;
-        if (this.splitPreviewActive) this.resetZoom();
+        if (this.splitPreviewActive) {
+          this.showGraphViewer = false;
+          this.resetZoom();
+        } else {
+          this.splitPreviewError = 'A kijel?lt node-ok egyike nem adott megjelen?thet? k?pet.';
+        }
       },
       error: () => {
         if (requestId !== this.splitPreviewRequestId) return;
         this.loading = false;
         this.branchMergePanels = [];
         this.splitPreviewActive = false;
+        this.splitPreviewError = 'Az ?sszehasonl?t? el?n?zet bet?lt?se sikertelen.';
       },
     });
   }
@@ -2861,7 +3075,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       this.pipelineState.imageCount$.subscribe((c) => (this.imageCount = c)),
       this.pipelineState.previewImageIndex$.subscribe((i) => (this.currentIndex = i)),
       this.pipelineState.splitPreviewRequest$.subscribe((stepIndex) => {
-        this.loadNodeSplitPreview(stepIndex);
+        if (stepIndex) this.loadNodeSplitPreview(stepIndex);
+        else this.clearNodeSplitPreview();
       }),
       combineLatest([
         this.pipelineState.sideOutputs$,
@@ -2870,12 +3085,50 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pipelineState.previewImageIndex$
       ]).subscribe(([so, stepIdx, pipeline, imgIdx]) => {
         this.imageNames = so?.['loaded_paths'] ?? [];
-        if (this.splitPreviewActive && stepIdx !== this.splitPreviewNodeIndex) {
-          this.splitPreviewActive = false;
-          this.splitPreviewNodeIndex = -1;
+        if (this.splitPreviewIndices && stepIdx !== this.splitPreviewNodeIndex) {
+          this.clearNodeSplitPreview();
         }
         this.selectedStepIndex = stepIdx;
         this.currentPipeline = pipeline;
+        const resizeParams = stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'resize_to_reference'
+          ? pipeline.steps[stepIdx].param_values : null;
+        const resizeLayers = resizeParams ? so?.['reference_resize_layers_base64'] : null;
+        const movingLayer = resizeLayers?.['image'] ? `data:image/jpeg;base64,${resizeLayers['image']}` : null;
+        const referenceLayer = resizeLayers?.['reference'] ? `data:image/jpeg;base64,${resizeLayers['reference']}` : null;
+        const showMoving = resizeParams?.['show_image'] !== false;
+        const showReference = resizeParams?.['show_reference'] !== false;
+        this.referenceResizeDisplaySrc = resizeParams
+          ? (showMoving ? movingLayer : showReference ? referenceLayer : movingLayer)
+          : null;
+        this.referenceResizeBaseOpacity = resizeParams && !showMoving && !showReference ? 0 : 1;
+        this.referenceResizeOverlaySrc = resizeParams && showMoving && showReference ? referenceLayer : null;
+        this.referenceResizeOverlayOpacity = Math.max(0, Math.min(1, Number(resizeParams?.['reference_opacity'] ?? 0.5)));
+        if (this.splitPreviewIndices && (pipeline !== this.splitPreviewPipeline || imgIdx !== this.splitPreviewImageIndex)) {
+          if (this.splitPreviewIndices.some((index, slot) =>
+            pipeline.steps[index]?.instance_id !== this.splitPreviewInstanceIds[slot])) {
+            this.clearNodeSplitPreview();
+          } else {
+            this.loadNodeSplitPreview(this.splitPreviewIndices);
+          }
+        }
+        this.intensitySummary = stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'calculate_intensity_stats'
+          ? so?.['intensity_summary'] ?? null : null;
+        const intensityParams = stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'calculate_intensity_stats'
+          ? pipeline.steps[stepIdx].param_values : null;
+        this.intensityChartEnabled = intensityParams?.['chart_enabled'] === true;
+        this.intensityChartMetric = String(intensityParams?.['chart_metric'] ?? 'mean');
+        this.histogramSummary = stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'calculate_histograms'
+          ? so?.['histogram_summary'] ?? null : null;
+        const histogramParams = stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'calculate_histograms'
+          ? pipeline.steps[stepIdx].param_values : null;
+        this.histogramChartEnabled = histogramParams?.['chart_enabled'] !== false;
+        this.histogramRangeMin = Number(histogramParams?.['range_min'] ?? 0);
+        this.histogramRangeMax = Number(histogramParams?.['range_max'] ?? 256);
+        this.particleSizeDistribution = stepIdx >= 0
+          && pipeline.steps[stepIdx]?.step_def_id === 'characterize_particles'
+          ? so?.['particle_size_distribution'] ?? null
+          : null;
+        this.updateParticleMontage(pipeline, stepIdx);
         if (stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'reference_color_align') {
           const sourceRows = so?.['reference_color_align_source_images_base64'];
           const alignedRows = so?.['reference_color_align_aligned_images_base64'];
@@ -2898,7 +3151,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         } else {
           this.referenceColorPreview = null;
         }
-        if (!this.splitPreviewActive) {
+        if (!this.splitPreviewActive && !this.splitPreviewIndices) {
           this.branchMergePanels = stepIdx >= 0 && pipeline.steps[stepIdx]?.step_def_id === 'branch_merge'
             ? this.buildBranchMergePanels(so)
             : [];
@@ -2922,6 +3175,27 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           const rgb = Array.isArray(item?.color) ? item.color : [255, 255, 255];
           return { label: Number(item?.label), color: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` };
         }) : this.getFallbackKmeansLegend(stepIdx, pipeline);
+        const centerRows = so?.['kmeans_centers'];
+        const countRows = so?.['kmeans_counts'];
+        const referenceInfoRows = so?.['kmeans_reference_info'];
+        const centers = Array.isArray(centerRows) && centerRows.length ? centerRows[safeIndex(centerRows)] : [];
+        const counts = Array.isArray(countRows) && countRows.length ? countRows[safeIndex(countRows)] : [];
+        const referenceInfo = Array.isArray(referenceInfoRows) && referenceInfoRows.length
+          ? referenceInfoRows[safeIndex(referenceInfoRows)] : null;
+        const sequenceRows = referenceInfo?.reference_sequence;
+        const sequenceItems = Array.isArray(sequenceRows) && sequenceRows.length && Array.isArray(sequenceRows[0]?.items)
+          ? sequenceRows[0].items : [];
+        this.kmeansClusterStats = Array.isArray(centers) ? centers.map((center: unknown, index: number) => ({
+          label: index + 1,
+          name: String(sequenceItems[index]?.label || `Label ${index + 1}`),
+          center: Number(Array.isArray(center) ? center[0] : center),
+          pixelCount: Number(Array.isArray(counts) ? counts[index] ?? 0 : 0),
+        })) : [];
+        this.kmeansColorSpace = String(
+          pipeline.steps[stepIdx]?.step_def_id === 'kmeans_cluster'
+            ? pipeline.steps[stepIdx]?.param_values?.['color_space'] ?? 'GRAY'
+            : 'GRAY',
+        );
         const labelValueRows = so?.['cluster_map_label_values'];
         const labelValues = Array.isArray(labelValueRows) && labelValueRows.length
           ? labelValueRows[safeIndex(labelValueRows)]
@@ -2936,6 +3210,31 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         ));
         this.clusterMapRemainderIsFinal =
           !!pipeline.steps[stepIdx]?.param_values?.['remainder_as_last'];
+        const clusterMapParams = pipeline.steps[stepIdx]?.step_def_id === 'cluster_reference_map'
+          ? pipeline.steps[stepIdx].param_values : null;
+        this.clusterOverlayOpacity = Math.max(0, Math.min(1, Number(clusterMapParams?.['overlay_opacity'] ?? 1)));
+        this.showClusterReferenceMontage = clusterMapParams?.['show_reference_montage'] === true;
+        const componentRows = so?.['cluster_map_component_images_base64'];
+        const componentImages = Array.isArray(componentRows) && componentRows.length
+          ? componentRows[safeIndex(componentRows)] : [];
+        let acceptedComponents: any[] = [];
+        try {
+          const parsed = JSON.parse(String(clusterMapParams?.['accepted_components'] ?? '[]'));
+          acceptedComponents = Array.isArray(parsed) ? parsed : [];
+        } catch {
+          acceptedComponents = [];
+        }
+        const montageNames = acceptedComponents.map((component, index) =>
+          String(component?.name || `Komponens ${index + 1}`));
+        if (clusterMapParams?.['remainder_as_last']) {
+          montageNames.push(String(clusterMapParams?.['remainder_name'] || 'Maradék'));
+        }
+        this.clusterReferenceMontageItems = Array.isArray(componentImages)
+          ? componentImages.map((encoded: unknown, index: number) => ({
+              name: montageNames[index] || `Referenciatérkép ${index + 1}`,
+              src: typeof encoded === 'string' && encoded ? `data:image/png;base64,${encoded}` : '',
+            })).filter((item: { name: string; src: string }) => !!item.src)
+          : [];
         // Invalidate montage cache when pipeline or step changes
         const newCacheKey = `${stepIdx}:${JSON.stringify(pipeline)}`;
         if (newCacheKey !== this.montageCacheKey) {
@@ -3044,14 +3343,17 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pipelineState.previewImageIndex$,
         this.pipelineState.imageDims$,
       ]).subscribe(([pipeline, idx, sideOutputs, imgIdx, dims]) => {
+        this.particleImgW = dims.w || 100;
+        this.particleImgH = dims.h || 100;
         if (idx >= 0 && idx < pipeline.steps.length &&
             pipeline.steps[idx].step_def_id === 'detect_particles') {
           this.particleStepIndex = idx;
           this.particleImgW = dims.w || 100;
           this.particleImgH = dims.h || 100;
           const particles = sideOutputs?.['meta']?.['particles'];
-          if (Array.isArray(particles) && particles[imgIdx]) {
-            this.particlesForOverlay = particles[imgIdx];
+          const particleIndex = Array.isArray(particles) && particles.length === 1 ? 0 : imgIdx;
+          if (Array.isArray(particles) && particles[particleIndex]) {
+            this.particlesForOverlay = particles[particleIndex];
           } else {
             this.particlesForOverlay = [];
           }
@@ -3087,9 +3389,9 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
           } else {
             this.circlesForOverlay = [];
           }
-          // Only show overlay if apply_mask is not enabled
-          const applyMask = pipeline.steps[idx].param_values?.['apply_mask'] ?? false;
-          this.circleOverlayActive = this.circlesForOverlay.length > 0 && !applyMask;
+          // Keep the detected-circle outline visible while previewing the circle
+          // step, including when its image output is used as a mask downstream.
+          this.circleOverlayActive = this.circlesForOverlay.length > 0;
         } else {
           this.circleOverlayActive = false;
           this.circlesForOverlay = [];
@@ -3196,7 +3498,63 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     );
   }
 
+  showParticleCharacterization(): boolean {
+    return !!this.particleSizeDistribution
+      && this.selectedStepIndex >= 0
+      && this.currentPipeline?.steps[this.selectedStepIndex]?.step_def_id === 'characterize_particles';
+  }
+
+  private updateParticleMontage(pipeline: any, stepIndex: number): void {
+    const step = stepIndex >= 0 ? pipeline?.steps?.[stepIndex] : null;
+    const mode = step?.step_def_id === 'characterize_particles'
+      ? step.param_values?.['distribution_mode'] ?? 'pooled'
+      : null;
+    if (mode !== 'pooled') {
+      this.particleMontageSrc = null;
+      this.particleMontageKey = '';
+      this.particleMontageRequestId++;
+      return;
+    }
+
+    let detectStepIndex = -1;
+    for (let index = stepIndex - 1; index >= 0; index--) {
+      if (pipeline.steps[index]?.step_def_id === 'detect_particles' && pipeline.steps[index]?.enabled !== false) {
+        detectStepIndex = index;
+        break;
+      }
+    }
+    if (detectStepIndex < 0) return;
+
+    const key = `${detectStepIndex}:${JSON.stringify(pipeline)}`;
+    if (key === this.particleMontageKey) return;
+    this.particleMontageKey = key;
+    const cached = this.particleMontageCache.get(key);
+    if (cached) {
+      this.particleMontageSrc = cached;
+      return;
+    }
+
+    this.particleMontageSrc = null;
+    const requestId = ++this.particleMontageRequestId;
+    const subscription = this.recipeService.getStepImagesMontage(pipeline, detectStepIndex).subscribe({
+      next: (response) => {
+        if (requestId !== this.particleMontageRequestId || key !== this.particleMontageKey) return;
+        if (response?.montage_base64) {
+          const src = `data:image/jpeg;base64,${response.montage_base64}`;
+          this.particleMontageCache.set(key, src);
+          this.particleMontageSrc = src;
+          this.cdr.markForCheck();
+        }
+      },
+      error: () => {
+        if (requestId === this.particleMontageRequestId) this.particleMontageSrc = null;
+      },
+    });
+    this.subs.push(subscription);
+  }
+
   ngOnDestroy(): void {
+    this.clearNodeSplitPreview();
     this.subs.forEach((s) => s.unsubscribe());
     if (this.boundOnKeyDown) {
       window.removeEventListener('keydown', this.boundOnKeyDown);
@@ -3214,6 +3572,19 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     event.preventDefault();
 
     const factor = event.deltaY > 0 ? 0.9 : 1.1;
+
+    // Split previews can contain several independent images or SVG charts.
+    // Zoom the media below the pointer instead of the (possibly hidden) main image.
+    const target = event.target as Element | null;
+    const splitMedia = target?.closest('img, svg, canvas') as HTMLElement | null;
+    if (this.splitPreviewActive && splitMedia && splitMedia !== this.previewImg?.nativeElement
+        && !splitMedia.classList.contains('montage-gallery-image')) {
+      event.stopPropagation();
+      const nextScale = Math.max(1, Math.min(5, (this.splitMediaZoom.get(splitMedia) ?? 1) * factor));
+      this.splitMediaZoom.set(splitMedia, nextScale);
+      splitMedia.style.setProperty('zoom', String(nextScale));
+      return;
+    }
 
     // Determine if we're in montage view or regular image view
     if (this.showingMontage && this.montagePreview) {
@@ -3385,6 +3756,13 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       img.style.width = `${fitW}px`;
       img.style.height = `${fitH}px`;
     }
+    // SVG overlays use this wrapper as their viewport, so it must follow the
+    // displayed image dimensions after resizing and zooming.
+    const imageContainer = this.imageRoiContainer?.nativeElement;
+    if (imageContainer) {
+      imageContainer.style.width = img.style.width;
+      imageContainer.style.height = img.style.height;
+    }
   }
 
   private applyMontageTransform(): void {
@@ -3435,6 +3813,20 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   }
 
   // --- Particle contour click ---
+
+  toggleCharacterizedParticle(particleId: string): void {
+    const pipeline = this.pipelineState.getPipeline();
+    for (let index = this.selectedStepIndex - 1; index >= 0; index--) {
+      const step = pipeline.steps[index];
+      if (step.step_def_id === 'load_image') break;
+      if (step.step_def_id !== 'detect_particles' || step.enabled === false) continue;
+      const excluded = new Set<string>(step.param_values?.['excluded_ids'] ?? []);
+      if (excluded.has(particleId)) excluded.delete(particleId);
+      else excluded.add(particleId);
+      this.pipelineState.updateParams(index, { ...step.param_values, excluded_ids: [...excluded] });
+      return;
+    }
+  }
 
   particlePolygonStr(particle: any): string {
     const pts: number[][] = particle.polygon ?? particle.contour;
@@ -4128,6 +4520,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
     if (img) {
       this.roiImgW = img.naturalWidth;
       this.roiImgH = img.naturalHeight;
+      this.circleImgW = img.naturalWidth;
+      this.circleImgH = img.naturalHeight;
       this.referenceCropImgW = img.naturalWidth;
       this.referenceCropImgH = img.naturalHeight;
       this.rulerImgW = img.naturalWidth;
@@ -4398,11 +4792,19 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
       } else if (this.roiDragMode === 'move-poly') {
         const lastX = (this.roiDragStart as any).lastX ?? s.mx;
         const lastY = (this.roiDragStart as any).lastY ?? s.my;
-        const ddx = x - lastX;
-        const ddy = y - lastY;
+        const requestedDx = x - lastX;
+        const requestedDy = y - lastY;
+        const minX = Math.min(...this.roiPolygon.map((pt) => pt.x));
+        const maxX = Math.max(...this.roiPolygon.map((pt) => pt.x));
+        const minY = Math.min(...this.roiPolygon.map((pt) => pt.y));
+        const maxY = Math.max(...this.roiPolygon.map((pt) => pt.y));
+        // Clamp one shared translation instead of clamping every vertex. This
+        // keeps the polygon rigid when one of its corners reaches an image edge.
+        const ddx = Math.max(-minX, Math.min(this.roiImgW - maxX, requestedDx));
+        const ddy = Math.max(-minY, Math.min(this.roiImgH - maxY, requestedDy));
         this.roiPolygon = this.roiPolygon.map((pt) => ({
-          x: Math.max(0, Math.min(this.roiImgW, pt.x + ddx)),
-          y: Math.max(0, Math.min(this.roiImgH, pt.y + ddy)),
+          x: pt.x + ddx,
+          y: pt.y + ddy,
         }));
         (this.roiDragStart as any).lastX = x;
         (this.roiDragStart as any).lastY = y;

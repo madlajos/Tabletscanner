@@ -4,6 +4,7 @@ import {
   OnDestroy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { IntensitySettingsComponent } from './intensity-settings.component';
 import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
 import { HttpClient } from '@angular/common/http';
@@ -43,7 +44,7 @@ interface NodeHelpContent {
 @Component({
   selector: 'app-step-inspector',
   standalone: true,
-  imports: [CommonModule, FormsModule, MatIconModule, HistogramChartComponent, ScatterChartComponent, PCAChartComponent],
+  imports: [CommonModule, FormsModule, MatIconModule, HistogramChartComponent, ScatterChartComponent, PCAChartComponent, IntensitySettingsComponent],
   template: `
     <div class="inspector-wrapper">
       @if (!definition) {
@@ -161,6 +162,20 @@ interface NodeHelpContent {
                     (change)="onParamChange('output_mode', $any($event.target).checked ? 'crop' : 'mask')"
                   />
                   <span class="toggle-label">{{ getParamValue('output_mode') === 'crop' ? 'Be' : 'Ki' }}</span>
+                </label>
+              </div>
+            </div>
+            <div class="param-row roi-crop-row">
+              <label class="param-label" [attr.for]="'param-apply_mask'">Alkalmaz maszkként</label>
+              <div class="param-control">
+                <label class="toggle-wrap">
+                  <input
+                    type="checkbox"
+                    id="param-apply_mask"
+                    [checked]="getParamValue('apply_mask') ?? true"
+                    (change)="onParamChange('apply_mask', $any($event.target).checked)"
+                  />
+                  <span class="toggle-label">{{ (getParamValue('apply_mask') ?? true) ? 'Be' : 'Ki' }}</span>
                 </label>
               </div>
             </div>
@@ -335,8 +350,32 @@ interface NodeHelpContent {
               }
             </div>
           }
+          @if (step?.step_def_id === 'calculate_intensity_stats') {
+            <app-intensity-settings
+              [instanceId]="step?.instance_id || ''"
+              [mode]="getParamValue('display_mode') || 'per_image'"
+              [labelsJson]="getParamValue('group_labels') || '[]'"
+              [chartEnabled]="getParamValue('chart_enabled') === true"
+              [chartMetric]="getParamValue('chart_metric') || 'mean'"
+              [percentiles]="getParamValue('percentiles') || '5,25,50,75,95'"
+              (modeChange)="onParamChange('display_mode', $event)"
+              (chartEnabledChange)="onParamChange('chart_enabled', $event)"
+              (chartMetricChange)="onParamChange('chart_metric', $event)"
+              (labelsChange)="setIntensityGroups($event)" />
+          }
+          @if (step?.step_def_id === 'calculate_histograms') {
+            <app-intensity-settings
+              kind="histogram"
+              [instanceId]="step?.instance_id || ''"
+              [mode]="getParamValue('display_mode') || 'per_image'"
+              [labelsJson]="getParamValue('group_labels') || '[]'"
+              [chartEnabled]="getParamValue('chart_enabled') !== false"
+              (modeChange)="onParamChange('display_mode', $event)"
+              (chartEnabledChange)="onParamChange('chart_enabled', $event)"
+              (labelsChange)="setHistogramGroups($event)" />
+          }
           @for (param of getVisibleParams(); track param.name) {
-                @if (param.name !== 'file_order' && param.name !== 'group_colors' && param.name !== 'output_mode' && param.name !== 'shape_only' && param.name !== 'shape_outline_color' && param.name !== 'shape_outline_thickness' && !shouldHideParam(param)) {
+                @if (param.name !== 'file_order' && param.name !== 'group_colors' && param.name !== 'output_mode' && (param.name !== 'apply_mask' || step?.step_def_id === 'detect_circles') && param.name !== 'shape_only' && param.name !== 'shape_outline_color' && param.name !== 'shape_outline_thickness' && !shouldHideParam(param)) {
             <div class="param-row">
               <label class="param-label" [attr.for]="'param-' + param.name">
                 {{ getDisplayParamLabel(param) }}
@@ -377,7 +416,7 @@ interface NodeHelpContent {
                           class="range-number-input"
                           [min]="minMax.min"
                           [max]="minMax.max"
-                          [value]="minValue ?? minMax.min"
+                          [ngModel]="minValue ?? minMax.min"
                           (ngModelChange)="onParamChange(minParamName, +$event)"
                         />
                         <span class="range-separator">–</span>
@@ -386,7 +425,7 @@ interface NodeHelpContent {
                           class="range-number-input"
                           [min]="minMax.min"
                           [max]="minMax.max"
-                          [value]="maxValue ?? minMax.max"
+                          [ngModel]="maxValue ?? minMax.max"
                           (ngModelChange)="onParamChange(param.name, +$event)"
                         />
                       </div>
@@ -541,6 +580,9 @@ interface NodeHelpContent {
                         @for (label of getSelectedClusterMapLabelOptions(); track label) {
                           <option [value]="label">Label {{ label }}</option>
                         }
+                        @if (getSelectedClusterMapLabelOptions().length === 2) {
+                          <option [value]="getCombinedClusterMapReferenceValue()">A két klaszter közös mediánja</option>
+                        }
                       </select>
                     </div>
                   } @else if (isFitCurveYAxisParam(param.name)) {
@@ -591,6 +633,16 @@ interface NodeHelpContent {
                       <button class="browse-btn" (click)="openCalibrationBrowser()" title="Kalibráció kiválasztása">
                         <mat-icon>manage_search</mat-icon>
                       </button>
+                    </div>
+                  } @else if (step?.step_def_id === 'color_thresh' && param.name === 'background_color') {
+                    <div class="param-control">
+                      <input
+                        type="color"
+                        [id]="'param-' + param.name"
+                        [ngModel]="getParamValue(param.name) || '#000000'"
+                        (ngModelChange)="onParamChange(param.name, $event)"
+                        aria-label="A maszkon kívüli háttér színe"
+                      />
                     </div>
                   } @else {
                     <div class="param-control" [class.file-path-control]="isReferenceValuesParam(param.name)">
@@ -956,15 +1008,6 @@ interface NodeHelpContent {
                 </div>
               }
 
-              @if (step?.step_def_id === 'calculate_histograms' && getHistogramData()) {
-                <app-histogram-chart
-                  [data]="getHistogramData()!"
-                  [rangeMin]="getParamValue('range_min') ?? 0"
-                  [rangeMax]="getParamValue('range_max') ?? 256"
-                  [label]="'Kép ' + (previewImageIndex + 1) + ' hisztogramja'"
-                />
-              }
-
               @if (step?.step_def_id === 'histogram_equalization') {
                 @if (getHisteqInputData()) {
                   <app-histogram-chart
@@ -984,16 +1027,6 @@ interface NodeHelpContent {
                 }
               }
 
-              @if (step?.step_def_id === 'calculate_intensity_stats' && getIntensityStatsEntries().length > 0) {
-                <div class="stats-grid">
-                  @for (entry of getIntensityStatsEntries(); track entry.key) {
-                    <div class="stat-item">
-                      <span class="stat-label">{{ entry.label }}</span>
-                      <span class="stat-value">{{ entry.value }}</span>
-                    </div>
-                  }
-                </div>
-              }
 
               @if (step?.step_def_id === 'kmeans_cluster') {
                 @if (getKmeansReferenceInfo(); as refInfo) {
@@ -2822,7 +2855,13 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
       }
     }
 
-    this.pipelineState.updateParams(this.selectedIndex, updated);
+    const isLocalReferencePreviewControl = this.step.step_def_id === 'resize_to_reference'
+      && ['show_image', 'show_reference', 'reference_opacity'].includes(paramName);
+    if (isLocalReferencePreviewControl) {
+      this.pipelineState.updatePreviewParams(this.selectedIndex, updated);
+    } else {
+      this.pipelineState.updateParams(this.selectedIndex, updated);
+    }
 
     if (this.step.step_def_id === 'add_sequence_values') {
       this.refreshReferenceGroupsFromParams(updated);
@@ -2923,6 +2962,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     return selected.length ? selected : [1];
   }
 
+  getCombinedClusterMapReferenceValue(): string {
+    return this.getSelectedClusterMapLabelOptions().join(',');
+  }
+
   getClusterLabelColor(label: number): string {
     const colors = [
       '#ff0000', '#00ff00', '#0000ff', '#ffff00',
@@ -2942,8 +2985,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     }
     const selectedLabels = Array.from(selected).sort((a, b) => a - b);
     this.onParamChange('selected_labels', selectedLabels.join(','));
-    const referenceLabel = Number(this.getParamValue('reference_label') ?? 1);
-    if (!selected.has(referenceLabel)) {
+    const referenceLabels = String(this.getParamValue('reference_label') ?? '1')
+      .split(',').map(value => Number(value.trim())).filter(value => value > 0);
+    if (!referenceLabels.length || referenceLabels.some(referenceLabel => !selected.has(referenceLabel))) {
       this.onParamChange('reference_label', String(selectedLabels[0]));
     }
   }
@@ -3215,6 +3259,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   shouldHideParam(param: ParamSchema): boolean {
+    if (this.step?.step_def_id === 'calculate_histograms'
+        && ['display_mode', 'group_labels', 'chart_enabled'].includes(param.name)) return true;
+    if (this.step?.step_def_id === 'calculate_intensity_stats'
+        && ['display_mode', 'group_labels', 'chart_enabled', 'chart_metric'].includes(param.name)) return true;
     if (this.step?.step_def_id === 'save_images') {
       return param.name === 'output_folder' || param.name === 'name_prefix' || param.name === 'name_suffix';
     }
@@ -3243,15 +3291,29 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     }
 
     if (this.step?.step_def_id === 'color_thresh') {
-      if (param.name === 'space') return true;
       // Hide all _min parameters (they're combined in range slider at _max)
       if (param.name.endsWith('_min')) return true;
       const channelParams = this.getColorThreshVisibleParams();
+      if (param.name === 'white_background') return true;
+      if (param.name === 'background_color') {
+        return this.getParamValue('output_mode') !== 'applied';
+      }
       return !channelParams.has(param.name);
     }
 
     if (this.step?.step_def_id === 'detect_particles') {
       if (this.DETECT_FILTER_PARAMS.has(param.name)) return true;
+      return false;
+    }
+
+    if (this.step?.step_def_id === 'characterize_particles') {
+      if (['pixels_per_mm', 'calibration_pixels', 'calibration_length_um'].includes(param.name)
+          && this.getParamValue('output_unit') === 'px') return true;
+      if (param.name === 'pixels_per_mm') {
+        return !this.getParamValue('pixels_per_mm') || !!this.getParamValue('calibration_pixels') || !!this.getParamValue('calibration_length_um');
+      }
+      if ((param.name === 'bin_count' || param.name === 'smooth_distribution')
+          && this.getParamValue('distribution_mode') === 'per_image') return true;
       return false;
     }
 
@@ -3468,9 +3530,9 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (this.IMAGE_ONLY_STEPS.has(this.step.step_def_id)) return false;
     const id = this.step.step_def_id;
     if (id === 'load_image') return this.getLoadedImageCount() !== '-';
-    if (id === 'calculate_histograms') return !!this.getHistogramData();
+    if (id === 'calculate_histograms') return false; // Histogram lives in the split preview.
     if (id === 'histogram_equalization') return !!this.getHisteqInputData() || !!this.getHisteqOutputData();
-    if (id === 'calculate_intensity_stats') return this.getIntensityStatsEntries().length > 0;
+    if (id === 'calculate_intensity_stats') return false; // Statistics live in the split preview.
     if (id === 'fit_curve') return true;
     if (id === 'histogram_pca') return true;
     if (id === 'save_images') return true;
@@ -3514,6 +3576,14 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     if (!Array.isArray(histograms) || histograms.length === 0) return null;
     const idx = Math.min(this.previewImageIndex, histograms.length - 1);
     return Array.isArray(histograms[idx]) ? histograms[idx] : null;
+  }
+
+  setIntensityGroups(labels: string[]): void {
+    this.onParamChange('group_labels', JSON.stringify(labels));
+  }
+
+  setHistogramGroups(labels: string[]): void {
+    this.onParamChange('group_labels', JSON.stringify(labels));
   }
 
   getIntensityStatsEntries(): { key: string; label: string; value: string }[] {
@@ -4052,23 +4122,28 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   getFilteredOptions(param: ParamSchema): string[] {
     if (this.step?.step_def_id === 'pseudo_image' &&
         ['blue_source', 'green_source', 'red_source'].includes(param.name)) {
-      const imageCount = Math.max(1, this.loadedImageNames.length);
-      return Array.from({ length: imageCount }, (_, index) =>
+      return Array.from({ length: 3 }, (_, index) =>
         ['B', 'G', 'R', 'GRAY'].map(channel => `${index + 1}-${channel}`)
       ).flat();
     }
-    if (this.step?.step_def_id === 'reference_color_align' && param.name === 'reference_branch') {
+    if (['reference_color_align', 'manual_image_alignment', 'automatic_image_alignment', 'resize_to_reference'].includes(this.step?.step_def_id ?? '') && param.name === 'reference_branch') {
       const pipeline = this.pipelineState.getPipeline();
       const available: string[] = [];
       for (let i = 0; i < pipeline.steps.length; i++) {
         if (pipeline.steps[i].step_def_id !== 'load_image' || pipeline.steps[i].enabled === false) continue;
+        if (this.step?.step_def_id !== 'reference_color_align') {
+          available.push(pipeline.steps[i].instance_id);
+          continue;
+        }
         const end = pipeline.steps.findIndex((candidate, index) => index > i && candidate.step_def_id === 'load_image');
         const branchEnd = end < 0 ? pipeline.steps.length : end;
         if (pipeline.steps.slice(i + 1, branchEnd).some(candidate => candidate.step_def_id === 'reference_crop' && candidate.enabled !== false)) {
           available.push(pipeline.steps[i].instance_id);
         }
       }
-      return ['auto', ...available];
+      const currentBranchStart = [...pipeline.steps.slice(0, this.selectedIndex + 1)]
+        .reverse().find(candidate => candidate.step_def_id === 'load_image')?.instance_id;
+      return ['auto', ...available.filter(id => id !== currentBranchStart)];
     }
     if (this.step?.step_def_id === 'select_channel' && param.name === 'channel') {
       const space = this.getParamValue('space') ?? 'GRAY';
@@ -4081,14 +4156,43 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
   }
 
   getOptionDisplayLabel(param: ParamSchema, option: string): string {
+    if (this.step?.step_def_id === 'detect_circles' && param.name === 'detection_channel') {
+      const labels: Record<string, string> = { GRAY: 'Szürkeárnyalat', R: 'Piros (R)', G: 'Zöld (G)', B: 'Kék (B)' };
+      return labels[option] ?? option;
+    }
+    if (this.step?.step_def_id === 'characterize_particles' && param.name === 'size_metric') {
+      const map: Record<string, string> = {
+        equivalent_diameter_px: 'Egyenértékű átmérő',
+        area_px: 'Terület',
+        perimeter_px: 'Kerület',
+        bbox_w_px: 'Befoglaló téglalap szélessége',
+        bbox_h_px: 'Befoglaló téglalap magassága',
+      };
+      return map[option] ?? option;
+    }
+    if (this.step?.step_def_id === 'characterize_particles' && param.name === 'distribution_mode') {
+      const map: Record<string, string> = {
+        pooled: 'Összes kép együtt számítva',
+        overlay: 'Képenként számítva, együtt ábrázolva',
+        per_image: 'Aktuális kép külön',
+      };
+      return map[option] ?? option;
+    }
+    if (this.step?.step_def_id === 'characterize_particles' && param.name === 'output_unit') {
+      const map: Record<string, string> = { px: 'Pixel', mm: 'Milliméter', um: 'Mikrométer (µm)' };
+      return map[option] ?? option;
+    }
+    if (this.step?.step_def_id === 'detect_particles' && param.name === 'particle_polarity') {
+      return option === 'dark' ? 'Sötét' : option === 'bright' ? 'Világos' : option;
+    }
     if (this.step?.step_def_id === 'pseudo_image' &&
         ['blue_source', 'green_source', 'red_source'].includes(param.name)) {
       const [imageNumber, channel] = option.split('-', 2);
       const imageName = this.loadedImageNames[Number(imageNumber) - 1];
-      return imageName ? `${imageNumber}. kép (${imageName}) – ${channel}` : `${imageNumber}. kép – ${channel}`;
+      return imageName ? `${imageNumber}. kép (${imageName}) – ${channel}` : `${imageNumber}. kép a hármasban – ${channel}`;
     }
-    if (this.step?.step_def_id === 'reference_color_align' && param.name === 'reference_branch') {
-      if (option === 'auto') return 'Regi referencia cropok';
+    if (['reference_color_align', 'manual_image_alignment', 'automatic_image_alignment', 'resize_to_reference'].includes(this.step?.step_def_id ?? '') && param.name === 'reference_branch') {
+      if (option === 'auto') return this.step?.step_def_id === 'reference_color_align' ? 'Régi referencia cropok' : 'Előző képág';
       const pipeline = this.pipelineState.getPipeline();
       const branchStarts = pipeline.steps.filter(candidate => candidate.step_def_id === 'load_image');
       const index = branchStarts.findIndex(candidate => candidate.instance_id === option);
@@ -4153,6 +4257,24 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
         trunc: 'Levágás (küszöb felett korlátoz)',
         tozero: 'Nullázás (küszöb alatt 0)',
         tozero_inv: 'Fordított nullázás (küszöb felett 0)',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'apply_threshold' && param.name === 'channel') {
+      const map: Record<string, string> = {
+        GRAY: 'Szürkeárnyalat',
+        R: 'Vörös (R)',
+        G: 'Zöld (G)',
+        B: 'Kék (B)',
+      };
+      return map[option] ?? option;
+    }
+
+    if (this.step?.step_def_id === 'color_thresh' && param.name === 'output_mode') {
+      const map: Record<string, string> = {
+        mask: 'Csak maszk',
+        applied: 'Maszk alkalmazása a képre',
       };
       return map[option] ?? option;
     }
@@ -4716,6 +4838,8 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
 
   getColorThreshSpace(): string {
     if (this.step?.step_def_id !== 'color_thresh') return 'HSV';
+    const selectedSpace = this.step.param_values['space'];
+    if (selectedSpace && selectedSpace !== 'AUTO') return selectedSpace;
     
     // Get the pipeline to find the previous select_channel step
     const pipeline = this.pipelineState.getPipeline();
@@ -4726,7 +4850,7 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
     // Look backwards for select_channel step
     for (let i = currentIdx - 1; i >= 0; i--) {
       const step = pipeline.steps[i];
-      if (step.step_def_id === 'select_channel') {
+      if (step.enabled !== false && step.step_def_id === 'select_channel') {
         const space = step.param_values?.['space'] as string;
         return space || 'HSV';
       }
@@ -4776,7 +4900,10 @@ export class StepInspectorComponent implements OnInit, OnDestroy {
         paramSet.add(`${ch}_max`);
       }
     }
+    paramSet.add('space');
     paramSet.add('invert');
+    paramSet.add('output_mode');
+    paramSet.add('background_color');
     return paramSet;
   }
 

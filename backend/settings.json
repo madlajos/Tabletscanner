@@ -1,13 +1,13 @@
 {
     "settings_schema_version": 9,
     "camera_params": {
-        "ExposureTime": 30000.0,
+        "ExposureTime": 80000.0,
         "Gamma": 1.0,
         "Gain": 0.0
     },
     "other_settings": {
         "objective": "1.0x",
-        "save_location": "C:/Users/madlajos/Desktop/TabletScanner/POROK/F67832",
+        "save_location": "C:/Users/Lilla/Desktop/cf_demo",
         "background_subtraction": false,
         "save_settings": false,
         "camera_settings_file": "C:/Users/madlajos/Desktop/a2A2840-48umUV_41945138.pfs",
@@ -57,8 +57,8 @@
         "use_virtual_com_port": false,
         "max_height_offset_up_mm": 20.0,
         "max_height_offset_down_mm": -20.0,
-        "first_tablet_x_mm": 6.3,
-        "first_tablet_y_mm": 3.5,
+        "first_tablet_x_mm": 1.0,
+        "first_tablet_y_mm": 0.0,
         "first_tablet_z_mm": 15.8,
         "tablet_spacing_mm": 18.3
     },

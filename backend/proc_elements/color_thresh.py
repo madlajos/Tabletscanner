@@ -153,7 +153,22 @@ def _build_ui_schema(space, config, thresholds=None):
     }
 
 
-def color_threshold(data, space="HSV", thresholds=None, invert=False, white_background=False, debug=False):
+def _parse_background_color(value, white_background=False):
+    if value is None:
+        value = "#ffffff" if white_background else "#000000"
+    text = str(value).strip().lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        red, green, blue = (int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+    return blue, green, red
+
+
+def color_threshold(data, space="HSV", thresholds=None, invert=False,
+                    output_mode="mask", background_color=None,
+                    white_background=False, debug=False):
     """
     Szín alapú küszöbölés.
 
@@ -174,7 +189,9 @@ def color_threshold(data, space="HSV", thresholds=None, invert=False, white_back
             GRAY esetén pl:
                 {"GRAY": (80, 255)}
         invert: maszk invertálása
-        white_background: levágott területek fehérrel töltése
+        output_mode: "mask" vagy "applied"
+        background_color: a maszkon kívüli terület színe, #RRGGBB formában
+        white_background: régi receptek kompatibilitási beállítása
     """
 
     if data["error"] is not None:
@@ -187,6 +204,15 @@ def color_threshold(data, space="HSV", thresholds=None, invert=False, white_back
     config = _get_space_config()
 
     if space not in config:
+        data["error"] = "E2201"
+        return data
+
+    if output_mode not in {"mask", "applied"}:
+        data["error"] = "E2201"
+        return data
+
+    background_bgr = _parse_background_color(background_color, white_background)
+    if background_bgr is None:
         data["error"] = "E2201"
         return data
 
@@ -213,7 +239,14 @@ def color_threshold(data, space="HSV", thresholds=None, invert=False, white_back
         if invert:
             mask = cv2.bitwise_not(mask)
 
-        output_images.append(mask)
+        if output_mode == "mask":
+            output_images.append(mask)
+        else:
+            source_bgr = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            applied = np.empty_like(source_bgr)
+            applied[:] = background_bgr
+            applied[mask != 0] = source_bgr[mask != 0]
+            output_images.append(applied)
         
         # Calculate histograms for each channel (cached)
         ch_histograms = {}
@@ -237,6 +270,8 @@ def color_threshold(data, space="HSV", thresholds=None, invert=False, white_back
         "space": space,
         "thresholds": thresholds,
         "invert": invert,
+        "output_mode": output_mode,
+        "background_color": f"#{background_bgr[2]:02x}{background_bgr[1]:02x}{background_bgr[0]:02x}",
         "ui_schema": _build_ui_schema(space, config, thresholds)
     }
 

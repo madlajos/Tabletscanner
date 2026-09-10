@@ -69,10 +69,28 @@
       ]
     }
   },
+  "automatic_rgb_composite": {
+    "purpose": "Három külön szűrős felvételből természetes színes BGR-kép előállítása automatikus geometriai és tónuskorrekcióval.",
+    "usage": "Töltsd be a kék, zöld és piros felvételt egy közös képbetöltő node-dal, majd add meg a három kép sorszámát. A node a kék képet referenciának tekinti, a zöld és piros képet középpont körül skálailleszti, végül automatikus fehéregyensúlyt, fényerőt és opcionális gammát alkalmaz.",
+    "inputs": "Legalább három, azonos pixelméretű kép",
+    "parameters": [
+      {"name": "Forrásképek sorszáma", "description": "A kék, zöld és piros szűrős képek 1-től számozott helye a betöltött képsorban."},
+      {"name": "Skálatartomány", "description": "A zöld és piros kép automatikus nagyításának legkisebb és legnagyobb értéke."},
+      {"name": "Fehéregyensúly erőssége", "description": "A maszkolt hasznos jel részleges gray-world korrekciójának erőssége."},
+      {"name": "Célfényesség", "description": "A hasznos képtartomány automatikus fényességkorrekciójának célértéke."},
+      {"name": "Automatikus gamma", "description": "Bekapcsolva a maszkolt középtónus alapján gamma-korrekciót végez."}
+    ],
+    "outputs": "Egy háromcsatornás BGR-kép; mellékkimenetként jelmaszk és az illesztési/korrekciós mérőszámok.",
+    "placement": {
+      "before": "Több képet betöltő Kép betöltése node szükséges előtte.",
+      "after": "Bármely IMAGE bemenetet fogadó node elhelyezhető utána.",
+      "restrictions": ["A három kiválasztott forráskép pixelméretének azonosnak kell lennie."]
+    }
+  },
   "apply_threshold": {
-    "purpose": "A szürkeárnyalatos képek intenzitás szerinti küszöbölése, amellyel bináris maszk vagy korlátozott intenzitású kimenet állítható elő.",
-    "usage": "A Küszöbérték és Max. érték beállítása után választható a működési mód. A Mód alatti intenzitásdiagram segít a küszöbök beállításában: a függőleges jelölők a megadott értékeket mutatják.",
-    "inputs": "Szürkeárnyalatos képek",
+    "purpose": "Szürkeárnyalatos és RGB-képek intenzitás szerinti küszöbölése. Színes képnél egy választott csatorna dönti el, mely pixelekre hasson a művelet, de a kimenet a teljes képet megtartja.",
+    "usage": "Szürke bemenethez hagyd a csatornát Szürkeárnyalat értéken; színes képhez válassz R, G vagy B csatornát. Ezután állítsd be a Küszöbértéket, a Max. értéket és a működési módot. R/G/B esetén a kijelölt csatorna értéke alapján ugyanaz a döntés érvényesül a pixel mindhárom színösszetevőjére. A Mód alatti intenzitásdiagram a választott csatorna eloszlását mutatja.",
+    "inputs": "Szürkeárnyalatos vagy háromcsatornás színes képek",
     "parameters": [
       {
         "name": "Küszöbérték",
@@ -83,23 +101,27 @@
         "description": "A kimeneti intenzitás felső célértéke a bináris módoknál."
       },
       {
+        "name": "Küszöbölési csatorna",
+        "description": "Szürkeárnyalat, vörös, zöld vagy kék csatorna használható a pixelenkénti küszöbdöntéshez."
+      },
+      {
         "name": "Mód",
         "description": "Bináris és fordított bináris módban maszk jellegű kimenet készül, míg a Levágás és Nullázás módok szürkeárnyalatos kimenetet adnak."
       }
     ],
-    "outputs": "A kiválasztott módtól függően: maszk jellegű kép vagy szürkeárnyalatosan módosított kép.",
+    "outputs": "Szürke bemenetnél maszk vagy módosított szürke kép; R/G/B csatornás feldolgozásnál teljes, háromcsatornás kép.",
     "placement": {
-      "before": "Szürkeárnyalatos képet adó node szükséges előtte.",
-      "after": "A módtól függően maszkot vagy szürkeárnyalatot fogadó node-ok helyezhetők utána.",
+      "before": "Szürkeárnyalatos vagy színes képet adó node helyezhető elé.",
+      "after": "Szürke módban maszkot vagy szürkeárnyalatot, R/G/B módban IMAGE típust fogadó node-ok helyezhetők utána.",
       "restrictions": [
-        "Közvetlenül színes (IMAGE) kimenetű node után nem helyezhető el.",
-        "A Mód értéke dinamikusan befolyásolja az utána húzható kompatibilis node-okat."
+        "Az R/G/B választás csak háromcsatornás képen használható.",
+        "A Mód és a csatorna értéke dinamikusan befolyásolja az utána húzható kompatibilis node-okat."
       ]
     }
   },
   "calculate_histograms": {
     "purpose": "Hisztogram számítása a bemeneti szürkeárnyalatos képek intenzitáseloszlásáról.",
-    "usage": "A node a képekből osztásokra bontott intenzitáseloszlást számol. A képi információt nem adja tovább a fő láncban, csak hisztogram adatot állít elő elemzési célra.",
+    "usage": "Az osztott előnézet bal oldalán az aktuális kép, jobb oldalán a hisztogram látható. Egy minta, az összes minta egy közös ábrán vagy CSV szerinti csoportosítás választható. Az összes minta nézet képenként eltérő színű görbéket rajzol; CSV-módban a csoportok összegzett hisztogramjai jelennek meg eltérő színekkel ugyanazon az ábrán. A CSV-ben képenként egy csoportnév szükséges a betöltési sorrendben; sorból és oszlopból is importálható. A diagram külön kapcsolható. A képenkénti hisztogramok változatlanul megmaradnak a PCA számára.",
     "inputs": "Szürkeárnyalatos képek",
     "parameters": [
       {
@@ -123,7 +145,7 @@
   },
   "calculate_intensity_stats": {
     "purpose": "Intenzitás statisztikák számítása a kiválasztott képtartományról, hogy mérhető és összehasonlítható numerikus jellemzők álljanak rendelkezésre.",
-    "usage": "A node a bemeneti képekből számolja a fő statisztikai értékeket (például minimum, maximum, átlag, medián, szórás), valamint a megadott percentiliseket. A percentilisek vesszővel elválasztva adhatók meg.",
+    "usage": "Az osztott előnézet bal oldalán az aktuális kép, jobb oldalán az intenzitásstatisztikák láthatók. A Megjelenítés mezőben egy minta, az összes minta összevonva vagy CSV szerinti csoportok választhatók. Az Ábrázolás diagramon jelölőnégyzet bekapcsolása után kiválasztható az Y tengely statisztikai paramétere. CSV-csoportosításnál az X tengely a csoportneveket, egyébként a képek sorszámait mutatja. Az összevonás a maszkokon belüli összes pixelből számol, nem a képenkénti átlagok egyszerű átlagából. A görbeillesztés mintánkénti értékei megmaradnak. A CSV-ben képenként egy csoportnév szükséges a betöltési sorrendben; a sor vagy oszlop és a fejléc kihagyása importálás előtt választható. Az alkalmazott címkéket és a diagram beállításait a recept tárolja.",
     "inputs": "Szürkeárnyalatos képek (javasoltan Tartomány maszk lépés után)",
     "parameters": [
       {
@@ -131,12 +153,12 @@
         "description": "A számítandó percentilis értékek listája 0-100 tartományban (például: 5,25,50,75,95)."
       }
     ],
-    "outputs": "Numerikus statisztikai adatok",
+    "outputs": "Változatlan szürkeárnyalatos kép a fő láncban, valamint numerikus intenzitásstatisztikák oldalkimenetként",
     "placement": {
       "before": "Szürkeárnyalatos képet adó node szükséges előtte, tipikusan Tartomány maszk lépés.",
-      "after": "Numerikus vagy statisztikai bemenetet fogadó elemzési node helyezhető utána.",
+      "after": "Görbeillesztés vagy más, képet fogadó feldolgozási node helyezhető utána; a görbeillesztés az intenzitásstatisztikákat oldalkimenetként használja.",
       "restrictions": [
-        "A node nem képkimenetet ad tovább a fő láncban, ezért képet fogadó node nem helyezhető utána.",
+        "A görbeillesztéshez referenciaértékek is szükségesek; ezt a szerkesztő automatikusan hozzáadja másodlagos bemenetként.",
         "A statisztikák értelmezéséhez javasolt előtte Tartomány maszkot használni.",
         "A percentilis lista csak 0 és 100 közötti számokat tartalmazzon."
       ]
@@ -448,6 +470,10 @@
     "inputs": "Képek",
     "parameters": [
       {
+        "name": "Keresési csatorna",
+        "description": "Szürkeárnyalat, piros (R), zöld (G) vagy kék (B) csatorna a körkereséshez. A körjelölés és a maszk az eredeti színes képre kerül. Szürkeárnyalatos bemenetnél minden választás ugyanazt a képet használja."
+      },
+      {
         "name": "Detektálási méretarány",
         "description": "A körkereséshez használt kép méretezési aránya. Kisebb érték gyorsabb futást ad, mert kisebb képen keres, majd visszaskálázza az eredményt."
       },
@@ -462,6 +488,10 @@
       {
         "name": "Min. átmérő / Max. átmérő",
         "description": "A keresett körök mérettartománya pixelben. A túl tág tartomány rontja a találati arányt."
+      },
+      {
+        "name": "Sugár mérete (%)",
+        "description": "A megtalált kör sugarának százaléka: 100% az eredeti sugár, 98% annak 98%-a, 110% pedig 10%-kal nagyobb kör. A rajzolt kör és az alkalmazott körmaszk egyaránt ezt használja."
       }
     ],
     "outputs": "Detektált körök és az azokat jelölő overlay kép",
@@ -472,6 +502,61 @@
         "A min. és max. átmérő között érvényes tartomány szükséges.",
         "Az Élküszöb csökkentése segíthet, ha a kör széle gyengén látszik."
       ]
+    }
+  },
+  "characterize_particles": {
+    "purpose": "A detektált szemcsék táblázatos kiértékelése, valamint szám- és térfogatalapú szemcseméret-eloszlás készítése.",
+    "usage": "Válassza ki a szemcseméret alapját és a képek kezelését. Az Aktuális kép külön módban minden bevont szemcse kiválasztott méretértéke táblázatban jelenik meg, átméretezés- és mértékegység-korrekcióval, Dv-számítás nélkül. A sorra kattintva a szemcse sárga kijelölést kap. A Kizárás gomb a Szemcsedetektálás lépésben tárolja a kizárást; a kizárt sor Visszavétel gombjával ez visszavonható. A többi módban a két eloszlás és a Dv10, Dv50, Dv90 értékek láthatók.",
+    "inputs": "A Szemcsedetektálás node szemcseadatai",
+    "parameters": [
+      {
+        "name": "Szemcseméret alapja",
+        "description": "Terület, egyenértékű átmérő, kerület vagy befoglaló téglalap-méret alapján készíti el az eloszlást."
+      },
+      {
+        "name": "Képek kezelése",
+        "description": "Az összes kép együtt számítható, a képenkénti görbék közös diagramon összehasonlíthatók, vagy csak az aktuális kép értékelhető."
+      },
+      {
+        "name": "Osztályközök száma",
+        "description": "A hisztogram felbontása 5 és 100 osztályköz között."
+      },
+      {
+        "name": "Mértékegység és kalibráció",
+        "description": "Pixel, milliméter vagy mikrométer választható. Adja meg egy ismert szakasz pixelszámát az eredeti képen és valós hosszát µm-ben. Például 200 pixel és 100 µm esetén 1 pixel = 0,5 µm. Területnél a váltószám négyzete érvényesül. A korábbi receptek pixel/mm kalibrációja továbbra is használható."
+      },
+      {
+        "name": "Eloszlás simítása",
+        "description": "Kapcsolható hárompontos simítás a diagramgörbéken; a nyers Dv10, Dv50 és Dv90 értékeket nem változtatja meg."
+      }
+    ],
+    "outputs": "Szemcsetáblázat, szám- és térfogatalapú eloszlások, Dn- és Dv-percentilisek",
+    "placement": {
+      "before": "Szemcsedetektálás node szükséges előtte.",
+      "after": "A táblázatos eredményt feldolgozó vagy mentő node helyezhető utána.",
+      "restrictions": [
+        "A térfogati súlyozás az egyenértékű átmérő köbével történik.",
+        "Az útvonal korábbi átméretezéseit a node automatikusan visszaszámolja az eredeti képméretre."
+      ]
+    }
+  },
+  "resize_to_reference": {
+    "purpose": "A saját képág képeinek pixelméretét egy másik képág referencia-képeihez igazítja.",
+    "usage": "Valaszd ki a referencia-kepagat. A node minden kepet a parjanak szelessegere es magassagara meretez; ha a referenciaagon kevesebb kep van, az utolso referenciat hasznalja a tovabbi kepekhez.",
+    "inputs": "A saját ágon az átméretezendő kép, külön Kép betöltése ágon a célméretet adó referencia-kép.",
+    "parameters": [
+      { "name": "Referencia-képág", "description": "A cél szélességet és magasságot adó másik ág." },
+      { "name": "Nagyítás (%)", "description": "100%-nál a kép a referencia teljes méretéhez igazodik; ettől eltérő értékkel középpontosan tovább nagyítható vagy kicsinyíthető." },
+      { "name": "Átméretezett kép mutatása", "description": "Be- és kikapcsolja a saját képág képét az összehasonlító előnézetben." },
+      { "name": "Referencia mutatása", "description": "Be- és kikapcsolja a referenciaág képét az összehasonlító előnézetben." },
+      { "name": "Referencia átlátszósága", "description": "A két bekapcsolt réteg keverési aránya. A tényleges pipeline-kimenetet nem módosítja." },
+      { "name": "Interpoláció", "description": "Linear vagy cubic ajánlott nagyításhoz, area kicsinyítéshez, nearest maszkszerű képekhez." }
+    ],
+    "outputs": "A referencia-kép pontos szélességére és magasságára átméretezett képek.",
+    "placement": {
+      "before": "Külön ágakon töltsd be az átméretezendő és a referencia-képet.",
+      "after": "Bármely IMAGE bemenetet fogadó node követheti.",
+      "restrictions": ["A referenciaág nem lehet a node saját ága.", "A pontos célméret miatt eltérő képarány esetén a kép megnyúlhat."]
     }
   },
   "resize_images": {
@@ -643,27 +728,100 @@
       ]
     }
   },
+  "color_thresh": {
+    "purpose": "Szín alapján bináris maszkot készít, vagy a maszkot közvetlenül az eredeti képre alkalmazza. Közvetlenül a pszeudokép után is használható.",
+    "usage": "Válassz színteret, majd szűkítsd a csatornák tartományát. A Kimenet mezőben a csak maszk és a maszkolt eredeti kép között válthatsz. Maszk alkalmazásakor színválasztóval állítható a kizárt, 0 maszkértékű háttér. A teljes tartomány minden pixelt kiválaszt. Külön színtér-konverzió nem szükséges.",
+    "inputs": "Színes BGR kép; GRAY módban szürkeárnyalatos kép is.",
+    "parameters": [
+      {"name": "Színtér", "description": "HSV, BGR, LAB vagy GRAY. AUTO esetén a korábbi konverzió színterét használja, ennek hiányában HSV-t."},
+      {"name": "Kimenet", "description": "Csak a bináris maszk, vagy az eredeti kép maszkkal kivágott változata."},
+      {"name": "Háttér színe", "description": "Maszk alkalmazásakor a 0 értékű, kizárt pixelek kitöltőszíne."}
+    ],
+    "outputs": "Választás szerint fekete-fehér maszk vagy háromcsatornás maszkolt kép beállítható háttérszínnel."
+  },
   "pseudo_image": {
-    "purpose": "Tetszoleges szamu betoltott kep csatornaibol egyetlen szines pszeudokep osszeallitasa.",
-    "usage": "Tolts be egy vagy tobb kepet, majd valaszd ki kulon a kimeneti kek, zold es piros csatorna forrasat. Az 5-B peldaul az otodik kep kek csatornajat jelenti.",
-    "inputs": "Egy vagy tobb szines vagy szurkearnyalatos kep. A kivalasztott forraskepek pixelmerete egyezzen meg.",
+    "purpose": "A betoltott kepek haromkepes csoportjaibol szines pszeudokepek osszeallitasa.",
+    "usage": "Tolts be harommal oszthato szamu kepet, majd az elso harmasban valaszd ki a kimeneti kek, zold es piros csatorna forrasat. Ugyanez a kiosztas automatikusan ismetlodik minden tovabbi harmason.",
+    "inputs": "Harommal oszthato szamu szines vagy szurkearnyalatos kep. Egy csoport kivalasztott forraskepeinek pixelmerete egyezzen meg.",
     "parameters": [
       {
         "name": "Kimeneti kek/zold/piros csatorna",
-        "description": "Mindharom kimeneti csatornahoz az elso vagy masodik kep B, G, R vagy szurkearnyalatos csatornaja valaszthato."
+        "description": "Mindharom kimeneti csatornahoz a harmas 1., 2. vagy 3. kepenek B, G, R vagy szurkearnyalatos csatornaja valaszthato."
+      },
+      {
+        "name": "Retegenkenti nagyitas (%)",
+        "description": "A kek, zold es piros reteg merete kulon allithato szazalekosan. A nagyitas a kep kozepe korul tortenik; 100% az eredeti meret."
+      },
+      {
+        "name": "Retegenkenti intenzitasszorzo",
+        "description": "A kek, zold es piros reteg erossege kulon szorozhato. Az 1,0 valtozatlan intenzitast jelent, nagyobb ertek erositi, kisebb ertek gyengiti a reteget."
       },
       {
         "name": "Egyutt mozgo retegek es kozos X/Y eltolas",
         "description": "Checkboxokkal jelolheto ki, hogy a kek, zold es piros reteg kozul melyek mozogjanak egyutt. A kozos pozitiv X jobbra, a pozitiv Y lefele mozgat."
       }
     ],
-    "outputs": "Egy haromcsatornas BGR pszeudokep.",
+    "outputs": "Harom bemeneti kepenkent egy haromcsatornas BGR pszeudokep.",
     "placement": {
       "before": "Kozvetlenul egy vagy tobb kepet betolto Kep betoltese node utan hasznalhato.",
       "after": "Barmely szines kepet fogado node helyezheto utana.",
       "restrictions": [
-        "Legalabb egy kep szukseges.",
+        "A kepek szamanak harommal oszthatonak kell lennie.",
         "A kivalasztott forraskepek szelessegenek es magassaganak egyeznie kell."
+      ]
+    }
+  },
+  "manual_image_alignment": {
+    "purpose": "Az egyik kepag kepenek kezi geometriai illesztese egy masik kepaghoz.",
+    "usage": "Valaszd ki a referencia-agat, majd az X/Y eltolas, forgatas es meretarany csuszkakkal igazitsd ra a fo ag kepet.",
+    "inputs": "A fo agon a mozgato kep, kulon load_image agon a referencia-kep.",
+    "parameters": [
+      { "name": "Referencia kep ag", "description": "Az a kepag, amelynek merete es pozicioja a cel." },
+      { "name": "X/Y eltolas", "description": "Pozitiv X jobbra, pozitiv Y lefele mozgatja a kepet pixelben." },
+      { "name": "Forgatas", "description": "A kep kozepe koruli forgatas fokban." },
+      { "name": "Meretarany", "description": "1 az eredeti meret, kisebb ertek kicsinyit, nagyobb nagyit." },
+      { "name": "Referencia attetszosege", "description": "Az elonezetben 0-nal csak a mozgatott kep, 1-nel csak a referencia latszik. A node tenyleges kimenetet nem keveri." }
+    ],
+    "outputs": "A referencia vaszonmeretere transzformalt kep es a hasznalt 2x3-as matrix.",
+    "placement": {
+      "before": "Kulon agakon toltsd be a mozgatando es a referencia-kepet.",
+      "after": "Barmely IMAGE bemenetet fogado node kovetheti.",
+      "restrictions": ["A referencia-ag nem lehet az illesztes sajat aga."]
+    }
+  },
+  "automatic_image_alignment": {
+    "purpose": "Az objektum automatikus pozicio-, forgatas- es meretillesztese egy referencia-kephez.",
+    "usage": "Valaszd ki a referencia-agat. A node eloszor a dominans objektum korvonalat illeszti, majd opcionlisan a kepi reszletekkel finomit.",
+    "inputs": "A fo agon a mozgatando kep, kulon load_image agon a referencia-kep.",
+    "parameters": [
+      { "name": "Atmeretezes engedelyezese", "description": "Bekapcsolva az objektum meretet is a referenciahoz igazitja." },
+      { "name": "Pontositas kepi reszletekkel", "description": "ECC optimalizalassal tovabb finomitja a korvonal-alapu kezdeti illesztest." }
+    ],
+    "outputs": "Automatikusan illesztett kep, transzformacios matrix es elerheto ECC pontszam.",
+    "placement": {
+      "before": "Kulon agakon toltsd be a mozgatando es a referencia-kepet.",
+      "after": "Barmely IMAGE bemenetet fogado node kovetheti.",
+      "restrictions": ["Jol elkulonulo fo objektum szukseges; tobb egyforma objektum eseten kezi korrekcio lehet szukseges."]
+    }
+  },
+  "focus_stack": {
+    "purpose": "Kulonbozo fokusztavolsagokon keszult felvetelekbol egy nagy melysegelessegu kep eloallitasa.",
+    "usage": "Toltsd be egy mappabol ugyanannak a mozdulatlan temanank a fokuszsorozatat. Az automatikus illesztes korrigalja a kisebb elmozdulast, majd a node minden kep helyileg legelesebb teruleteit egyesiti.",
+    "inputs": "Legalabb ket, azonos pixelmeretu es csatornaszamu kep, kozelrol tavolra vagy tavolrol kozelre rendezve.",
+    "parameters": [
+      { "name": "Elessegvizsgalat sugara", "description": "A helyi reszletek meresi ablaka. Finom strukturakhoz kisebb, nagyobb feluletekhez nagyobb ertek hasznos." },
+      { "name": "Atmenetek simitasa", "description": "A forraskepek kozotti hatarokat lagyitja; nagyobb ertek kevesebb varratot, de szelesebb atmenetet ad." },
+      { "name": "Kepek automatikus illesztese", "description": "Affine ECC illesztessel korrigalja a fokuszallitas kozbeni kis eltolast, forgast es meretvaltozast." },
+      { "name": "Illesztesi iteraciok", "description": "Az automatikus illesztes maximalis optimalizalasi lepesszama." }
+    ],
+    "outputs": "Egy egyesitett kep. Mellekeredmenykent fokuszforras-terkep es illesztesi meroszamok keszulnek.",
+    "placement": {
+      "before": "Kep betoltese node, amely a teljes fokuszsorozatot betolti.",
+      "after": "Barmely IMAGE bemenetet fogado feldolgozo vagy kepmento node.",
+      "restrictions": [
+        "A tema es a megvilagitas a sorozat alatt maradjon valtozatlan.",
+        "A kepek pixelmerete es csatornaszama egyezzen meg.",
+        "Nagy perspektivavaltozast vagy mozgo temat az automatikus illesztes nem tud megbizhatoan javitani."
       ]
     }
   },
