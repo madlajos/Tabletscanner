@@ -227,6 +227,12 @@
   justify-content: center;
 }
 
+.coord-input-wrapper:has(app-focus-anchor) {
+  display: flex;
+
+  .coord-input { width: 68px; border-right: 0; border-radius: 4px 0 0 4px; }
+}
+
 .home-button-wrapper {
   display: flex;
 }

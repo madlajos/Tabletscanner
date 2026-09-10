@@ -1,0 +1,127 @@
+<div class="recipe-browser-overlay" (click)="closed.emit()">
+  <section class="recipe-browser" role="dialog" aria-modal="true" aria-labelledby="recipe-browser-title" (click)="$event.stopPropagation()">
+    <header>
+      <div>
+        <h2 id="recipe-browser-title">Receptek betöltése</h2>
+        <p>Válasszon receptet, vagy rendezze őket mappákba.</p>
+      </div>
+      <button type="button" class="icon-button close-button" (click)="closed.emit()" aria-label="Bezárás" title="Bezárás"><mat-icon>close</mat-icon></button>
+    </header>
+
+    <div class="browser-body">
+      <aside class="folder-pane">
+        <div class="folder-heading">
+          <span>Mappák</span>
+          <button type="button" class="icon-button" (click)="creatingFolder = true" aria-label="Új mappa" title="Új mappa"><mat-icon>create_new_folder</mat-icon></button>
+        </div>
+
+        @if (creatingFolder) {
+          <div class="folder-edit-row">
+            <input [(ngModel)]="newFolderName" (keyup.enter)="createFolder()" (keyup.escape)="creatingFolder = false" maxlength="80" placeholder="Mappa neve" aria-label="Új mappa neve" autofocus />
+            <button type="button" class="mini-button accept" (click)="createFolder()" aria-label="Létrehozás"><mat-icon>check</mat-icon></button>
+            <button type="button" class="mini-button" (click)="creatingFolder = false" aria-label="Mégse"><mat-icon>close</mat-icon></button>
+          </div>
+        }
+
+        <div class="folder-list dark-scrollbar">
+          <button type="button" class="folder-row system-folder" [class.active]="selectedFolderId === 'all'" (click)="selectedFolderId = 'all'">
+            <mat-icon>inventory_2</mat-icon><span>Összes recept</span><span class="count">{{ recipeCount('all') }}</span>
+          </button>
+          <button type="button" class="folder-row system-folder" [class.active]="selectedFolderId === 'unfiled'" (click)="selectedFolderId = 'unfiled'">
+            <mat-icon>folder_off</mat-icon><span>Mappán kívül</span><span class="count">{{ recipeCount('unfiled') }}</span>
+          </button>
+
+          @for (folder of folders; track folder.id) {
+            @if (renamingFolderId === folder.id) {
+              <div class="folder-edit-row">
+                <input [(ngModel)]="renameFolderName" (keyup.enter)="renameFolder(folder)" (keyup.escape)="renamingFolderId = null" maxlength="80" aria-label="Mappa új neve" autofocus />
+                <button type="button" class="mini-button accept" (click)="renameFolder(folder)" aria-label="Mentés"><mat-icon>check</mat-icon></button>
+                <button type="button" class="mini-button" (click)="renamingFolderId = null" aria-label="Mégse"><mat-icon>close</mat-icon></button>
+              </div>
+            } @else {
+              <div class="folder-row-wrapper" [class.active]="selectedFolderId === folder.id">
+                <button type="button" class="folder-row" (click)="selectedFolderId = folder.id">
+                  <mat-icon>folder</mat-icon><span>{{ folder.name }}</span><span class="count">{{ recipeCount(folder.id) }}</span>
+                </button>
+                <div class="folder-actions">
+                  <button type="button" class="mini-button" (click)="startRename(folder, $event)" aria-label="Mappa átnevezése" title="Átnevezés"><mat-icon>edit</mat-icon></button>
+                  <button type="button" class="mini-button danger" (click)="requestFolderDelete(folder, $event)" aria-label="Mappa törlése" title="Törlés"><mat-icon>delete</mat-icon></button>
+                </div>
+              </div>
+            }
+          }
+        </div>
+      </aside>
+
+      <main class="recipe-pane">
+        <div class="recipe-pane-heading">
+          <span>{{ selectedFolderName }}</span>
+          <span>{{ visibleRecipes.length }} recept</span>
+        </div>
+
+        @if (loading) {
+          <p class="empty-state" role="status">Betöltés…</p>
+        } @else if (errorMessage) {
+          <p class="empty-state error" role="alert">{{ errorMessage }}</p>
+        } @else if (visibleRecipes.length === 0) {
+          <p class="empty-state">Ebben a mappában nincsenek receptek.</p>
+        } @else {
+          <div class="recipe-list dark-scrollbar">
+            @for (recipe of visibleRecipes; track recipe.name) {
+              <article class="recipe-card" role="button" (click)="recipeChosen.emit(recipe.name)" tabindex="0" (keyup.enter)="recipeChosen.emit(recipe.name)">
+                <div class="recipe-card-main">
+                  <div class="recipe-title-line">
+                    <span class="recipe-name">{{ recipe.name }}</span>
+                    <span class="recipe-meta"><mat-icon>account_tree</mat-icon>{{ recipe.step_count }} lépés</span>
+                  </div>
+                  @if (editingDescriptionFor === recipe.name) {
+                    <div class="description-edit" (click)="$event.stopPropagation()">
+                      <input [(ngModel)]="editingDescriptionText" (keyup.enter)="saveDescription(recipe)" (keyup.escape)="editingDescriptionFor = null" placeholder="Megjegyzés…" autofocus />
+                      <button type="button" class="mini-button accept" (click)="saveDescription(recipe)" aria-label="Megjegyzés mentése"><mat-icon>check</mat-icon></button>
+                    </div>
+                  } @else {
+                    <p class="recipe-description" [class.empty]="!recipe.description">{{ recipe.description || 'Nincs megjegyzés' }}</p>
+                  }
+                </div>
+                <div class="recipe-controls" (click)="$event.stopPropagation()">
+                  <label>
+                    <span>Helye</span>
+                    <select [ngModel]="recipe.folder_id || ''" (ngModelChange)="moveRecipe(recipe, $event)" aria-label="Recept mappája">
+                      <option value="">Mappán kívül</option>
+                      @for (folder of folders; track folder.id) { <option [value]="folder.id">{{ folder.name }}</option> }
+                    </select>
+                  </label>
+                  @if (editorActions) {
+                    <div class="recipe-actions">
+                      <button type="button" class="icon-button" (click)="startEditDescription(recipe, $event)" title="Megjegyzés szerkesztése" aria-label="Megjegyzés szerkesztése"><mat-icon>edit_note</mat-icon></button>
+                      <button type="button" class="icon-button" (click)="recipeAppended.emit(recipe.name)" title="Hozzáadás az aktuális recepthez" aria-label="Hozzáadás"><mat-icon>add_link</mat-icon></button>
+                      <button type="button" class="icon-button" (click)="duplicateRecipe(recipe, $event)" title="Másolás" aria-label="Másolás"><mat-icon>content_copy</mat-icon></button>
+                      <button type="button" class="icon-button danger" (click)="pendingRecipeDelete = recipe" title="Törlés" aria-label="Recept törlése"><mat-icon>delete</mat-icon></button>
+                    </div>
+                  }
+                </div>
+              </article>
+            }
+          </div>
+        }
+      </main>
+    </div>
+
+    @if (pendingFolderDelete) {
+      <div class="confirm-overlay" (click)="pendingFolderDelete = null">
+        <div class="confirm-dialog" (click)="$event.stopPropagation()">
+          <strong>Mappa törlése</strong><p>A(z) „{{ pendingFolderDelete.name }}” mappa törlődik. A benne lévő receptek megmaradnak a „Mappán kívül” nézetben.</p>
+          <div><button type="button" (click)="pendingFolderDelete = null">Mégse</button><button type="button" class="delete-button" (click)="confirmFolderDelete()">Törlés</button></div>
+        </div>
+      </div>
+    }
+    @if (pendingRecipeDelete) {
+      <div class="confirm-overlay" (click)="pendingRecipeDelete = null">
+        <div class="confirm-dialog" (click)="$event.stopPropagation()">
+          <strong>Recept törlése</strong><p>Biztosan törli ezt a receptet: „{{ pendingRecipeDelete.name }}”?</p>
+          <div><button type="button" (click)="pendingRecipeDelete = null">Mégse</button><button type="button" class="delete-button" (click)="confirmRecipeDelete()">Törlés</button></div>
+        </div>
+      </div>
+    }
+  </section>
+</div>

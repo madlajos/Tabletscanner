@@ -7,7 +7,7 @@ from cameracontrol import (
     validate_camera_integer_param,
     validate_param,
 )
-from settings_manager import migrate_settings
+from settings_manager import SETTINGS_SCHEMA_VERSION, migrate_settings
 
 
 class CameraImageSettingsTests(unittest.TestCase):
@@ -84,7 +84,7 @@ class CameraImageSettingsTests(unittest.TestCase):
             },
         })
         self.assertTrue(changed)
-        self.assertEqual(9, migrated['settings_schema_version'])
+        self.assertEqual(SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
         self.assertEqual({
             'override_enabled': False,
             'width': 2048,

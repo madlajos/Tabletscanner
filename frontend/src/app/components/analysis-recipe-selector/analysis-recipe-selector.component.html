@@ -1,0 +1,31 @@
+<div class="recipe-selector-row">
+  <label for="analysis-recipe-name">Képelemző recept:</label>
+  <div class="recipe-selector-control">
+    <input
+      id="analysis-recipe-name"
+      type="text"
+      readonly
+      [value]="selectedRecipeName"
+      [title]="selectedRecipeName"
+      placeholder="Nincs kiválasztva"
+      aria-label="Kiválasztott képelemző recept"
+    />
+    <button
+      type="button"
+      class="browse-recipe-button"
+      (click)="openDialog()"
+      [disabled]="disabled || loadingSelection"
+      title="Képelemző recept kiválasztása"
+      aria-label="Képelemző recept kiválasztása"
+    >
+      <mat-icon>folder_open</mat-icon>
+    </button>
+  </div>
+</div>
+
+@if (dialogOpen) {
+  <app-recipe-browser
+    (closed)="dialogOpen = false"
+    (recipeChosen)="selectRecipe($event)"
+  ></app-recipe-browser>
+}

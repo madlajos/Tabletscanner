@@ -5,3 +5,66 @@
     align-items: center; /* Centers them */
     width: 100%; /* Makes sure it spans the available space */
   }
+
+.error-item,
+app-error-popup {
+  display: block;
+  width: 100%;
+}
+
+.notification-stack {
+  position: relative;
+  width: 100%;
+  isolation: isolate;
+}
+
+.notification-stack.has-multiple::before,
+.notification-stack.has-multiple::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  right: 7px;
+  bottom: -4px;
+  left: 7px;
+  height: 100%;
+  border: 1px solid #555;
+  border-radius: 6px;
+  background: #292929;
+}
+
+.notification-stack.has-multiple::after {
+  right: 13px;
+  bottom: -7px;
+  left: 13px;
+  z-index: -2;
+  opacity: .7;
+}
+
+.notification-badges {
+  position: absolute;
+  z-index: 2;
+  top: -7px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.notification-badge {
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, .45);
+  border-radius: 9px;
+  color: #fff;
+  background: var(--state-error, #b9474d);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .45);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.notification-badge.warning { color: #2c2200; background: var(--state-warning, #d4a522); }
+.notification-badge.info { background: var(--state-blue, #2e5f99); }
+.notification-badge.success { background: var(--state-success, #35a65a); }

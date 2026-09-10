@@ -43,6 +43,13 @@
              (click)="openImage(img)"
              (contextmenu)="onImageContextMenu($event, img)"
              title="{{ img.path }}">
+          @if (img.metadata?.tray_position) {
+            <span class="capture-badge tray-badge">{{ img.metadata?.tray_position }}</span>
+          }
+          <span class="capture-badge optics-badge">
+            <span>{{ img.wavelength }}</span>
+            <span>{{ img.metadata?.filter_name || (img.metadata?.filter_position != null ? 'Üres' : '—') }}</span>
+          </span>
           <img
             [src]="img.url"
             alt="saved image thumbnail"

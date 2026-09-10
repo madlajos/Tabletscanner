@@ -1,9 +1,39 @@
+import json
+import os
+import tempfile
 import unittest
 
-from image_metadata import build_capture_metadata
+from PIL import Image
+
+from image_metadata import build_capture_metadata, serialize_capture_metadata, tray_position_label
 
 
 class CaptureMetadataTests(unittest.TestCase):
+    def test_hungarian_metadata_round_trips_through_jpeg_exif(self):
+        metadata = {'filter_name': 'Kék áteresztő szűrő'}
+        exif = Image.Exif()
+        exif[0x010E] = serialize_capture_metadata(metadata)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'metadata.jpg')
+            Image.new('RGB', (1, 1)).save(path, format='JPEG', exif=exif)
+            with Image.open(path) as image:
+                restored = json.loads(image.getexif()[0x010E])
+
+        self.assertEqual(metadata, restored)
+
+    def test_grid_labels_use_actual_coordinates_and_configured_geometry(self):
+        settings = {'advanced_settings': {'first_tablet_x_mm': 3, 'first_tablet_y_mm': 2, 'tablet_spacing_mm': 15}}
+        for position, expected in [({'x': 3, 'y': 2}, 'A1'), ({'x': 18, 'y': 2}, 'B1'),
+                                   ({'x': 3, 'y': 17}, 'A2'), ({'x': 3.1, 'y': 2}, None),
+                                   ({'x': 4, 'y': 2}, None), ({'x': 153, 'y': 2}, None),
+                                   ({'x': None, 'y': 2}, None)]:
+            self.assertEqual(expected, tray_position_label(settings, position))
+
+    def test_capture_errors_are_preserved_as_a_list(self):
+        metadata = build_capture_metadata(settings={}, position={}, wavelength='uv255',
+            filter_position=1, camera_values={}, errors=['ZOffset difference: -1.5 mm'])
+        self.assertEqual(['ZOffset difference: -1.5 mm'], metadata['Errors'])
+
     def test_builds_complete_metadata_from_runtime_state(self):
         settings = {
             "other_settings": {
@@ -77,6 +107,18 @@ class CaptureMetadataTests(unittest.TestCase):
 
         self.assertEqual(metadata["gain"], 4.0)
         self.assertEqual(metadata["gamma"], 1.1)
+
+    def test_floating_point_noise_is_rounded_for_json_and_exif(self):
+        metadata = build_capture_metadata(
+            settings={}, position={'x': 0.0, 'y': 21.80000000000001, 'z': 16.037611065434337},
+            wavelength='uv255', filter_position=2,
+            camera_values={'exposure_time': 1000000.0, 'gain': 9.999998795594486, 'gamma': 1.00000001})
+        self.assertEqual(0, metadata['x'])
+        self.assertEqual(21.8, metadata['y'])
+        self.assertEqual(16.0376, metadata['z'])
+        self.assertEqual(1000000, metadata['exposure_time'])
+        self.assertEqual(10, metadata['gain'])
+        self.assertEqual(1, metadata['gamma'])
 
 
 if __name__ == "__main__":

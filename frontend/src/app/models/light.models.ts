@@ -1,3 +1,6 @@
+import { HeightReferenceStatus } from './height-reference.models';
+import { HeightOffsetApplication, FilterRevolverStatus } from './filter-settings.models';
+
 /** Canonical identifiers used by the four-channel illumination contract. */
 export type LightChannel = 'uv255' | 'uv310' | 'uv365' | 'vis';
 
@@ -27,38 +30,29 @@ export interface LightStatus {
   active_mode: LightActivationMode;
   channels: Record<LightChannel, boolean>;
   auto_turned_off: LightChannel[];
-  height_offset?: {
-    applied: boolean;
-    reason?: 'autofocus_required' | 'no_active_light';
-    offset_mm?: number;
-    target_z?: number;
-    moved?: boolean;
-  };
-  height_offset_reference?: {
-    available: boolean;
-    reference_z: number | null;
-    applied_offset_mm: number;
-  };
+  height_offset?: HeightOffsetApplication;
+  height_offset_reference?: HeightReferenceStatus;
+  camera_params?: Record<string, number>;
+  filter_revolver?: FilterRevolverStatus | null;
 }
 
 export interface CapturePlanRow {
   id: string;
   wavelength: LightChannel;
+  brightness: UvBrightnessMode;
   filter_position: 1 | 2 | 3 | 4 | 5 | 6;
   exposure_time: number;
   gain: number;
-  gamma: number;
   exposure_time_text: string;
   gain_text: string;
-  gamma_text: string;
 }
 
 export interface CaptureRequestRow {
   wavelength: LightChannel;
+  brightness: UvBrightnessMode;
   filter_position: number;
   exposure_time: number;
   gain: number;
-  gamma: number;
 }
 
 export const LIGHT_CHANNELS: readonly LightChannel[] = ['uv255', 'uv310', 'uv365', 'vis'];

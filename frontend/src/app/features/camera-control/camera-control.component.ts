@@ -4,11 +4,11 @@ import { HttpClient } from '@angular/common/http';
 import { SharedService } from '../../shared.service';
 import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
-import { finalize, interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs';
+import { interval, Subscription, switchMap, catchError, of, timeout } from 'rxjs';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SettingsUpdatesService, SizeLimits, SaveSettings, CameraSettings } from '../../services/settings-updates.service';
-import { BgrCaptureService } from '../../services/bgr-capture.service';
 import { BASE_URL } from '../../api-config';
+import { GroupedNumberInputDirective } from '../../directives/grouped-number-input.directive';
 
 
 // TODO: Temporary placement; Relocate this to filesaver feature
@@ -43,7 +43,7 @@ type CameraRanges = Partial<Record<'ExposureTime' | 'Gain' | 'Gamma', CameraPara
   selector: 'app-camera-control',
   templateUrl: './camera-control.component.html',
   styleUrls: ['./camera-control.component.css'],
-  imports: [CommonModule, FormsModule, MatIconModule]
+  imports: [CommonModule, FormsModule, MatIconModule, GroupedNumberInputDirective]
 })
 
 
@@ -100,20 +100,16 @@ export class CameraControlComponent implements OnInit, OnDestroy {
   isAutofocusing: boolean = false;
   private measurementActiveSub!: Subscription;
   private autofocusActiveSub?: Subscription;
+  private cameraSettingsSub?: Subscription;
   private numericFocusValues: Record<string, number | null | undefined> = {};
   cameraSettingsExpanded = true;
   saveSettingsExpanded = true;
-  bgrCaptureInProgress = false;
-  bgrCaptureCancelling = false;
-  private bgrCaptureSub?: Subscription;
-  private bgrCancelSub?: Subscription;
 
 
   constructor(private http: HttpClient,
     public sharedService: SharedService,
     private errorNotificationService: ErrorNotificationService,
-    private settingsUpdatesService: SettingsUpdatesService,
-    private bgrCaptureService: BgrCaptureService
+    private settingsUpdatesService: SettingsUpdatesService
   ) { }
 
   toggleCameraSettings(): void {
@@ -146,6 +142,9 @@ export class CameraControlComponent implements OnInit, OnDestroy {
 
     this.autofocusActiveSub = this.sharedService.autofocusActive$.subscribe(active => {
       this.isAutofocusing = active;
+    });
+    this.cameraSettingsSub = this.settingsUpdatesService.cameraSettings$.subscribe(settings => {
+      this.cameraSettings = { ...this.cameraSettings, ...settings };
     });
 
     this.sharedService.cameraConnectionStatus$.subscribe(status => {
@@ -201,17 +200,7 @@ export class CameraControlComponent implements OnInit, OnDestroy {
     if (this.autofocusActiveSub) {
       this.autofocusActiveSub.unsubscribe();
     }
-
-    if (this.bgrCaptureInProgress) {
-      this.bgrCaptureService.cancel().subscribe({
-        error: error => console.warn('Could not cancel BGR capture during cleanup.', error)
-      });
-    }
-    this.bgrCaptureSub?.unsubscribe();
-    this.bgrCancelSub?.unsubscribe();
-    if (this.bgrCaptureInProgress) {
-      this.sharedService.setMeasurementActive(false);
-    }
+    this.cameraSettingsSub?.unsubscribe();
   }
 
   // Backend calls
@@ -243,8 +232,13 @@ export class CameraControlComponent implements OnInit, OnDestroy {
             // IMPORTANT: do NOT force this.sharedService.setCameraStreamStatus(false) here
             // when backend says false – that causes flapping and <img> re-creation.
           } else {
-            // Disconnected → stop status polling, reflect stream=false, maybe auto-reconnect
-            this.stopConnectionPolling();
+            // Keep the independent status poll alive while reconnect attempts run.
+            // This detects physical disconnects even when no capture is active.
+            this.errorNotificationService.addError({
+              code: this.CAMERA_ERR_CODE,
+              message: this.errorNotificationService.getMessage(this.CAMERA_ERR_CODE),
+              severity: 'error'
+            });
             if (this.isStreaming) {
               this.sharedService.setCameraStreamStatus(false);
             }
@@ -259,10 +253,14 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         error: () => {
           // Treat errors as disconnected
           this.sharedService.setCameraConnectionStatus(false);
+          this.errorNotificationService.addError({
+            code: this.CAMERA_ERR_CODE,
+            message: this.errorNotificationService.getMessage(this.CAMERA_ERR_CODE),
+            severity: 'error'
+          });
           if (this.isStreaming) {
             this.sharedService.setCameraStreamStatus(false);
           }
-          this.stopConnectionPolling();
           if (this.autoReconnectEnabled) {
             this.startReconnectionPolling();
           }
@@ -387,63 +385,6 @@ export class CameraControlComponent implements OnInit, OnDestroy {
         error: err => console.error('Folder dialog failed:', err)
       });
     }
-  }
-
-  toggleBgrCapture(): void {
-    if (this.bgrCaptureInProgress) {
-      this.cancelBgrCapture();
-      return;
-    }
-
-    const targetFolder = normalizePath(this.otherSettings.save_location || '').trim();
-    if (!targetFolder || !this.isConnected || this.measurementActive || this.isAutofocusing) {
-      return;
-    }
-
-    this.bgrCaptureInProgress = true;
-    this.bgrCaptureCancelling = false;
-    this.sharedService.setMeasurementActive(true);
-
-    this.bgrCaptureSub = this.bgrCaptureService.start(targetFolder).pipe(
-      finalize(() => {
-        this.bgrCaptureInProgress = false;
-        this.bgrCaptureCancelling = false;
-        this.bgrCaptureSub = undefined;
-        this.sharedService.setMeasurementActive(false);
-      })
-    ).subscribe({
-      next: response => {
-        response.saved_images.forEach(image => {
-          this.sharedService.emitSavedImage({
-            path: image.path,
-            tabletIndex: 0
-          });
-        });
-        console.info(
-          response.status === 'completed'
-            ? `BGR image set ${response.series_index} saved.`
-            : `BGR image set ${response.series_index} cancelled after ${response.saved_images.length} image(s).`
-        );
-      },
-      error: error => console.error('BGR capture series failed.', error)
-    });
-  }
-
-  private cancelBgrCapture(): void {
-    if (this.bgrCaptureCancelling) {
-      return;
-    }
-    this.bgrCaptureCancelling = true;
-    this.bgrCancelSub = this.bgrCaptureService.cancel().subscribe({
-      next: () => {
-        this.bgrCancelSub = undefined;
-      },
-      error: error => {
-        console.error('BGR capture cancellation failed.', error);
-        this.bgrCaptureCancelling = false;
-        this.bgrCancelSub = undefined;
-      }
-    });
   }
 
   startConnectionPolling(intervalMs: number = 1000): void {

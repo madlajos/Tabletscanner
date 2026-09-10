@@ -30,6 +30,10 @@
           <input id="z-position" class="coord-input" type="text" inputmode="decimal" [(ngModel)]="zPosition"
             [disabled]="motorOffState || !isConnected || !zHomed || measurementActive || isAutofocusing" [attr.placeholder]="zHomed ? '' : '?'"
             (focus)="onFocus('z')" (blur)="onBlur('z')" (keyup.enter)="submitOnEnter('z')" />
+          <app-focus-anchor
+            [disabled]="controlsDisabled || filterRevolverBusy || filterRevolverStatus.busy || lightBusy || motorOffState"
+            [canAnchor]="xHomed && yHomed && zHomed && filterRevolverStatus.homed && lightStatus.active_channel !== null"
+          ></app-focus-anchor>
         </div>
       </div>
     </div>
@@ -212,6 +216,9 @@
             <img src="assets/SVG/arrow.svg" alt="" class="direction-icon" />
           </button>
         </div>
+        <app-filter-capture-buttons
+          [disabled]="controlsDisabled || filterRevolverBusy || filterRevolverStatus.busy || lightBusy || motorOffState || !filterRevolverStatus.homed || !(xHomed && yHomed && zHomed)"
+        ></app-filter-capture-buttons>
       </div>
     </div>
     <p class="filter-revolver-note" *ngIf="isConnected && !filterRevolverStatus.homed">

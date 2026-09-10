@@ -80,15 +80,41 @@ class HeightOffsetControlTests(unittest.TestCase):
             'moved': True,
         }, result)
 
-    def test_target_outside_travel_is_rejected_without_motion(self):
-        height_offset_control.record_reference(29.0)
+    def test_target_outside_travel_clamps_and_records_missing_offset(self):
+        height_offset_control.record_reference(globals.motion_limits['z'][1] - 1)
 
-        with self.assertRaises(height_offset_control.HeightOffsetCommandError):
-            height_offset_control.apply_active_combination(
-                self.device, filter_settings(2.5), 'uv255'
-            )
+        result = height_offset_control.apply_active_combination(self.device, filter_settings(2.5), 'uv255')
+        self.assertEqual(globals.motion_limits['z'][1], result['target_z'])
+        self.assertEqual(1.5, result['missing_offset_mm'])
+        self.assertEqual('W1205', result['warning']['code'])
+        self.assertEqual(['ZOffset difference: 1.5 mm'], height_offset_control.capture_errors('uv255', 2))
+        self.assertEqual([], height_offset_control.capture_errors('vis', 2))
+        self.assertTrue(height_offset_control.status()['available'])
+        self.assertEqual(result['target_z'], globals.last_toolhead_pos['z'])
 
-        self.assertEqual([], self.device.command_history)
+    def test_virtual_master_zero_can_be_outside_travel(self):
+        self.assertEqual(-1.5, height_offset_control.record_combination_reference(1., 2.5, source='anchor'))
+        globals.last_toolhead_pos['z'] = 1.
+        same = height_offset_control.apply_active_combination(self.device, filter_settings(), 'uv255')
+        self.assertFalse(same['moved'])
+        result = height_offset_control.apply_active_combination(self.device, filter_settings(), 'uv365')
+        self.assertEqual(0, result['target_z'])
+        self.assertEqual(-2.5, result['missing_offset_mm'])
+        self.assertEqual(['ZOffset difference: -2.5 mm'], height_offset_control.capture_errors('uv365', 2))
+        height_offset_control.apply_active_combination(self.device, filter_settings(), 'uv255')
+        self.assertEqual(1, globals.last_toolhead_pos['z'])
+        self.assertEqual([], height_offset_control.capture_errors('uv255', 2))
+
+    def test_invalid_physical_reference_never_enables_offsets(self):
+        for z in (-1, globals.motion_limits['z'][1] + 1, float('nan'), float('inf'), None):
+            with self.assertRaises(ValueError):
+                height_offset_control.record_combination_reference(z, 2.5, source='anchor')
+            self.assertFalse(height_offset_control.status()['available'])
+
+    def test_xy_still_invalidates_an_autofocus_reference(self):
+        height_offset_control.record_reference(10)
+        height_offset_control.invalidate_for_manual_move(z_changed=False)
+        self.assertFalse(height_offset_control.status()['available'])
 
 
 if __name__ == '__main__':

@@ -12,7 +12,6 @@ import { FormsModule } from '@angular/forms';
 // Import standalone components
 import { ImageViewerComponent } from './features/image-viewer/image-viewer.component';
 import { CameraControlComponent } from './features/camera-control/camera-control.component';
-import { ErrorPopupListComponent } from './components/error-popup-list/error-popup-list.component';
 import { BackendReadyService } from './services/backend-ready.service';
 import { ErrorNotificationService } from './services/error-notification.service';
 import { MotionControl } from './features/motion-control/motion-control';
@@ -38,7 +37,6 @@ import { SoftwareSettingsComponent } from './features/software-settings/software
     ImageViewerComponent,
     MotionControl,
     CameraControlComponent,
-    ErrorPopupListComponent,
     AutoMeasurementComponent,
     RecipeCreatorComponent,
     RecipeApplierComponent,

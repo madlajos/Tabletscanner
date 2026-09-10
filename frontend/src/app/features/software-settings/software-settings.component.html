@@ -1,7 +1,14 @@
 <div class="settings-backdrop" role="presentation" (click)="onBackdropClick($event)">
   <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="software-settings-title">
     <header class="dialog-header">
-      <h2 id="software-settings-title">Beállítások</h2>
+      <div class="dialog-title-row">
+        <h2 id="software-settings-title">Beállítások</h2>
+        <span *ngIf="saveStatus as status" class="save-status" [class.saved]="status === 'saved'"
+          role="status" aria-live="polite">
+          <span class="save-status-indicator" aria-hidden="true"></span>
+          {{ saveStatusText }}
+        </span>
+      </div>
       <button type="button" class="icon-button" (click)="dismiss()" aria-label="Bezárás">
         <mat-icon>close</mat-icon>
       </button>
@@ -42,8 +49,6 @@
               <button type="button" (click)="addFilter()" [disabled]="measurementActive" aria-label="Szűrő hozzáadása"
                 style="display:block;width:32px;height:32px;margin:8px auto;border:0;border-radius:50%;background:#224477;color:#fff;font-size:22px;cursor:pointer">+</button>
               <p *ngIf="filterError" class="settings-error">{{ filterError }}</p>
-              <p *ngIf="savingFilterSettings" class="settings-note">Automatikus mentés…</p>
-              <p *ngIf="filterSaved && !savingFilterSettings" class="settings-success">Automatikusan mentve.</p>
             </ng-container>
           </section>
 
@@ -78,17 +83,16 @@
                 </div>
                 <p class="settings-note">A VIS a hardver kialakítása miatt csak teljes fényerővel használható.</p>
                 <p *ngIf="autofocusError" class="settings-error">{{ autofocusError }}</p>
-                <p *ngIf="savingAutofocusSettings" class="settings-note">Automatikus mentés…</p>
-                <p *ngIf="autofocusSaved && !savingAutofocusSettings" class="settings-success">Automatikusan mentve.</p>
               </section>
 
               <section class="advanced-group" aria-labelledby="height-offset-settings-title">
                 <h4 class="advanced-group-title" id="height-offset-settings-title">Magasság-eltolások</h4>
                 <p class="settings-note">
-                  Magasság-eltolás szűrő és megvilágítás szerint. Az értékek csak sikeres kézi autofókusz után kerülnek alkalmazásra.
+                  A fent kiválasztott megvilágítás–szűrő pár a 0 mm. A többi érték ehhez viszonyított eltolás.
+                  Az automatikus Z-korrekció sikeres autofókusz vagy a vezérlőpult horgony gombjával rögzített alaphelyzet után aktív.
                 </p>
                 <p *ngIf="loadingFilterSettings" class="settings-note">Betöltés…</p>
-                <div class="height-offset-table-wrapper" *ngIf="!loadingFilterSettings">
+                <div class="height-offset-table-wrapper" *ngIf="!loadingFilterSettings && !loadingAutofocusSettings">
                   <table class="height-offset-table">
                     <thead>
                       <tr><th>Szűrő</th><th *ngFor="let channel of heightOffsetChannels">{{ channel.label }}</th></tr>
@@ -98,10 +102,10 @@
                         <th scope="row">Üres szűrő</th>
                         <td *ngFor="let channel of heightOffsetChannels">
                           <span class="height-offset-input">
-                            <input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any"
-                              [(ngModel)]="filterSettings.height_offsets_mm['empty'][channel.id]"
-                              (ngModelChange)="onFilterChanged()"
-                              [disabled]="measurementActive"
+                            <input type="number" [min]="maxHeightOffsetDownMm - heightOffsetReference" [max]="maxHeightOffsetUpMm - heightOffsetReference" step="any"
+                              [ngModel]="relativeHeightOffset('empty', channel.id)"
+                              (ngModelChange)="onRelativeHeightOffsetChanged('empty', channel.id, $event)"
+                              [disabled]="measurementActive || isHeightOffsetReferenceCell('empty', channel.id)"
                               [attr.aria-label]="'Üres szűrő, ' + channel.label + ' magasság-eltolás'">
                             <span>mm</span>
                           </span>
@@ -111,10 +115,10 @@
                         <th scope="row">{{ filter.name || 'Névtelen szűrő' }}</th>
                         <td *ngFor="let channel of heightOffsetChannels">
                           <span class="height-offset-input"
-                            *ngIf="!isUnavailableHeightOffsetCombination(filter, channel.id)">
-                            <input type="number" [min]="maxHeightOffsetDownMm" [max]="maxHeightOffsetUpMm" step="any"
-                              [(ngModel)]="filterSettings.height_offsets_mm[filter.id][channel.id]"
-                              (ngModelChange)="onFilterChanged()"
+                            *ngIf="!isUnavailableHeightOffsetCombination(filter, channel.id) || isHeightOffsetReferenceCell(filter.id, channel.id)">
+                            <input type="number" [min]="maxHeightOffsetDownMm - heightOffsetReference" [max]="maxHeightOffsetUpMm - heightOffsetReference" step="any"
+                              [ngModel]="relativeHeightOffset(filter.id, channel.id)"
+                              (ngModelChange)="onRelativeHeightOffsetChanged(filter.id, channel.id, $event)"
                               [disabled]="measurementActive || isHeightOffsetReferenceCell(filter.id, channel.id)"
                               [attr.aria-label]="(filter.name || 'Névtelen szűrő') + ', ' + channel.label + ' magasság-eltolás'">
                             <span>mm</span>
@@ -124,10 +128,8 @@
                     </tbody>
                   </table>
                 </div>
-                <p class="settings-note">Megengedett tartomány: {{ maxHeightOffsetDownMm }}–{{ maxHeightOffsetUpMm }} mm.</p>
+                <p class="settings-note">A megengedett tartomány a kiválasztott 0 ponthoz igazodik. A mentett kalibráció határai: {{ maxHeightOffsetDownMm }}–{{ maxHeightOffsetUpMm }} mm a Kék–VIS alaphoz képest.</p>
                 <p *ngIf="filterError" class="settings-error">{{ filterError }}</p>
-                <p *ngIf="savingFilterSettings" class="settings-note">Automatikus mentés…</p>
-                <p *ngIf="filterSaved && !savingFilterSettings" class="settings-success">Automatikusan mentve.</p>
               </section>
             </div>
           </section>
@@ -136,6 +138,55 @@
             <h3>Kamera</h3>
             <p *ngIf="loadingCameraSettings" class="settings-note">Betöltés…</p>
             <div class="camera-settings-groups" *ngIf="!loadingCameraSettings">
+              <section class="advanced-group" aria-labelledby="camera-combination-title">
+                <h4 class="advanced-group-title" id="camera-combination-title">Megvilágítás–szűrő beállítások</h4>
+                <p class="settings-note">A kiválasztott megvilágítás és szűrő záridő- és erősítésértéke automatikusan érvénybe lép.</p>
+                <div class="camera-combination-table-wrapper">
+                  <table class="camera-combination-table">
+                    <thead>
+                      <tr class="camera-channel-headings">
+                        <th rowspan="2" class="camera-axis-corner" aria-label="A sorok a szűrőket, az oszlopok a lámpákat jelölik">
+                          <span class="camera-axis-lamp">Lámpa</span>
+                          <span class="camera-axis-filter">Szűrő</span>
+                        </th>
+                        <th *ngFor="let channel of heightOffsetChannels" colspan="2" scope="colgroup">{{ channel.label }}</th>
+                      </tr>
+                      <tr class="camera-parameter-headings">
+                        <ng-container *ngFor="let channel of heightOffsetChannels">
+                          <th scope="col">Záridő</th>
+                          <th scope="col">Erősítés</th>
+                        </ng-container>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr *ngFor="let filterRow of cameraFilterRows">
+                        <th scope="row" class="camera-filter-label">{{ filterRow.label }}</th>
+                        <td *ngFor="let channel of heightOffsetChannels" colspan="2"
+                          [class.camera-combination-unavailable]="isCameraCombinationUnavailable(filterRow.key, channel.id)">
+                          <ng-container *ngIf="cameraCombinationSettings[filterRow.key]?.[channel.id] as cell">
+                            <div class="camera-combination-cell"
+                              *ngIf="!isCameraCombinationUnavailable(filterRow.key, channel.id); else unavailableCameraCombination">
+                              <label><span class="visually-hidden">{{ channel.label }} záridő</span><input type="text" inputmode="numeric"
+                                appGroupedNumber [(ngModel)]="cell.exposure_time"
+                                [min]="cameraParameterLimit('ExposureTime')?.min ?? 1" [max]="cameraParameterLimit('ExposureTime')?.max ?? null"
+                                [step]="cameraParameterLimit('ExposureTime')?.inc || 1" (ngModelChange)="onCameraCombinationChanged()"
+                                [disabled]="measurementActive"></label>
+                              <label><span class="visually-hidden">{{ channel.label }} erősítés</span><input type="text" inputmode="decimal"
+                                appGroupedNumber [groupedNumberDecimals]="1" [(ngModel)]="cell.gain"
+                                [min]="cameraParameterLimit('Gain')?.min ?? 0" [max]="cameraParameterLimit('Gain')?.max ?? null"
+                                [step]="cameraParameterLimit('Gain')?.inc || 'any'" (ngModelChange)="onCameraCombinationChanged()"
+                                [disabled]="measurementActive"></label>
+                            </div>
+                            <ng-template #unavailableCameraCombination>
+                              <span class="camera-combination-na">N/A</span>
+                            </ng-template>
+                          </ng-container>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
               <section class="advanced-group" aria-labelledby="camera-image-size-title">
                 <h4 class="advanced-group-title" id="camera-image-size-title">Kép méret</h4>
                 <label class="camera-override-setting">
@@ -195,8 +246,39 @@
               </section>
             </div>
             <p *ngIf="cameraError" class="settings-error">{{ cameraError }}</p>
-            <p *ngIf="savingCameraSettings || centeringCameraAxis" class="settings-note">Alkalmazás és mentés…</p>
-            <p *ngIf="cameraSaved && !savingCameraSettings && !centeringCameraAxis" class="settings-success">Automatikusan mentve.</p>
+          </section>
+
+          <section *ngSwitchCase="'autoMeasurement'">
+            <h3>Automata mérés</h3>
+            <p *ngIf="loadingAutoMeasurementSettings" class="settings-note">Betöltés…</p>
+            <div class="advanced-groups" *ngIf="!loadingAutoMeasurementSettings">
+              <section class="advanced-group" aria-labelledby="auto-measurement-capture-title">
+                <h4 class="advanced-group-title" id="auto-measurement-capture-title">Képmentés</h4>
+                <label class="auto-measurement-setting">
+                  <input type="checkbox" [(ngModel)]="saveAutofocusImage"
+                    (ngModelChange)="onAutoMeasurementChanged()" [disabled]="measurementActive"
+                    aria-label="Autofókusz-kép mentése">
+                  <span>Autofókusz-kép mentése</span>
+                </label>
+                <p class="settings-note">
+                  Kikapcsolva a mérési terv első, autofókuszhoz rögzített sora nem készül el,
+                  ezért fájlba és a galériába sem kerül. A sor kameraértékeit az autofókusz
+                  továbbra is használja.
+                </p>
+                <label class="auto-measurement-setting">
+                  <input type="checkbox" [(ngModel)]="checkTabletPresence"
+                    (ngModelChange)="onAutoMeasurementChanged()" [disabled]="measurementActive"
+                    aria-label="Hiányzó tabletták ellenőrzése">
+                  <span>Hiányzó tabletták ellenőrzése</span>
+                </label>
+                <p class="settings-note">
+                  Bekapcsolva a program az autofókusz nélkül folytatott tabletták előtt a beállított
+                  autofókusz-megvilágítással ellenőrzi a tabletta jelenlétét és helyzetét. Nagyon
+                  sötét tablettáknál kikapcsolható; ez nem kapcsolja ki a mentési expozíciók UV-védelmét.
+                </p>
+              </section>
+            </div>
+            <p *ngIf="autoMeasurementError" class="settings-error">{{ autoMeasurementError }}</p>
           </section>
 
           <section *ngSwitchCase="'advanced'">
@@ -233,10 +315,20 @@
 
               <section class="advanced-group" aria-labelledby="advanced-motion-title">
                 <h4 class="advanced-group-title" id="advanced-motion-title">Mozgásbeállítások</h4>
+                <label class="virtual-com-setting">
+                  <input type="checkbox" [(ngModel)]="lowerZBeforeXyMove" (ngModelChange)="onAdvancedChanged()"
+                    [disabled]="measurementActive" aria-label="X/Y mozgás előtti Z-süllyesztés">
+                  <span>X/Y mozgás előtt a Z tengely süllyesztése</span>
+                </label>
+                <p class="settings-note">
+                  Bekapcsolva a balra/jobbra/fel/le mozgás előtt a Z tengely a megadott határra
+                  süllyed, ha az aktuális koordinátája annál nagyobb.
+                </p>
                 <div class="advanced-motion-fields">
-                  <label><span>Első tabletta X koordinátája</span><span><input type="number" min="0" max="175" step="any" [(ngModel)]="firstTabletXMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
-                  <label><span>Első tabletta Y koordinátája</span><span><input type="number" min="0" max="165" step="any" [(ngModel)]="firstTabletYMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
-                  <label><span>Első tabletta Z koordinátája</span><span><input type="number" min="0" max="40" step="any" [(ngModel)]="firstTabletZMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>X/Y mozgás biztonságos Z-határa</span><span><input type="number" min="0" [max]="zTravelMaxMm" step="any" [(ngModel)]="xyMoveZLimitMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive || !lowerZBeforeXyMove" aria-label="X/Y mozgás biztonságos Z-határa"> mm</span></label>
+                  <label><span>Első tabletta X koordinátája</span><span><input type="number" min="0" [max]="firstTabletXMaxMm" step="any" [(ngModel)]="firstTabletXMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Első tabletta Y koordinátája</span><span><input type="number" min="0" [max]="firstTabletYMaxMm" step="any" [(ngModel)]="firstTabletYMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
+                  <label><span>Első tabletta Z koordinátája</span><span><input type="number" min="0" [max]="zTravelMaxMm" step="any" [(ngModel)]="firstTabletZMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
                   <label><span>Tabletták közötti távolság</span><span><input type="number" min="0.001" step="any" [(ngModel)]="tabletSpacingMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
                   <label><span>Max. magasságeltolás felfelé</span><span><input type="number" min="0.001" step="any" [(ngModel)]="maxHeightOffsetUpMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
                   <label><span>Max. magasságeltolás lefelé</span><span><input type="number" max="-0.001" step="any" [(ngModel)]="maxHeightOffsetDownMm" (ngModelChange)="onAdvancedChanged()" [disabled]="measurementActive"> mm</span></label>
@@ -244,8 +336,6 @@
               </section>
             </div>
             <p *ngIf="advancedError" class="settings-error">{{ advancedError }}</p>
-            <p *ngIf="savingAdvancedSettings" class="settings-note">Automatikus mentés…</p>
-            <p *ngIf="advancedSaved && !savingAdvancedSettings" class="settings-success">Automatikusan mentve.</p>
           </section>
 
           <section *ngSwitchCase="'lamp'">
@@ -283,8 +373,6 @@
             </p>
 
             <p *ngIf="lampError" class="settings-error">{{ lampError }}</p>
-            <p *ngIf="savingLampSettings" class="settings-note">Automatikus mentés…</p>
-            <p *ngIf="lampSaved && !savingLampSettings" class="settings-success">Automatikusan mentve.</p>
           </section>
         </ng-container>
       </main>

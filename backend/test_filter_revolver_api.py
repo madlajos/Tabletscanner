@@ -231,6 +231,34 @@ class FilterRevolverApiTests(unittest.TestCase):
         self.assertEqual(200, rotation.status_code)
         self.assertEqual(2, rotation.get_json()['position'])
 
+    def test_auto_homing_immediately_selects_configured_autofocus_filter(self):
+        settings_manager.set_settings({
+            'filter_settings': {
+                'filters': [{
+                    'id': 'blue', 'name': 'Kék',
+                    'wavelength_range': '450-500', 'color': '#0000ff',
+                }],
+                'slots': [None, None, None, 'blue', None, None],
+                'height_offsets_mm': {
+                    'empty': {channel: 0 for channel in settings_manager.LIGHT_CHANNELS},
+                    'blue': {channel: 0 for channel in settings_manager.LIGHT_CHANNELS},
+                },
+            },
+            'autofocus_settings': {
+                'channel': 'vis', 'brightness': 'full', 'filter_position': 4,
+            },
+        })
+
+        response = self.client.post('/api/home_toolhead', json={
+            'axes': ['z', 'y', 'x', 'a'],
+            'select_autofocus_filter': True,
+        })
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(4, globals.filter_revolver_position)
+        commands = self.device.command_history
+        self.assertLess(commands.index('G28 A'), commands.index('G1 A-60 F5400'))
+
     def test_select_position_uses_shortest_acknowledged_path(self):
         globals.toolhead_homed = True
         globals.homed_axes = {'x', 'y', 'z', 'a'}
@@ -302,6 +330,9 @@ class FilterRevolverApiTests(unittest.TestCase):
         self.assertEqual('vis', backend_app.light_controller.status()['active_channel'])
         self.assertTrue(response.get_json()['autofocus_reference']['available'])
         self.assertEqual(11.25, response.get_json()['autofocus_reference']['reference_z'])
+        self.assertEqual('anchor', response.get_json()['autofocus_reference']['source'])
+        height_offset_control.invalidate_for_manual_move(z_changed=False)
+        self.assertTrue(height_offset_control.status()['available'])
         filter_move_index = self.device.command_history.index('G1 A60 F5400')
         first_light_index = next(
             index for index, command in enumerate(self.device.command_history)
@@ -364,6 +395,7 @@ class FilterRevolverApiTests(unittest.TestCase):
         reference = response.get_json()['autofocus_reference']
         self.assertEqual(9.25, reference['reference_z'])
         self.assertEqual(2.0, reference['applied_offset_mm'])
+        self.assertEqual('anchor', reference['source'])
         self.assertEqual(
             settings_manager.get_settings()['autofocus_settings'],
             response.get_json()['autofocus_settings'],
@@ -414,6 +446,72 @@ class FilterRevolverApiTests(unittest.TestCase):
             ['G90', 'G1 Z8.5000', 'M400'],
             self.device.command_history[-3:],
         )
+
+    def test_vis_activation_replaces_255_or_365_filter_with_blue(self):
+        globals.toolhead_homed = True
+        globals.homed_axes = {'x', 'y', 'z', 'a'}
+        globals.filter_revolver_homed = True
+        settings_manager.set_settings({
+            'lamp_settings': {
+                'output_selectors': dict(settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS),
+                'channels': {},
+            },
+            'filter_settings': {
+                'filters': [
+                    {'id': 'blue', 'name': 'Blue', 'wavelength_range': '400-500', 'color': '#0000ff'},
+                    {'id': 'f255', 'name': '255 nm', 'wavelength_range': '255', 'color': '#ffffff'},
+                    {'id': 'f365', 'name': '365 nm', 'wavelength_range': '365', 'color': '#ffffff'},
+                ],
+                'slots': [None, 'blue', 'f255', 'f365', None, None],
+                'height_offsets_mm': {
+                    key: {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0}
+                    for key in ('empty', 'blue', 'f255', 'f365')
+                },
+            },
+        })
+
+        for starting_position in (3, 4):
+            with self.subTest(starting_position=starting_position):
+                self.device.command_history.clear()
+                globals.filter_revolver_position = starting_position
+                response = self.client.post('/api/lights/activate', json={'channel': 'vis'})
+
+                self.assertEqual(200, response.status_code)
+                self.assertEqual(2, globals.filter_revolver_position)
+                self.assertEqual(2, response.get_json()['filter_revolver']['position'])
+                move_index = next(
+                    index for index, command in enumerate(self.device.command_history)
+                    if command.startswith('G1 A')
+                )
+                vis_on_index = self.device.command_history.index('M106 P0 S255')
+                self.assertLess(move_index, vis_on_index)
+
+    def test_vis_activation_leaves_rgb_filter_in_place(self):
+        globals.filter_revolver_homed = True
+        globals.filter_revolver_position = 2
+        settings_manager.set_settings({
+            'lamp_settings': {
+                'output_selectors': dict(settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS),
+                'channels': {},
+            },
+            'filter_settings': {
+                'filters': [
+                    {'id': 'blue', 'name': 'Blue', 'wavelength_range': '400-500', 'color': '#0000ff'},
+                ],
+                'slots': [None, 'blue', None, None, None, None],
+                'height_offsets_mm': {
+                    'empty': {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                    'blue': {'uv255': 0, 'uv310': 0, 'uv365': 0, 'vis': 0},
+                },
+            },
+        })
+
+        response = self.client.post('/api/lights/activate', json={'channel': 'vis'})
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, globals.filter_revolver_position)
+        self.assertFalse(any(command.startswith('G1 A') for command in self.device.command_history))
+        self.assertIsNone(response.get_json()['filter_revolver'])
 
 
 if __name__ == '__main__':

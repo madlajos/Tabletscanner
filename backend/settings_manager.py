@@ -23,7 +23,7 @@ def get_base_path():
     return os.path.dirname(__file__)
 
 DEFAULT_SETTINGS_PATH = os.path.join(get_base_path(), 'settings.json')
-SETTINGS_SCHEMA_VERSION = 9
+SETTINGS_SCHEMA_VERSION = 13
 UV_LAMP_CHANNELS = ('uv255', 'uv310', 'uv365')
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 AUTOFOCUS_BRIGHTNESS_MODES = ('dimmed', 'full')
@@ -32,6 +32,7 @@ FILTER_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
 FILTER_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
 MAX_CONFIGURED_FILTERS = 100
 EMPTY_FILTER_KEY = 'empty'
+CAMERA_FILTER_GROUPS = ('empty', 'rgb', 'filter_255nm', 'filter_365nm')
 HEIGHT_OFFSET_REFERENCE_FILTER_NAMES = frozenset(('kék', 'blue'))
 VIS_INCOMPATIBLE_FILTER_NAMES = frozenset(('255nm', '265nm', '365nm'))
 DEFAULT_MAX_HEIGHT_OFFSET_UP_MM = 5.0
@@ -52,10 +53,14 @@ LAMP_SETTING_FIELDS = (
 DEFAULT_CAPTURE_EXPOSURE_TIME = 100000.0
 DEFAULT_CAPTURE_GAIN = 0.0
 DEFAULT_CAPTURE_GAMMA = 1.0
+DEFAULT_SAVE_AUTOFOCUS_IMAGE = True
+DEFAULT_CHECK_TABLET_PRESENCE = True
 DEFAULT_FIRST_TABLET_X_MM = 2.9
 DEFAULT_FIRST_TABLET_Y_MM = 0.0
 DEFAULT_FIRST_TABLET_Z_MM = 20.0
 DEFAULT_TABLET_SPACING_MM = 18.3
+DEFAULT_LOWER_Z_BEFORE_XY_MOVE = True
+DEFAULT_XY_MOVE_Z_LIMIT_MM = 35.0
 DEFAULT_CAMERA_IMAGE_WIDTH = 4000
 DEFAULT_CAMERA_IMAGE_HEIGHT = 4000
 TRAY_GRID_SIZE = 10
@@ -65,10 +70,100 @@ Z_TRAVEL_MAX_MM = 40.0
 # Allow sub-millimetre calibration rounding at the tray edge. Motion commands
 # remain clamped to the exact per-axis limits.
 TRAY_EDGE_CALIBRATION_TOLERANCE_MM = 0.5
+# Keep decimal values displayed by the UI valid at the inclusive tray edge
+# despite binary floating-point representation (for example 0.8 + 9 * 18.3).
+TRAY_GEOMETRY_EPSILON_MM = 1e-9
 
 
 class TrayGeometryError(ValueError):
     """Raised when the configured 10 x 10 tray exceeds the motion envelope."""
+
+
+def default_camera_combination_settings(filter_settings=None, camera_params=None):
+    """Create exposure/gain values for the four operator-facing filter groups."""
+    camera_params = camera_params if isinstance(camera_params, dict) else {}
+    cell = {
+        'exposure_time': _finite_number(camera_params.get('ExposureTime'), DEFAULT_CAPTURE_EXPOSURE_TIME),
+        'gain': _finite_number(camera_params.get('Gain'), DEFAULT_CAPTURE_GAIN),
+    }
+    return {key: {channel: copy.deepcopy(cell) for channel in LIGHT_CHANNELS} for key in CAMERA_FILTER_GROUPS}
+
+
+def camera_filter_group(filter_settings, filter_position):
+    """Map the physical empty/RGB/255 nm/365 nm filters to one camera row."""
+    if not isinstance(filter_position, int) or isinstance(filter_position, bool):
+        return None
+    slots = filter_settings.get('slots') if isinstance(filter_settings, dict) else None
+    filters = filter_settings.get('filters') if isinstance(filter_settings, dict) else None
+    if not isinstance(slots, list) or not isinstance(filters, list) or not 1 <= filter_position <= len(slots):
+        return None
+    filter_id = slots[filter_position - 1]
+    if filter_id is None:
+        return 'empty'
+    definition = next((item for item in filters if isinstance(item, dict) and item.get('id') == filter_id), None)
+    if not definition:
+        return None
+    normalized = str(definition.get('name', '')).casefold().replace(' ', '').replace('-', '')
+    normalized = normalized.replace('é', 'e').replace('ö', 'o').replace('ő', 'o')
+    if normalized in ('kek', 'k�k', 'blue', 'zold', 'z�ld', 'green', 'piros', 'red'):
+        return 'rgb'
+    if normalized in ('255nm', '265nm'):
+        return 'filter_255nm'
+    if normalized == '365nm':
+        return 'filter_365nm'
+    return None
+
+
+def validate_camera_combination_settings(payload, filter_settings):
+    expected = default_camera_combination_settings()
+    if not isinstance(payload, dict) or set(payload) != set(expected):
+        raise ValueError('Camera combination settings must contain every configured filter exactly once.')
+    normalized = {}
+    for filter_key in expected:
+        row = payload.get(filter_key)
+        if not isinstance(row, dict) or set(row) != set(LIGHT_CHANNELS):
+            raise ValueError('Every camera combination row must contain all four wavelengths.')
+        normalized[filter_key] = {}
+        for channel in LIGHT_CHANNELS:
+            cell = row[channel]
+            if not isinstance(cell, dict) or set(cell) != {'exposure_time', 'gain'}:
+                raise ValueError('Every camera combination must contain exposure_time and gain.')
+            exposure = _finite_number(cell['exposure_time'], None)
+            gain = _finite_number(cell['gain'], None)
+            if exposure is None or exposure <= 0 or gain is None or gain < 0:
+                raise ValueError('Exposure must be positive and gain must be non-negative.')
+            normalized[filter_key][channel] = {'exposure_time': exposure, 'gain': gain}
+    return normalized
+
+
+def reconcile_camera_combination_settings(payload, filter_settings, camera_params=None):
+    """Preserve known cells and seed newly configured filters from global values."""
+    defaults = default_camera_combination_settings(camera_params=camera_params)
+    if not isinstance(payload, dict):
+        return defaults
+    for filter_key, row in defaults.items():
+        source_row = payload.get(filter_key)
+        # Compatibility with the first unreleased schema-v10 draft, which
+        # stored one row per filter ID instead of the shared RGB/UV groups.
+        if not isinstance(source_row, dict) and isinstance(filter_settings, dict):
+            matching_ids = []
+            for position in range(1, len(filter_settings.get('slots', [])) + 1):
+                if camera_filter_group(filter_settings, position) == filter_key:
+                    candidate = filter_settings['slots'][position - 1]
+                    if candidate and candidate not in matching_ids:
+                        matching_ids.append(candidate)
+            source_row = next((payload.get(key) for key in matching_ids if isinstance(payload.get(key), dict)), None)
+        if not isinstance(source_row, dict):
+            continue
+        for channel in LIGHT_CHANNELS:
+            source = source_row.get(channel)
+            if not isinstance(source, dict):
+                continue
+            exposure = _finite_number(source.get('exposure_time'), None)
+            gain = _finite_number(source.get('gain'), None)
+            if exposure is not None and exposure > 0 and gain is not None and gain >= 0:
+                row[channel] = {'exposure_time': exposure, 'gain': gain}
+    return defaults
 
 
 def _finite_number(value, default):
@@ -123,31 +218,29 @@ def validate_capture_plan(value):
         if not isinstance(row, dict):
             raise ValueError('Each capture plan row must be an object.')
         wavelength = row.get('wavelength')
+        brightness = row.get('brightness')
         filter_position = row.get('filter_position')
         exposure_time = _finite_number(row.get('exposure_time'), None)
         gain = _finite_number(row.get('gain'), None)
-        gamma = _finite_number(row.get('gamma'), None)
         if wavelength not in LIGHT_CHANNELS:
             raise ValueError('Capture plan contains an unknown wavelength.')
+        if brightness not in AUTOFOCUS_BRIGHTNESS_MODES:
+            raise ValueError('Capture plan brightness must be dimmed or full.')
+        if wavelength == 'vis' and brightness != 'full':
+            raise ValueError('VIS capture plan rows must use full brightness.')
         if isinstance(filter_position, bool) or not isinstance(filter_position, int) or filter_position not in FILTER_POSITIONS:
             raise ValueError('Capture plan filter position must be an integer from 1 to 6.')
         if exposure_time is None or exposure_time <= 0:
             raise ValueError('Capture plan exposure time must be a positive finite number.')
         if gain is None or gain < 0:
             raise ValueError('Capture plan gain must be a non-negative finite number.')
-        if gamma is None or gamma <= 0:
-            raise ValueError('Capture plan gamma must be a positive finite number.')
         normalized_rows.append({
             'wavelength': wavelength,
+            'brightness': brightness,
             'filter_position': filter_position,
             'exposure_time': exposure_time,
             'gain': gain,
-            'gamma': gamma,
         })
-    # Row 1 is the fixed autofocus reference. Normalize older/direct API
-    # payloads so the persisted and runtime plan cannot bypass the UI lock.
-    normalized_rows[0]['wavelength'] = 'vis'
-    normalized_rows[0]['filter_position'] = 1
     return normalized_rows
 
 
@@ -344,6 +437,8 @@ def validate_motion_simulation_settings(payload):
     """Validate advanced motion, tray geometry, and filter-height preferences."""
     required_fields = {
         'use_virtual_com_port',
+        'lower_z_before_xy_move',
+        'xy_move_z_limit_mm',
         'max_height_offset_up_mm',
         'max_height_offset_down_mm',
         'first_tablet_x_mm',
@@ -356,6 +451,12 @@ def validate_motion_simulation_settings(payload):
     enabled = payload['use_virtual_com_port']
     if not isinstance(enabled, bool):
         raise ValueError('use_virtual_com_port must be a boolean.')
+    lower_z_before_xy_move = payload['lower_z_before_xy_move']
+    if not isinstance(lower_z_before_xy_move, bool):
+        raise ValueError('lower_z_before_xy_move must be a boolean.')
+    xy_move_z_limit = _finite_number(payload['xy_move_z_limit_mm'], None)
+    if xy_move_z_limit is None or not 0 <= xy_move_z_limit <= Z_TRAVEL_MAX_MM:
+        raise ValueError('XY move Z limit must be between 0 and 40 mm.')
     max_up = _finite_number(payload['max_height_offset_up_mm'], None)
     max_down = _finite_number(payload['max_height_offset_down_mm'], None)
     if max_up is None or max_up <= 0:
@@ -378,12 +479,17 @@ def validate_motion_simulation_settings(payload):
     last_y = first_y + (TRAY_GRID_SIZE - 1) * spacing
     tray_x_limit = X_TRAVEL_MAX_MM + TRAY_EDGE_CALIBRATION_TOLERANCE_MM
     tray_y_limit = Y_TRAVEL_MAX_MM + TRAY_EDGE_CALIBRATION_TOLERANCE_MM
-    if last_x > tray_x_limit or last_y > tray_y_limit:
+    if (
+        last_x > tray_x_limit + TRAY_GEOMETRY_EPSILON_MM
+        or last_y > tray_y_limit + TRAY_GEOMETRY_EPSILON_MM
+    ):
         raise TrayGeometryError(
             'The 10 x 10 tray coordinates must stay within the X/Y travel limits.'
         )
     return {
         'use_virtual_com_port': enabled,
+        'lower_z_before_xy_move': lower_z_before_xy_move,
+        'xy_move_z_limit_mm': xy_move_z_limit,
         'max_height_offset_up_mm': max_up,
         'max_height_offset_down_mm': max_down,
         'first_tablet_x_mm': first_x,
@@ -402,6 +508,10 @@ def migrate_settings(settings):
     Schema v8 expands the former per-filter height value into a
     filter-by-wavelength matrix. The current calibration zero is blue-filter/VIS.
     Schema v9 adds a validated autofocus light/brightness/filter selection.
+    Schema v10 adds exposure/gain values for every filter/wavelength pair.
+    Schema v11 adds configurable Z lowering before X/Y motion. Schema v12
+    stores UV brightness per capture-plan row and removes per-row gamma.
+    Schema v13 makes saving the autofocus reference row configurable.
     """
     if not isinstance(settings, dict):
         raise ValueError('Settings root must be a JSON object.')
@@ -432,6 +542,28 @@ def migrate_settings(settings):
             changed = True
         if not isinstance(migrated.get('autofocus_settings'), dict):
             migrated['autofocus_settings'] = default_autofocus_settings()
+            changed = True
+        advanced_settings = migrated.get('advanced_settings')
+        if not isinstance(advanced_settings, dict):
+            advanced_settings = {}
+            migrated['advanced_settings'] = advanced_settings
+            changed = True
+        if 'lower_z_before_xy_move' not in advanced_settings:
+            advanced_settings['lower_z_before_xy_move'] = DEFAULT_LOWER_Z_BEFORE_XY_MOVE
+            changed = True
+        if 'xy_move_z_limit_mm' not in advanced_settings:
+            advanced_settings['xy_move_z_limit_mm'] = DEFAULT_XY_MOVE_Z_LIMIT_MM
+            changed = True
+        auto_measurement = migrated.get('auto_measurement_settings')
+        if not isinstance(auto_measurement, dict):
+            auto_measurement = {}
+            migrated['auto_measurement_settings'] = auto_measurement
+            changed = True
+        if not isinstance(auto_measurement.get('save_autofocus_image'), bool):
+            auto_measurement['save_autofocus_image'] = DEFAULT_SAVE_AUTOFOCUS_IMAGE
+            changed = True
+        if not isinstance(auto_measurement.get('check_tablet_presence'), bool):
+            auto_measurement['check_tablet_presence'] = DEFAULT_CHECK_TABLET_PRESENCE
             changed = True
         return migrated, changed
     if not isinstance(current_version, int) or current_version < 1 or current_version > SETTINGS_SCHEMA_VERSION:
@@ -618,6 +750,56 @@ def migrate_settings(settings):
     if current_version < 9:
         migrated['autofocus_settings'] = default_autofocus_settings()
 
+    if current_version < 10:
+        migrated['camera_combination_settings'] = default_camera_combination_settings(
+            migrated.get('filter_settings'), migrated.get('camera_params')
+        )
+
+    if current_version < 11:
+        advanced_settings = migrated.get('advanced_settings')
+        if not isinstance(advanced_settings, dict):
+            advanced_settings = {}
+        advanced_settings.setdefault('lower_z_before_xy_move', DEFAULT_LOWER_Z_BEFORE_XY_MOVE)
+        advanced_settings.setdefault('xy_move_z_limit_mm', DEFAULT_XY_MOVE_Z_LIMIT_MM)
+        migrated['advanced_settings'] = advanced_settings
+
+    if current_version < 12:
+        auto_measurement = migrated.get('auto_measurement_settings')
+        if not isinstance(auto_measurement, dict):
+            auto_measurement = {}
+        capture_plan = auto_measurement.get('capture_plan')
+        if not isinstance(capture_plan, list) or not capture_plan:
+            capture_plan = [{
+                'wavelength': 'vis',
+                'filter_position': 1,
+                'exposure_time': DEFAULT_CAPTURE_EXPOSURE_TIME,
+                'gain': DEFAULT_CAPTURE_GAIN,
+            }]
+        migrated_plan = []
+        for row in capture_plan:
+            if not isinstance(row, dict):
+                migrated_plan.append(row)
+                continue
+            migrated_row = copy.deepcopy(row)
+            wavelength = migrated_row.get('wavelength')
+            migrated_row['brightness'] = 'full' if wavelength == 'vis' else 'dimmed'
+            migrated_row.pop('gamma', None)
+            migrated_plan.append(migrated_row)
+        auto_measurement['capture_plan'] = migrated_plan
+        migrated['auto_measurement_settings'] = auto_measurement
+
+    if current_version < 13:
+        auto_measurement = migrated.get('auto_measurement_settings')
+        if not isinstance(auto_measurement, dict):
+            auto_measurement = {}
+        auto_measurement.setdefault(
+            'save_autofocus_image', DEFAULT_SAVE_AUTOFOCUS_IMAGE
+        )
+        auto_measurement.setdefault(
+            'check_tablet_presence', DEFAULT_CHECK_TABLET_PRESENCE
+        )
+        migrated['auto_measurement_settings'] = auto_measurement
+
     lamp_settings = migrated.get('lamp_settings')
     if not isinstance(lamp_settings, dict):
         lamp_settings = {}
@@ -729,6 +911,12 @@ def update_filter_settings(filter_settings, settings_path=DEFAULT_SETTINGS_PATH)
         previous_settings = _cached_settings.get('filter_settings', missing)
         _cached_settings['filter_settings'] = copy.deepcopy(filter_settings)
         previous_autofocus_settings = _cached_settings.get('autofocus_settings', missing)
+        previous_camera_combinations = _cached_settings.get('camera_combination_settings', missing)
+        _cached_settings['camera_combination_settings'] = reconcile_camera_combination_settings(
+            None if previous_camera_combinations is missing else previous_camera_combinations,
+            filter_settings,
+            _cached_settings.get('camera_params'),
+        )
         autofocus_settings = (
             default_autofocus_settings()
             if previous_autofocus_settings is missing
@@ -757,7 +945,29 @@ def update_filter_settings(filter_settings, settings_path=DEFAULT_SETTINGS_PATH)
                 _cached_settings.pop('autofocus_settings', None)
             else:
                 _cached_settings['autofocus_settings'] = previous_autofocus_settings
+            if previous_camera_combinations is missing:
+                _cached_settings.pop('camera_combination_settings', None)
+            else:
+                _cached_settings['camera_combination_settings'] = previous_camera_combinations
             logging.error("Failed to save filter settings: %s", error)
+            return False
+
+
+def update_camera_combination_settings(settings, settings_path=DEFAULT_SETTINGS_PATH):
+    """Persist a validated combination matrix under the shared settings lock."""
+    global _cached_settings
+    with _settings_lock:
+        previous = _cached_settings.get('camera_combination_settings')
+        _cached_settings['camera_combination_settings'] = copy.deepcopy(settings)
+        try:
+            _write_settings_atomic(settings_path, _cached_settings)
+            return True
+        except Exception as error:
+            if previous is None:
+                _cached_settings.pop('camera_combination_settings', None)
+            else:
+                _cached_settings['camera_combination_settings'] = previous
+            logging.error('Failed to save camera combination settings: %s', error)
             return False
 
 

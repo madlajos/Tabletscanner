@@ -1,6 +1,7 @@
 <div class="auto-measurement">
-  <!-- MEASUREMENT NAME -->
-  <div class="measurement-name-row">
+  <div class="measurement-destination-row">
+    <!-- MEASUREMENT NAME -->
+    <div class="measurement-name-row">
     <label for="measurementName">Mérés neve</label>
     <input
       id="measurementName"
@@ -10,10 +11,10 @@
       [disabled]="measurementActive"
       placeholder="Adja meg a mérés nevét..."
     />
-  </div>
+    </div>
 
-  <!-- SAVE DIRECTORY -->
-  <div class="save-location-row">
+    <!-- SAVE DIRECTORY -->
+    <div class="save-location-row">
     <label for="saveLocation">Mentési hely</label>
     <div class="save-location-input-group">
       <input
@@ -35,13 +36,22 @@
         ...
       </button>
     </div>
+    </div>
   </div>
 
   <section class="capture-plan-section">
     <div class="capture-plan-header">
       <h4>Automata mérési terv</h4>
+      <button
+        type="button"
+        class="clear-button clear-capture-plan"
+        (click)="clearCapturePlan()"
+        [disabled]="measurementActive || capturePlan.length <= 1"
+      >
+        Összes törlése
+      </button>
     </div>
-    <div class="capture-plan-scroll">
+    <div #capturePlanScroll class="capture-plan-scroll">
       <table class="capture-plan-table">
         <thead>
           <tr>
@@ -49,23 +59,25 @@
             <th class="filter-column">Szűrő</th>
             <th class="exposure-column">Záridő</th>
             <th class="gain-column">Erősítés</th>
-            <th class="gamma-column">Gamma</th>
             <th class="action-column" aria-label="Műveletek"></th>
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let row of capturePlan; let index = index; trackBy: trackCapturePlanRow">
+          <tr *ngFor="let row of capturePlan; let index = index; trackBy: trackCapturePlanRow"
+            [attr.data-plan-row-index]="index"
+            [class.active-plan-row]="measurementActive && activePlanRowIndex === index">
             <td class="wavelength-column">
-              <select [(ngModel)]="row.wavelength" (change)="onCapturePlanChanged()"
+              <select [ngModel]="getLightSelectionValue(row)"
+                (ngModelChange)="onLightSelectionChanged(row, $event)"
                 [disabled]="measurementActive || index === 0"
-                [attr.aria-label]="index === 0 ? 'Autofókusz referenciafény: VIS' : 'Mérési fény'">
-                <option *ngFor="let wavelength of wavelengthOptions" [ngValue]="wavelength">{{ lightLabels[wavelength] }}</option>
+                [attr.aria-label]="index === 0 ? 'Autofókusz referenciafény: ' + getLightSelectionLabel(row) : 'Mérési fény és fényerő'">
+                <option *ngFor="let option of lightOptions" [ngValue]="option.value">{{ option.label }}</option>
               </select>
             </td>
             <td class="filter-column">
-              <select [(ngModel)]="row.filter_position" (change)="onCapturePlanChanged()"
+              <select [ngModel]="row.filter_position" (ngModelChange)="onFilterSelectionChanged(row, $event)"
                 [disabled]="measurementActive || index === 0"
-                [attr.aria-label]="index === 0 ? 'Autofókusz referenciaszűrő: üres' : 'Mérési szűrő'">
+                [attr.aria-label]="index === 0 ? 'Autofókusz referenciaszűrő: ' + getFilterSlotLabel(row.filter_position) : 'Mérési szűrő'">
                 <option *ngFor="let filter of filterOptions" [ngValue]="filter">{{ getFilterSlotLabel(filter) }}</option>
               </select>
             </td>
@@ -93,17 +105,6 @@
                 [disabled]="measurementActive"
                 [title]="gainRange ? gainRange.min + '–' + gainRange.max + (gainRange.inc > 0 ? ', lépés: ' + gainRange.inc : ', folyamatos') : 'Nemnegatív szám'"
                 aria-label="Erősítés" />
-            </td>
-            <td class="gamma-column">
-              <input type="text" inputmode="decimal" [ngModel]="row.gamma_text"
-                (ngModelChange)="onCaptureNumberInput(row, 'gamma', $event)"
-                (keydown)="blockInvalidNumberKey($event)"
-                (paste)="blockInvalidNumberPaste($event)"
-                (blur)="onGammaBlur(row)"
-                [class.invalid]="!isGammaValid(row)"
-                [disabled]="measurementActive"
-                [title]="gammaRange ? gammaRange.min + '–' + gammaRange.max : 'Pozitív szám'"
-                aria-label="Gamma" />
             </td>
             <td class="action-column">
               <button type="button" class="delete-capture-row" (click)="removeCapturePlanRow(index)"
@@ -148,6 +149,11 @@
     </button>
   </div>
 
+  <app-analysis-recipe-selector
+    [disabled]="measurementActive"
+    (recipeSelected)="onAnalysisRecipeSelected($event)"
+  ></app-analysis-recipe-selector>
+
   <!-- SELECTION HEADER: COUNT + CLEAR BUTTON -->
   <div class="selection-header">
     <div class="selection-count">
@@ -167,6 +173,9 @@
 
   <!-- DOT GRID -->
   <div class="tablet-grid" (mouseleave)="onGridMouseLeave()" (click)="hideTabletContextMenu()">
+    <div class="toolhead-position-area">
+      <app-toolhead-position></app-toolhead-position>
+    </div>
     <div
       *ngFor="let id of tablets"
       class="tablet-dot"
@@ -184,7 +193,6 @@
     </div>
   </div>
 
-  <!-- Tablet context menu -->
   @if (tabletContextMenuVisible) {
     <div class="context-menu tablet-context-menu" 
          [style.left.px]="tabletContextMenuX"
@@ -211,36 +219,8 @@
     (click)="startMeasurement()"
     [disabled]="!canStart()"
   >
-    {{ measurementActive ? 'Mérés leállítása' : 'Mérés indítása' }}
+    <span class="start-button-primary">{{ measurementButtonPrimary }}</span>
+    <span class="start-button-detail" *ngIf="measurementButtonDetail">{{ measurementButtonDetail }}</span>
   </button>
-
-  <!-- INFO MESSAGE (shown when button is enabled) -->
-  <div class="status info" *ngIf="!measurementActive && getInfoMessage()">
-    {{ getInfoMessage() }}
-  </div>
-
-  <!-- VALIDATION MESSAGE (shown when not measuring) -->
-  <div class="status warning" *ngIf="!measurementActive && validationMessage">
-    {{ validationMessage }}
-  </div>
-
-  <!-- STATUS MESSAGES -->
-  <div class="status" *ngIf="measurementActive && !reconnecting && validationMessage">
-    {{ validationMessage }}
-  </div>
-  <div class="status" *ngIf="measurementActive && !reconnecting && !validationMessage">
-    Mérés folyamatban… ({{ currentTabletIndex }}/{{ selectedCount }})
-  </div>
-  <div class="status error" *ngIf="measurementActive && !reconnecting && errorMessage">
-    {{ errorMessage }}
-  </div>
-  <div class="status warning" *ngIf="measurementActive && reconnecting && reconnectMessage">
-    {{ reconnectMessage }}
-  </div>
-  <div class="status success" *ngIf="!measurementActive && successMessage">
-    {{ successMessage }}
-  </div>
-  <div class="status error" *ngIf="!measurementActive && errorMessage">
-    {{ errorMessage }}
-  </div>
+  <app-error-popup-list class="measurement-notifications"></app-error-popup-list>
 </div>

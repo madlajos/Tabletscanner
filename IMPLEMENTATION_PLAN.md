@@ -1,6 +1,6 @@
 # Four-channel illumination and scanner settings implementation plan
 
-Status: **Draft for approval**  
+Status: **Implemented; later operator changes supersede camera-global statements below**
 Scope: BTT Octopus V1.1 migration, four-channel light control, scanner settings UI changes,
 global camera exposure/gamma, software settings modal, and auto-measurement capture plans.  
 Audience: future AI agents and developers implementing the work in this repository.
@@ -42,7 +42,7 @@ Hardware implementation must stop at the affected phase if these decisions are u
 | D5 | **Confirmed:** channels are mutually exclusive. | Simultaneous channels affect power, optical results, heat, and safety. | Enforce mutual exclusion in firmware/backend/UI. Auto measurement always captures sequentially. |
 | D6 | **Confirmed:** assets use `255nm_on.svg`/`255nm_off.svg` and the matching `310nm`, `365nm`, and `vis` basename pattern. | The manual controls need a stable asset contract. | Centralize the names in the frontend light definition and verify the supplied files, including filename case, during Phase 4. |
 | D7 | **Confirmed:** `VIS` appears in the `Lámpa` table but has only a single-click, full-brightness control and no thermal auto-off requirement. | VIS must be visibly documented without incorrectly exposing UV dim/full or thermal-time controls. | Render a read-only VIS row with `N/A` for dimmed brightness and both cutoff-time columns; its full-brightness value is fixed at 100%. |
-| D8 | Which UV brightness mode should automatic measurement use? | Unattended full-power UV capture needs an explicit thermal and optical decision. | Until confirmed, automatic UV captures use dimmed mode; VIS captures use its normal full mode. |
+| D8 | **Confirmed design:** each automatic-measurement UV row explicitly selects dimmed or full brightness in the Fény dropdown; VIS remains full-only. | The selected mode determines both optical power and the matching thermal timeout. | Persist `brightness` in every capture-plan row and validate VIS as full-only. |
 
 The filter changer was subsequently extended with manual physical control. Positions 1–6 are
 selected, validated, persisted, sent to the backend, and included in capture metadata. Manual
@@ -147,12 +147,18 @@ Remove `/api/update-camera-settings-light` after all callers are migrated.
 export interface CapturePlanRow {
   id: string;                    // UI-only stable row identity
   wavelength: LightChannel;
+  brightness: UvBrightnessMode;
   filter_position: 1 | 2 | 3 | 4 | 5 | 6;
+  exposure_time: number;
+  gain: number;
 }
 
 export interface CaptureRequestRow {
   wavelength: LightChannel;
+  brightness: UvBrightnessMode;
   filter_position: number;
+  exposure_time: number;
+  gain: number;
 }
 ```
 
@@ -161,8 +167,8 @@ Replace `lamp_top` and `lamp_side` in `TabletStepRequest` with:
 ```json
 {
   "capture_plan": [
-    { "wavelength": "vis", "filter_position": 1 },
-    { "wavelength": "uv365", "filter_position": 3 }
+    { "wavelength": "vis", "brightness": "full", "filter_position": 1, "exposure_time": 100000, "gain": 0 },
+    { "wavelength": "uv365", "brightness": "dimmed", "filter_position": 3, "exposure_time": 100000, "gain": 0 }
   ]
 }
 ```
@@ -175,6 +181,7 @@ Return structured image information instead of requiring filename parsing:
     {
       "path": "...",
       "wavelength": "uv365",
+      "brightness": "dimmed",
       "filter_position": 3,
       "masked": false
     }
@@ -186,8 +193,8 @@ Persist the last valid capture plan under `auto_measurement_settings.capture_pla
 restart. Default to one non-deletable row using `VIS` and filter `1`, which is the safest initial
 state. Duplicated rows are allowed because repeated captures may be intentional.
 
-The capture-plan table does not gain a brightness column in this scope. Until D8 is explicitly
-changed, a UV capture activates its channel in `dimmed` mode and uses that mode's timeout.
+The capture-plan table keeps brightness inside the Fény dropdown instead of adding a separate
+column. Each UV wavelength has Tompított and Teljes choices; VIS has only Teljes.
 
 ## 4. Phased implementation
 
@@ -513,8 +520,8 @@ Tasks:
 - [ ] For each row: record/select the placeholder filter position, activate the wavelength, wait
       its configured settle time, run the UV exposure gate when applicable, capture, attach
       wavelength/filter metadata, and turn the channel off in `finally`.
-- [ ] Until D8 is changed, request `dimmed` mode for UV capture-plan rows and normal full mode for
-      VIS rows. Full-power unattended UV capture must not be introduced implicitly.
+- [ ] Activate each UV capture-plan row with its validated `brightness` mode and the corresponding
+      safety timeout; VIS rows remain full-only.
 - [ ] Use the validated **Fókusz** selection for autofocus. Temporary VIS may still be used by the
       separate contour/background fallback paths; do not save an extra VIS image unless it is in
       the plan.

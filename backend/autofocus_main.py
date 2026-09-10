@@ -9,7 +9,6 @@ import numpy as np
 
 import globals
 from motioncontrols import move_relative, get_toolhead_position  # (get_toolhead_position lehet unused, hagyom)
-from cameracontrol import converter
 import porthandler
 
 from autofocus_back import (
@@ -325,50 +324,13 @@ def maybe_dump_debug(debug: bool, debug_buffer, error_code: str) -> None:
 # Camera
 # ---------------------------------------------------------------------
 def acquire_frame(timeout_ms=2000, retries=2):
-    from pypylon import pylon
-
     cam = globals.camera
     if cam is None or not cam.IsOpen():
         raise RuntimeError("Camera not ready")
-
-    lock = globals.grab_lock
-    attempts = max(1, int(retries) + 1)
-    last_error = None
-
-    with lock:
-        if not cam.IsGrabbing():
-            try:
-                cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-            except Exception as e:
-                raise RuntimeError(f"Camera is not grabbing and could not be started: {e}")
-
-        for attempt in range(attempts):
-            grab_result = None
-            try:
-                grab_result = cam.RetrieveResult(int(timeout_ms), pylon.TimeoutHandling_ThrowException)
-                if not grab_result.GrabSucceeded():
-                    last_error = RuntimeError("Grab failed")
-                    continue
-
-                frame_bgr = converter.Convert(grab_result).GetArray()
-                return frame_bgr.copy()
-
-            except Exception as e:
-                last_error = e
-
-            finally:
-                try:
-                    if grab_result is not None:
-                        grab_result.Release()
-                except Exception:
-                    pass
-
-            if attempt < attempts - 1:
-                time.sleep(0.05)
-
-    if last_error:
-        raise RuntimeError(str(last_error))
-    raise RuntimeError("Grab failed")
+    from cameracontrol import grab_and_convert_frame, suppress_preview_grabs
+    with suppress_preview_grabs():
+        with globals.grab_lock:
+            return grab_and_convert_frame(cam, timeout_ms=timeout_ms, retries=retries)
 
 
 # ---------------------------------------------------------------------

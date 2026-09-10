@@ -48,7 +48,8 @@ Python backend from its resources directory.
 - The scanner workspace combines `motion-control`, `camera-control`, `image-viewer`, and
   `auto-measurement` components.
 - Shared scanner state is held in RxJS subjects in `shared.service.ts`. Recipe state is held in
-  `services/pipeline-state.service.ts`.
+  `services/pipeline-state.service.ts`. Automatic-measurement completion and local error notices
+  are published through shared state into the stacked notification area below its start button.
 - API calls are split between services and feature components. All use the hard-coded base URL
   in `api-config.ts`: `http://localhost:5000/api`.
 - The recipe editor fetches its step catalog from the backend, so the Python catalog is the
@@ -85,7 +86,9 @@ The recipe system is a linear primary pipeline with limited secondary inputs:
    enforced by the backend validator/engine; the frontend applies its own compatibility rules.
 5. `pipeline_engine.py` executes the shared data dictionary step by step and serializes preview
    outputs for the API.
-6. `recipe_manager.py` and `calibration_manager.py` persist JSON data.
+6. `recipe_manager.py` and `calibration_manager.py` persist JSON data. Recipe folders are
+   organizational metadata in `recipes/.recipe-folders.json`; recipe documents remain schema-v1
+   JSON files and deleting a folder never deletes its recipes.
 
 On the UI side, `models/pipeline.models.ts`, `recipe.service.ts`, and
 `pipeline-state.service.ts` mirror and consume those contracts.
@@ -98,7 +101,8 @@ On the UI side, `models/pipeline.models.ts`, `recipe.service.ts`, and
 | `backend/cameracontrol.py` | Camera connection, properties, acquisition, conversion, and streaming |
 | `backend/porthandler.py` | Serial discovery, locking, writes, acknowledgements, and timeouts |
 | `backend/motioncontrols.py` | Homing, position queries, and motion G-code helpers |
-| `backend/filter_capture_series.py` | BGR filter-series naming, slot resolution, and cooperative cancellation state |
+| `backend/filter_capture_series.py` | RGB/UV filter-series naming, slot resolution, and cooperative cancellation state |
+| `backend/filter_series_camera.py` | Fresh still acquisition with per-frame illumination and UV deadline checks |
 | `backend/autofocus_main.py` | Main autofocus and tablet-presence logic |
 | `backend/pipeline_*.py` | Pipeline domain model, catalog, validation, and execution |
 | `backend/proc_elements/` | Individual image-processing operations |
@@ -142,15 +146,69 @@ The UI sends motion, light, camera, and capture requests to Flask. Serial access
 with `porthandler.motion_lock`; camera grabs use `globals.grab_lock`. Automatic measurement is
 driven tablet by tablet by the UI through `POST /api/auto_measurement/step`, rather than by a
 durable backend job queue. Progress and reconnect state therefore currently live in the Angular
-component.
+component. An early progress poll returns a non-error `pending` snapshot until the corresponding
+step worker registers the request. Running snapshots also expose the active plan row and nonfatal
+Z-clamp warnings so the plan can follow the hardware and use the common warning presentation.
 
-The manual **Automatikus BGR mérés** action under **Mentés helye** runs one acknowledged
-Kék→Zöld→Piros filter sequence through `POST /api/bgr-capture-series`. It applies the same
-autofocus-referenced Z-offset path as a manual filter selection and saves one shared-index JPEG
-set named from the selected folder. If that folder is completely empty, the configured manual
-autofocus workflow runs first and establishes the Z-offset reference. A second button press
-requests cooperative cancellation, including during autofocus, after the current safe hardware
-step.
+The seamless **255 / 310 / 365 / VIS / RGB+UV** control below the filter rotation controls sends
+the selected wavelengths, in that order, to `POST /api/bgr-capture-series`. No lamp needs to be
+active before starting. Each selected UV wavelength runs the complete Piros→Zöld→Kék sequence
+and then its matching UV filter: **255 nm for 255/310 nm illumination** and **365 nm for 365 nm
+illumination**. UV selections use their configured dimmed brightness and thermal timeout. VIS
+runs Piros→Zöld→Kék only. Required filters must be assigned to wheel slots before starting.
+
+The sequence uses the existing anchored/autofocused Z reference, running the configured manual
+autofocus first only when no reference is available. Each filter move receives its calibrated
+Z correction. Images use wavelength-qualified shared-index names such as
+`folder_1_uv255_r.jpg`, `folder_1_uv255_uv.jpg`, and `folder_1_vis_b.jpg`, preventing selected
+wavelengths from overwriting one another. Existing and partial sets reserve their index.
+The active capture button pulses like homing; pressing it again requests cancellation, including
+during autofocus. The shared capture service retains operation ownership until the backend
+finishes, even when the scanner view is closed.
+
+Automatic Z corrections clamp to the physical Z limits without changing the reference. A
+dismissible yellow warning reports the missing correction, and capture continues at the limit.
+JPEG ImageDescription metadata includes an `Errors` list (for example,
+`["ZOffset difference: -1.5 mm"]`); the signed difference is requested Z minus actual Z.
+Manual captures obtain wavelength from the active backend lamp, not client defaults.
+
+The shared gallery retains the latest 24 images across scanner view changes. Filter-series
+progress is available through `GET /api/bgr-capture-series/status` and publishes saved frames
+as they complete, including partial results after cancellation or failure. Thumbnail badges
+show the recorded wavelength and filter; the tray badge appears only when captured XY matches
+a configured tray center within 0.01 mm. Metadata is returned with new captures and can be
+read from saved JPEG EXIF through `GET /api/image-metadata?path=...`.
+Hardware acceptance should include clamping at both Z limits, dismissing the warning while
+capture continues, checking the saved `Errors` and wavelength fields, and comparing tray badges
+before and after a 0.1 mm manual XY move.
+
+For capture, illumination is switched off during filter/Z motion and JPEG saving, then activated
+afresh for each image. Acquisition restarts under the camera lock to discard old preview frames.
+After acknowledged filter and Z completion, a 0.5-second settling interval precedes illumination.
+The lamp then gets another 0.25 seconds to settle. The first newly acquired frame is discarded as
+an exposure-scaled guard frame; the following frame is saved, so its exposure starts only after a
+complete camera cycle under the selected lamp. Live view continues acquiring during autofocus
+movement and calculation, filter/Z motion, settling, and saving, including dark frames when the
+lamps are off. Only individual autofocus grabs and the protected guard/capture pair suppress
+preview acquisition; their acquired frames are shared with the live view without competing for
+the camera queue. The stream does not wait on an owned camera lock to publish these frames. UV
+thermal timeouts remain enabled; both acquisitions must fit the safety window, exposures that cannot
+fit are rejected, and frames acquired after illumination is lost are not saved. A transient camera
+grab receives one new, fully safety-checked attempt. Each acquisition is bounded to 30 seconds
+(exposure below 29 seconds). Cancellation and errors attempt to switch every lamp off. After a
+successful RGB or RGB+UV series, VIS is activated; this leaves VIS selected after a VIS cycle and
+replaces UV with VIS after a UV cycle.
+
+The Settings → Kamera panel stores ExposureTime and Gain for four filter groups (empty,
+shared Kék/Zöld/Piros, 255 nm, and 365 nm) across all four illumination channels. Switching either the active lamp or filter applies that matrix cell
+to the camera and updates the scanner camera controls; Gamma remains global. Schema v10 seeds
+the matrix from the previous global ExposureTime/Gain values and preserves unchanged cells when
+filters are edited. Schema v11 enables a configurable pre-X/Y collision guard: when selected under
+**Beállítások → Haladó**, an X/Y move first lowers Z to 35 mm by default if it is above that limit.
+The limit is editable from 0–40 mm. Schema v13 adds automatic-measurement toggles for the
+autofocus-reference image and missing-tablet check while preserving both former enabled behaviors
+during migration. Capture metadata rounds XY/Z to four decimals, exposure to an integer, and
+gain/gamma to four decimals before JSON is embedded in EXIF.
 
 The configured tray is a 10×10 grid. Motion limits are currently 0–175 mm on X, 0-165mm on Y, and 0–40 mm on
 Z. Treat those limits, homing order, lamp timeouts, and light-interlock behavior as hardware
@@ -166,19 +224,53 @@ Configure dimmed/full percentages and their UV safety timeouts in
 VIS is a single-click 100% channel without a thermal timeout.
 
 Automatic measurement requires a non-empty `capture_plan`; legacy `lamp_top`/`lamp_side` payloads
-are rejected. Each plan row records a wavelength, filter position, exposure time, gain, and gamma.
-The first row remains fixed to VIS with empty filter slot 1 for capture, and its three camera values
-also supply autofocus. The autofocus illumination, UV brightness mode, and populated filter-wheel
-slot are selected separately under **Beállítások → Fókusz**. Live camera limits and increments
+are rejected. Each plan row records a wavelength, brightness mode, filter position, exposure time,
+and gain. UV rows select Tompított or Teljes in the Fény dropdown; VIS is always full brightness.
+The first row remains read-only and follows the illumination and filter combination selected under
+**Beállítások → Fókusz**; its three camera values also supply autofocus. UV brightness mode is
+selected in the same panel. Gamma remains a global camera setting. Live camera limits and increments
 validate the camera values before capture. Filter positions are stored in output metadata.
+
+Automatic measurement still homes the A axis against its physical slot-1 reference for safe,
+known positioning, then immediately rotates to the configured autofocus filter before moving to
+the first tablet.
+
+During automatic measurement, normal live acquisition continues through XY/Z and filter movement.
+Only the exact autofocus, presence-check, and capture grab is given priority over the MJPEG stream;
+that acquired frame is then published to the live view. This keeps the moving scanner visible while
+preventing preview acquisition from removing a frame required by the measurement sequence.
+Autofocus acquisition frames are not saved directly. Under **Beállítások → Automata mérés**, the
+operator can also disable saving the capture plan's first, autofocus-reference row. Its camera
+values continue to drive autofocus, but that row then creates neither a file nor a gallery item.
+The same panel can disable the missing-tablet check used on tablets where autofocus is not rerun.
+When enabled, that check explicitly restores the configured autofocus filter, illumination, and
+camera values before acquiring its frame. Each enabled planned image is published to the gallery
+as soon as it is saved. Captured metadata uses ASCII-safe escaped JSON in JPEG EXIF, so Hungarian
+filter names survive the metadata reload used by automatic-measurement thumbnails.
 
 The six revolver positions and reusable filter definitions (name, wavelength range, and display
 color) can be configured under **Beállítások → Szűrőváltó**. The **Fókusz** page stores the autofocus
 light/filter selection and a separate height offset for every configured-filter/illumination
-combination, plus the physical empty-filter row. The blue filter with VIS is the fixed 0 mm
-calibration reference; autofocus performed with another combination is rebased to that zero.
-Automatic Z corrections remain disabled until the manual autofocus button completes successfully.
-Any subsequent manual motion invalidates the autofocus reference. After the A axis is
+combination, plus the physical empty-filter row. The selected autofocus light/filter pair is
+displayed as **0 mm**, with every other cell relative to it. Changing the selection recalculates
+the display without rewriting calibration; edits are converted back to the existing blue/VIS
+master calibration, so saved settings remain compatible.
+
+Before autofocus acquisition, the backend turns illumination off, completes and settles the
+configured filter movement, applies and verifies the ExposureTime/Gain matrix cell for the
+configured autofocus light/filter pair, stops the previous preview acquisition, activates and
+settles the autofocus lamp, and only then restarts acquisition. This prevents a queued frame using
+the previously selected capture settings from becoming the first autofocus frame.
+
+Automatic Z corrections become available after successful manual autofocus or by pressing the
+**anchor button attached to the Z coordinate input**. Successful manual autofocus automatically
+activates the anchored state. The anchor records the current physical Z
+for the currently active light/filter pair without running autofocus or moving Z. It stays blue
+through filter/light corrections and XY moves; a manual Z change or a second press clears it.
+Homing, motor-off, disconnect, and filter calibration/slot changes also clear the reference.
+The runtime reference is owned by `height_offset_control.py`; `height_reference_api.py` exposes
+read-only status and explicit POST enable/disable at `/api/height-offset/reference`.
+After the A axis is
 homed—either by the regular full homing operation or separately from the Home button's
 right-click menu—the Vezérlőpult can move the physical revolver one 60° slot at a time. The UI
 updates its active filter only after the controller acknowledges the completed move.
@@ -289,6 +381,25 @@ As of this overview:
 
 These are baseline failures, not evidence that a new documentation-only change caused a
 regression.
+
+Focus-reference checks: run `python -m unittest test_height_offset_control test_height_reference_api`
+in `backend/`. The focused Angular specs are `focus-offsets.spec.ts`,
+`focus-anchor.component.spec.ts`, and `software-settings-focus.spec.ts`; these cover the displayed
+zero, saved calibration conversion, anchor toggling, and stale status responses. On hardware,
+verify autofocus with a non-blue/VIS selection, then anchor a manually adjusted Z, switch through
+several filter/light pairs and back, move XY, and jog Z. The return move must recover the anchored
+Z, XY must preserve the anchor, and the Z jog must clear it. Also verify homing, motor-off, and
+disconnect clear the anchor. No settings schema or packaging-input change is required.
+
+Filter-series checks: `python -m unittest test_filter_capture_series test_filter_series_camera test_light_control`
+covers order, wavelength mapping, autofocus/anchor reuse, cancellation, and UV deadline handling
+without hardware. `filter-capture-buttons.component.spec.ts` covers wavelength selection, button
+readiness, progress, cancellation, and retaining request ownership after view destruction. On
+hardware, verify RGB and UV capture with every wavelength selection, confirm sequence order,
+metadata/Z and wavelength-qualified filenames, test a UV timeout, and cancel during autofocus
+and capture. Confirm the Z anchor uses the normal active-button
+blue and fits the coordinate box in the desktop layout. Packaging inputs are unchanged; the new
+Python acquisition module is a static import and uses the existing Pylon dependencies.
 
 ## Reproducibility gaps to resolve early
 

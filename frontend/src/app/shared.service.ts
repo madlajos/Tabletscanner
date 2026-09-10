@@ -3,6 +3,7 @@ import { BehaviorSubject, Subject, interval, of } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { map, switchMap, tap, catchError  } from 'rxjs/operators';
 import { BASE_URL } from './api-config';
+import { CaptureMetadata } from './models/capture-metadata.models';
 
 export type AppSection = 'scanner' | 'creator' | 'applier';
 
@@ -26,9 +27,15 @@ export interface MeasurementRecord {
 
 // Interface for saved images from auto-measurement
 export interface SavedImageInfo {
+  metadata?: CaptureMetadata;
   path: string;
   tabletIndex: number;
   lightType?: 'dome' | 'bar';
+}
+
+export interface ToolbarNotice {
+  severity: 'info' | 'success' | 'error';
+  message: string;
 }
 
 
@@ -44,10 +51,24 @@ export class SharedService {
 
   private measurementActiveSubject = new BehaviorSubject<boolean>(false);
   measurementActive$ = this.measurementActiveSubject.asObservable();
+  private toolbarNoticeSubject = new BehaviorSubject<ToolbarNotice | null>(null);
+  toolbarNotice$ = this.toolbarNoticeSubject.asObservable();
 
   // Subject for emitting newly saved images (auto-measurement adds images here)
   private newSavedImageSubject = new Subject<SavedImageInfo>();
   newSavedImage$ = this.newSavedImageSubject.asObservable();
+  private readonly recentImages = new BehaviorSubject<SavedImageInfo[]>([]);
+  readonly recentSavedImages$ = this.recentImages.asObservable();
+
+  clearSavedImages(): void { this.recentImages.next([]); }
+
+  removeSavedImage(path: string): void {
+    this.recentImages.next(this.recentImages.value.filter(image => image.path !== path));
+  }
+
+  updateSavedImageMetadata(path: string, metadata: CaptureMetadata): void {
+    this.recentImages.next(this.recentImages.value.map(image => image.path === path ? { ...image, metadata } : image));
+  }
 
   setMeasurementActive(active: boolean): void {
     this.measurementActiveSubject.next(active);
@@ -57,8 +78,18 @@ export class SharedService {
     return this.measurementActiveSubject.value;
   }
 
+  setToolbarNotice(notice: ToolbarNotice): void {
+    this.toolbarNoticeSubject.next(notice);
+  }
+
+  clearToolbarNotice(): void {
+    this.toolbarNoticeSubject.next(null);
+  }
+
   // Emit a newly saved image to notify gallery components
   emitSavedImage(imageInfo: SavedImageInfo): void {
+    const key = (path: string) => path.replace(/\\/g, '/').toLowerCase();
+    this.recentImages.next([imageInfo, ...this.recentImages.value.filter(image => key(image.path) !== key(imageInfo.path))].slice(0, 24));
     this.newSavedImageSubject.next(imageInfo);
   }
 
@@ -121,11 +152,20 @@ export class SharedService {
   private motionPositionSubject = new BehaviorSubject<{ x: number | null; y: number | null; z: number | null } | null>(null);
   motionPosition$ = this.motionPositionSubject.asObservable();
 
+  // Display-only telemetry: unlike motionPosition$, this never establishes homing.
+  private reportedToolheadPositionSubject = new BehaviorSubject<{ x: number; y: number } | null>(null);
+  readonly reportedToolheadPosition$ = this.reportedToolheadPositionSubject.asObservable();
+
+  setReportedToolheadPosition(position: { x: number; y: number } | null): void {
+    this.reportedToolheadPositionSubject.next(position);
+  }
+
   // Track whether all axes are homed (xHomed && yHomed && zHomed)
   private motionHomedSubject = new BehaviorSubject<boolean>(false);
   motionHomed$ = this.motionHomedSubject.asObservable();
 
   setMotionHomed(homed: boolean): void {
+    if (!homed) this.setReportedToolheadPosition(null);
     this.motionHomedSubject.next(homed);
   }
 
@@ -134,6 +174,7 @@ export class SharedService {
   }
 
   setMotionHoming(isHoming: boolean): void {
+    if (isHoming) this.setReportedToolheadPosition(null);
     this.motionHomingStatus.next(isHoming);
   }
 
@@ -201,6 +242,7 @@ export class SharedService {
   }
 
   setMotionPlatformConnectionStatus(status: boolean): void {
+    if (!status) this.setReportedToolheadPosition(null);
     this.motionPlatformConnectionStatus.next(!!status);
     console.log(`Updated motion platform connection status to: ${status}`);
   }

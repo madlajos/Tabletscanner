@@ -10,6 +10,7 @@ import time
 import requests
 import threading
 import math
+from contextlib import contextmanager
 import globals
 from globals import app
 
@@ -25,6 +26,30 @@ converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
 
 
 opencv_display_format = 'BGR8'
+
+
+def publish_owned_preview_frame(frame_bgr):
+    """Publish an acquired frame for live view without another camera grab."""
+    if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+        return
+    globals.latest_owned_preview_image = frame_bgr.copy()
+    globals.latest_owned_preview_sequence = (
+        int(getattr(globals, 'latest_owned_preview_sequence', 0)) + 1
+    )
+
+
+@contextmanager
+def suppress_preview_grabs():
+    """Give one measurement acquisition priority without pausing motion preview."""
+    with globals.preview_grab_suppression_lock:
+        globals.preview_grab_suppression_count += 1
+    try:
+        yield
+    finally:
+        with globals.preview_grab_suppression_lock:
+            globals.preview_grab_suppression_count = max(
+                0, globals.preview_grab_suppression_count - 1
+            )
 
 
 def load_camera_profile(camera, pfs_path: str) -> dict:
@@ -135,8 +160,11 @@ def grab_and_convert_frame(camera, timeout_ms=5000, retries=2):
             # Convert BayerGR10p (or raw Bayer) -> BGR8 for OpenCV
             frame_bgr = converter.Convert(grab_result).GetArray()
 
-            # Return a copy so the frame persists after release
-            return frame_bgr.copy()
+            # Return a copy so the frame persists after release, and make the
+            # same acquisition available to an owned-operation live view.
+            frame_copy = frame_bgr.copy()
+            publish_owned_preview_frame(frame_copy)
+            return frame_copy
         except Exception as e:
             last_error = e
         finally:
@@ -190,9 +218,6 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
         app.logger.error("Camera is not open — cannot start stream.")
         return
 
-    if not cam.IsGrabbing():
-        cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-
     # Only start streaming if a previous stop wasn't already signaled.
     # This prevents a late-starting generator from overwriting a stop request.
     if not getattr(globals, "stream_running", False):
@@ -212,12 +237,53 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
     consecutive_errors = 0
     last_error_log_time = 0.0
     ERROR_LOG_INTERVAL = 5.0  # Log at most once every 5 seconds per error type
+    last_multipart_frame = getattr(globals, 'latest_preview_multipart_frame', None)
+    last_owned_preview_sequence = -1
 
     try:
         while getattr(globals, "stream_running", False):
             try:
+                if (
+                    getattr(globals, 'preview_grab_suppression_count', 0) > 0
+                    or lock.locked()
+                ):
+                    # Autofocus/measurement own the camera queue. Display the
+                    # frames they acquire instead of competing for another one.
+                    owned_sequence = int(getattr(globals, 'latest_owned_preview_sequence', 0))
+                    if owned_sequence != last_owned_preview_sequence:
+                        owned_image = getattr(globals, 'latest_owned_preview_image', None)
+                        if owned_image is not None and getattr(owned_image, 'size', 0):
+                            preview_image = owned_image
+                            if scale_factor and scale_factor != 1.0:
+                                h, w = preview_image.shape[:2]
+                                preview_image = cv2.resize(
+                                    preview_image,
+                                    (max(1, int(w * scale_factor)), max(1, int(h * scale_factor))),
+                                    interpolation=cv2.INTER_AREA,
+                                )
+                            ok, encoded = cv2.imencode(
+                                '.jpg', preview_image,
+                                [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)],
+                            )
+                            if ok:
+                                last_multipart_frame = (
+                                    b"--frame\r\n"
+                                    b"Content-Type: image/jpeg\r\n\r\n" + encoded.tobytes() + b"\r\n"
+                                )
+                                globals.latest_preview_multipart_frame = last_multipart_frame
+                                last_owned_preview_sequence = owned_sequence
+                    if last_multipart_frame is not None:
+                        yield last_multipart_frame
+                    time.sleep(0.1)
+                    continue
+
                 # Grab and convert inside the lock (short critical section)
-                with lock:
+                if not lock.acquire(blocking=False):
+                    continue
+                try:
+                    # An owner can request priority after the check above.
+                    if globals.preview_grab_suppression_count > 0:
+                        continue
                     cam = getattr(globals, "camera", None)
                     if not (cam and cam.IsOpen()):
                         app.logger.warning("Camera closed during streaming.")
@@ -225,6 +291,8 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
 
                     # Use unified grab+convert function
                     image_bgr = grab_and_convert_frame(cam, timeout_ms=5000)
+                finally:
+                    lock.release()
 
                 # Reset error counter on successful frame
                 consecutive_errors = 0
@@ -247,10 +315,12 @@ def stream_video(scale_factor: float = 1.0, jpeg_quality: int = 80):
                     continue
 
                 # Yield multipart JPEG
-                yield (
+                last_multipart_frame = (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n\r\n" + frame.tobytes() + b"\r\n"
                 )
+                globals.latest_preview_multipart_frame = last_multipart_frame
+                yield last_multipart_frame
 
             except Exception as e:
                 error_str = str(e).lower()

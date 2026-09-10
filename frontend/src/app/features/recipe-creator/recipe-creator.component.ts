@@ -6,11 +6,12 @@ import { MatIconModule } from '@angular/material/icon';
 import { Subscription } from 'rxjs';
 import { PipelineStateService } from '../../services/pipeline-state.service';
 import { RecipeService } from '../../services/recipe.service';
-import { PipelineDocument, RecipeSummary } from '../../models/pipeline.models';
+import { PipelineDocument } from '../../models/pipeline.models';
 import { StepToolboxComponent } from './step-toolbox.component';
 import { PipelineCanvasComponent } from './pipeline-canvas.component';
 import { StepInspectorComponent } from './step-inspector.component';
 import { PipelinePreviewComponent } from './pipeline-preview.component';
+import { RecipeBrowserComponent } from '../../components/recipe-browser/recipe-browser.component';
 
 @Component({
   selector: 'app-recipe-creator',
@@ -24,6 +25,7 @@ import { PipelinePreviewComponent } from './pipeline-preview.component';
     PipelineCanvasComponent,
     StepInspectorComponent,
     PipelinePreviewComponent,
+    RecipeBrowserComponent,
   ],
   templateUrl: './recipe-creator.component.html',
   styleUrls: ['./recipe-creator.component.css'],
@@ -34,14 +36,10 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
   recipeName = '';
   isDirty = false;
   showLoadDialog = false;
-  savedRecipes: RecipeSummary[] = [];
   showSaveInput = false;
   saveInputName = '';
   showNewRecipeConfirm = false;
   showOverwriteConfirm = false;
-  editingDescriptionFor: string | null = null;
-  editingDescriptionText = '';
-  showDeleteConfirm: string | null = null;
   canvasHeight = 220;
 
   private subs: Subscription[] = [];
@@ -181,12 +179,6 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
 
   onLoad(): void {
     this.showLoadDialog = !this.showLoadDialog;
-    if (this.showLoadDialog) {
-      this.recipeService.listRecipes().subscribe({
-        next: (recipes) => (this.savedRecipes = recipes),
-        error: (err) => console.error('List recipes failed:', err),
-      });
-    }
   }
 
   loadRecipe(name: string): void {
@@ -197,64 +189,11 @@ export class RecipeCreatorComponent implements OnInit, OnDestroy {
     });
   }
 
-  appendRecipe(name: string, event: Event): void {
-    event.stopPropagation();
+  appendRecipe(name: string): void {
     this.recipeService.loadRecipe(name).subscribe({
       next: (doc) => this.pipelineState.appendPipeline(doc),
       error: (err) => console.error('Append failed:', err),
     });
   }
 
-  deleteRecipe(name: string): void {
-    this.showDeleteConfirm = name;
-  }
-
-  confirmDelete(): void {
-    const name = this.showDeleteConfirm;
-    this.showDeleteConfirm = null;
-    if (!name) return;
-    this.recipeService.deleteRecipe(name).subscribe({
-      next: () => {
-        this.savedRecipes = this.savedRecipes.filter((r) => r.name !== name);
-      },
-      error: (err) => console.error('Delete failed:', err),
-    });
-  }
-
-  cancelDelete(): void {
-    this.showDeleteConfirm = null;
-  }
-
-  duplicateRecipe(name: string, event: Event): void {
-    event.stopPropagation();
-    this.recipeService.duplicateRecipe(name).subscribe({
-      next: (res) => {
-        this.recipeService.listRecipes().subscribe({
-          next: (recipes) => (this.savedRecipes = recipes),
-        });
-      },
-      error: (err) => console.error('Duplicate failed:', err),
-    });
-  }
-
-  startEditDescription(recipe: RecipeSummary, event: Event): void {
-    event.stopPropagation();
-    this.editingDescriptionFor = recipe.name;
-    this.editingDescriptionText = recipe.description || '';
-  }
-
-  saveDescription(recipe: RecipeSummary): void {
-    const newDesc = this.editingDescriptionText.trim();
-    this.editingDescriptionFor = null;
-    this.recipeService.updateRecipeDescription(recipe.name, newDesc).subscribe({
-      next: () => {
-        recipe.description = newDesc;
-      },
-      error: (err) => console.error('Description update failed:', err),
-    });
-  }
-
-  cancelEditDescription(): void {
-    this.editingDescriptionFor = null;
-  }
 }

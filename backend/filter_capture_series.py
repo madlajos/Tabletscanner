@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 import re
 import threading
+import copy
 
 
 @dataclass(frozen=True)
@@ -15,11 +16,7 @@ class FilterCaptureTarget:
     position: int
 
 
-REQUIRED_FILTERS = (
-    ("Kék", "b"),
-    ("Zöld", "g"),
-    ("Piros", "r"),
-)
+REQUIRED_FILTERS = (("Piros", "r"), ("Zöld", "g"), ("Kék", "b"))
 
 
 class FilterCaptureSeriesCoordinator:
@@ -30,15 +27,36 @@ class FilterCaptureSeriesCoordinator:
         self._cancel_event = threading.Event()
         self._running = False
         self._autofocus_in_progress = False
+        self._saved_images = []
+        self._camera_params = None
+        self._capture_id = None
 
-    def begin(self) -> bool:
+    def begin(self, capture_id=None) -> bool:
         with self._state_lock:
             if self._running:
                 return False
             self._cancel_event.clear()
             self._autofocus_in_progress = False
             self._running = True
+            self._saved_images = []
+            self._camera_params = None
+            self._capture_id = capture_id
             return True
+
+    def record_image(self, image):
+        with self._state_lock:
+            self._saved_images.append(copy.deepcopy(image))
+
+    def record_camera_params(self, camera_params):
+        with self._state_lock:
+            if self._running:
+                self._camera_params = copy.deepcopy(camera_params)
+
+    def status(self):
+        with self._state_lock:
+            return {'running': self._running, 'capture_id': self._capture_id,
+                    'saved_images': copy.deepcopy(self._saved_images),
+                    'camera_params': copy.deepcopy(self._camera_params)}
 
     def request_cancel(self) -> bool:
         with self._state_lock:
@@ -68,8 +86,12 @@ class FilterCaptureSeriesCoordinator:
             self._cancel_event.clear()
 
 
-def resolve_filter_targets(filter_settings: dict) -> list[FilterCaptureTarget]:
-    """Resolve the configured slots named Kék, Zöld, and Piros in capture order."""
+def resolve_filter_targets(filter_settings: dict, mode='rgb', channel='vis') -> list[FilterCaptureTarget]:
+    """Resolve RGB, optionally followed by the UV filter matching the start lamp."""
+    if mode not in ('rgb', 'uv_rgb'):
+        raise ValueError('Capture mode must be rgb or uv_rgb.')
+    if channel not in ('vis', 'uv255', 'uv310', 'uv365'):
+        raise ValueError('Select an active illumination channel before capture.')
     definitions = filter_settings.get("filters", [])
     slots = filter_settings.get("slots", [])
     if not isinstance(definitions, list) or not isinstance(slots, list):
@@ -82,10 +104,13 @@ def resolve_filter_targets(filter_settings: dict) -> list[FilterCaptureTarget]:
         filter_id = definition.get("id")
         name = definition.get("name")
         if isinstance(filter_id, str) and isinstance(name, str):
-            ids_by_name[name.strip().casefold()] = filter_id
+            ids_by_name[re.sub(r'[\s_-]+', '', name).casefold()] = filter_id
 
     targets: list[FilterCaptureTarget] = []
-    for name, suffix in REQUIRED_FILTERS:
+    required = list(REQUIRED_FILTERS)
+    if mode == 'uv_rgb' and channel != 'vis':
+        required.append(('255nm' if channel in ('uv255', 'uv310') else '365nm', 'uv'))
+    for name, suffix in required:
         filter_id = ids_by_name.get(name.casefold())
         if filter_id is None or filter_id not in slots:
             raise ValueError(
@@ -118,7 +143,7 @@ def capture_folder_is_empty(target_folder: str) -> bool:
 def next_capture_series_index(target_folder: str, stem: str) -> int:
     """Choose a monotonic set index without overwriting any B/G/R series image."""
     pattern = re.compile(
-        rf"^{re.escape(stem)}_(\d+)_[bgr]\.jpg$",
+        rf"^{re.escape(stem)}_(\d+)_(?:(?:uv255|uv310|uv365|vis)_)?(?:[bgr]|uv)\.jpg$",
         flags=re.IGNORECASE,
     )
     highest_index = 0
@@ -132,10 +157,13 @@ def next_capture_series_index(target_folder: str, stem: str) -> int:
     return highest_index + 1
 
 
-def capture_filename(stem: str, series_index: int, suffix: str) -> str:
+def capture_filename(stem: str, series_index: int, suffix: str, channel: str | None = None) -> str:
     """Build a filename without its JPEG extension for the shared save helper."""
     if series_index < 1:
         raise ValueError("Capture series indices start at 1.")
-    if suffix not in {"b", "g", "r"}:
-        raise ValueError("Capture suffix must be b, g, or r.")
-    return f"{stem}_{series_index}_{suffix}"
+    if suffix not in {"b", "g", "r", "uv"}:
+        raise ValueError("Capture suffix must be b, g, r, or uv.")
+    if channel is not None and channel not in ('uv255', 'uv310', 'uv365', 'vis'):
+        raise ValueError("Capture channel is invalid.")
+    channel_part = f"_{channel}" if channel else ""
+    return f"{stem}_{series_index}{channel_part}_{suffix}"

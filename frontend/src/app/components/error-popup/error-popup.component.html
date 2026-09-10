@@ -1,6 +1,11 @@
-<div class="error-popup">
+<div class="error-popup" [ngClass]="severity" [attr.role]="severity === 'error' ? 'alert' : 'status'">
     <p>{{ message }}</p>
-    <!-- Only display the close button if the error code is GENERIC -->
-    <button *ngIf="index === 'GENERIC'" type="button" class="error-close" (click)="dismiss()">x</button>
+    <button type="button" class="error-close" aria-label="Bezárás" (click)="dismiss()">×</button>
+    <div
+      *ngIf="severity === 'warning'"
+      class="warning-timer"
+      [style.animation-duration.ms]="warningDurationMs"
+      aria-hidden="true"
+    ></div>
   </div>
-  
+

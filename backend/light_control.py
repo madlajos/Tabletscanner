@@ -37,6 +37,10 @@ class LightCommandError(RuntimeError):
     pass
 
 
+class CaptureIlluminationError(RuntimeError):
+    """A frame cannot be exposed wholly within the selected lamp's safety window."""
+
+
 @dataclass(frozen=True)
 class ActiveLight:
     channel: str
@@ -158,6 +162,20 @@ class LightController:
             self._auto_turned_off = self._auto_turned_off[-10:]
             self._auto_off_event_pending = True
             return channel
+
+    def capture_remaining_seconds(self, channel, mode):
+        """Check the capture lamp without renewing or bypassing its thermal cutoff."""
+        with self._lock:
+            status = self.status()
+            if status['active_channel'] != channel or status['active_mode'] != mode:
+                raise CaptureIlluminationError('The capture illumination is no longer active.')
+            deadline = self._active.deadline
+            if deadline is None:
+                return None
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise CaptureIlluminationError('The capture illumination safety window expired.')
+            return remaining
 
     def _uv_lamp_settings(self):
         settings = self._settings_getter() or {}

@@ -74,21 +74,6 @@
           </td>
         </tr>
 
-        <tr>
-          <td colspan="3" class="bgr-capture-cell">
-            <button
-              type="button"
-              class="bgr-capture-button"
-              [class.running]="bgrCaptureInProgress"
-              (click)="toggleBgrCapture()"
-              [disabled]="bgrCaptureCancelling || (!bgrCaptureInProgress && (!isConnected || measurementActive || isAutofocusing || !otherSettings.save_location))"
-              [attr.aria-pressed]="bgrCaptureInProgress"
-              [attr.aria-label]="bgrCaptureInProgress ? 'BGR képsorozat megszakítása' : 'Automatikus BGR képsorozat indítása'"
-            >
-              {{ bgrCaptureCancelling ? 'Megszakítás…' : (bgrCaptureInProgress ? 'BGR mérés leállítása' : 'Automatikus BGR mérés') }}
-            </button>
-          </td>
-        </tr>
       </tbody>
     </table>
   </section>
@@ -106,7 +91,7 @@
         <tr>
           <td>Záridő</td>
           <td>
-            <input type="number" inputmode="numeric"
+            <input type="text" inputmode="numeric" appGroupedNumber
               [step]="cameraRange('ExposureTime')?.inc || 1"
               [min]="cameraRange('ExposureTime')?.min ?? 0"
               [max]="cameraRange('ExposureTime')?.max ?? null"
@@ -120,7 +105,7 @@
         <tr>
           <td>Erősítés</td>
           <td>
-            <input type="number" inputmode="decimal"
+            <input type="text" inputmode="decimal" appGroupedNumber
               [step]="cameraRange('Gain')?.inc || 'any'"
               [min]="cameraRange('Gain')?.min ?? 0"
               [max]="cameraRange('Gain')?.max ?? null"
@@ -134,7 +119,7 @@
         <tr>
           <td>Gamma</td>
           <td>
-            <input type="number" inputmode="decimal"
+            <input type="text" inputmode="decimal" appGroupedNumber
               [step]="cameraRange('Gamma')?.inc || 'any'"
               [min]="cameraRange('Gamma')?.min ?? 0"
               [max]="cameraRange('Gamma')?.max ?? null"
