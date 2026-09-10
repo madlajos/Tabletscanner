@@ -3,9 +3,12 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { BASE_URL } from '../api-config';
 import { CaptureRequestRow } from '../models/light.models';
+import { CaptureWarning } from '../models/capture-metadata.models';
 
 export interface AutoMeasurementSettings {
   save_location: string;
+  save_autofocus_image?: boolean;
+  check_tablet_presence?: boolean;
   capture_plan?: CaptureRequestRow[];
 }
 
@@ -31,6 +34,7 @@ export interface MeasurementCameraConfig {
 
 // Interface for step-by-step measurement
 export interface TabletStepRequest {
+  request_id: string;
   tablet_index: number;
   x: number;
   y: number;
@@ -45,6 +49,20 @@ export interface TabletStepRequest {
 
 export interface CapturedPlanRow extends CaptureRequestRow {
   saved_images: string[];
+}
+
+export interface MeasurementProgressImage extends CaptureRequestRow {
+  path: string;
+  tablet_index: number;
+  masked: boolean;
+}
+
+export interface MeasurementProgressResponse {
+  request_id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  images: MeasurementProgressImage[];
+  warnings: CaptureWarning[];
+  active_plan_row_index: number | null;
 }
 
 export interface TabletStepResponse {
@@ -71,6 +89,13 @@ export class AutoMeasurementService {
     return this.http.post<TabletStepResponse>(
       `${BASE_URL}/auto_measurement/step`,
       req
+    );
+  }
+
+  getProgress(requestId: string): Observable<MeasurementProgressResponse> {
+    return this.http.get<MeasurementProgressResponse>(
+      `${BASE_URL}/auto_measurement/progress`,
+      { params: { request_id: requestId } }
     );
   }
 

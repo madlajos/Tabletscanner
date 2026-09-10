@@ -9,6 +9,9 @@ export type HeightOffsetChannel = 'uv255' | 'uv310' | 'uv365' | 'vis';
 export type HeightOffsetRow = Record<HeightOffsetChannel, number>;
 
 export interface HeightOffsetApplication {
+  requested_z?: number;
+  missing_offset_mm?: number;
+  warning?: import('./capture-metadata.models').CaptureWarning;
   applied: boolean;
   reason?: 'autofocus_required' | 'no_active_light';
   offset_mm?: number;
@@ -28,6 +31,7 @@ export interface FilterRevolverStatus {
   motion_platform_homed: boolean;
   busy: boolean;
   height_offset?: HeightOffsetApplication;
+  camera_params?: Record<string, number>;
 }
 
 export type FilterRevolverDirection = 'up' | 'down';

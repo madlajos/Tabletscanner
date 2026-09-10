@@ -30,14 +30,23 @@ import { SharedService } from '../../shared.service';
 import { FilterRevolverComponent } from '../../components/filter-revolver/filter-revolver.component';
 import { CameraImageSettingsService } from '../../services/camera-image-settings.service';
 import { CameraImageSettings, CameraIntegerLimit } from '../../models/camera-image-settings.models';
+import { CameraCombinationSettings, CameraParameterLimit } from '../../models/camera-combination-settings.models';
+import { CameraCombinationSettingsService } from '../../services/camera-combination-settings.service';
+import { SettingsUpdatesService } from '../../services/settings-updates.service';
 import { AutofocusSettingsService } from '../../services/autofocus-settings.service';
+import { AutoMeasurementService } from '../../services/auto-measurement.service';
+import {
+  editRelativeFocusOffset, focusReferenceKey, focusReferenceOffset,
+  isMasterOffset, isUnavailableOffset, relativeFocusOffset
+} from '../../models/focus-offsets';
 import {
   AutofocusFilterOption,
   AutofocusLightOption,
   AutofocusSettings
 } from '../../models/autofocus-settings.models';
+import { GroupedNumberInputDirective } from '../../directives/grouped-number-input.directive';
 
-type SettingsType = 'filter' | 'lamp' | 'camera' | 'focus' | 'advanced';
+type SettingsType = 'filter' | 'lamp' | 'camera' | 'focus' | 'autoMeasurement' | 'advanced';
 type UvChannel = 'uv255' | 'uv310' | 'uv365';
 
 interface LampRow {
@@ -49,7 +58,7 @@ interface LampRow {
 @Component({
   selector: 'app-software-settings',
   standalone: true,
-  imports: [CommonModule, FormsModule, MatIconModule, FilterRevolverComponent],
+  imports: [CommonModule, FormsModule, MatIconModule, FilterRevolverComponent, GroupedNumberInputDirective],
   templateUrl: './software-settings.component.html',
   styleUrls: ['./software-settings.component.css']
 })
@@ -67,6 +76,12 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   savingAutofocusSettings = false;
   autofocusError = '';
   autofocusSaved = false;
+  loadingAutoMeasurementSettings = false;
+  savingAutoMeasurementSettings = false;
+  autoMeasurementError = '';
+  autoMeasurementSaved = false;
+  saveAutofocusImage = true;
+  checkTabletPresence = true;
   autofocusSettings: AutofocusSettings = {
     channel: 'vis',
     brightness: 'full',
@@ -84,24 +99,35 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   cameraImageSettings: CameraImageSettings = {
     override_enabled: false, width: 4000, height: 4000, offset_x: 0, offset_y: 0
   };
+  cameraCombinationSettings: CameraCombinationSettings = {};
+  cameraParameterLimits: Partial<Record<'ExposureTime' | 'Gain', CameraParameterLimit>> = {};
   cameraLimits: Partial<Record<'width' | 'height' | 'offset_x' | 'offset_y', CameraIntegerLimit>> = {};
   loadingAdvancedSettings = false;
   savingAdvancedSettings = false;
   advancedError = '';
   advancedSaved = false;
   useVirtualComPort = false;
+  lowerZBeforeXyMove = true;
+  xyMoveZLimitMm = 35;
   maxHeightOffsetUpMm = 5;
   maxHeightOffsetDownMm = -5;
   firstTabletXMm = 2.9;
   firstTabletYMm = 0;
   firstTabletZMm = 20;
   tabletSpacingMm = 18.3;
+  readonly xTravelMaxMm = 175;
+  readonly yTravelMaxMm = 165;
+  readonly zTravelMaxMm = 40;
+  private readonly trayGridIntervals = 9;
+  private readonly trayEdgeCalibrationToleranceMm = 0.5;
+  private readonly trayGeometryEpsilonMm = 1e-9;
   virtualConnectionLabel = '';
   private advancedSettingsLoaded = false;
   private filterSettingsLoaded = false;
   private autofocusSettingsLoaded = false;
   private lampSettingsLoaded = false;
   private cameraSettingsLoaded = false;
+  private autoMeasurementSettingsLoaded = false;
   private nextFilterId = 1;
   private readonly destroy$ = new Subject<void>();
   private readonly filterSaveRequests$ = new Subject<void>();
@@ -109,6 +135,8 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   private readonly lampSaveRequests$ = new Subject<void>();
   private readonly advancedSaveRequests$ = new Subject<void>();
   private readonly cameraSaveRequests$ = new Subject<void>();
+  private readonly cameraCombinationSaveRequests$ = new Subject<void>();
+  private readonly autoMeasurementSaveRequests$ = new Subject<void>();
   private filterDirty = false;
   private autofocusDirty = false;
   private lampDirty = false;
@@ -120,6 +148,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     { id: 'lamp', label: 'Lámpa', icon: 'lightbulb' },
     { id: 'camera', label: 'Kamera', icon: 'photo_camera' },
     { id: 'focus', label: 'Fókusz', icon: 'center_focus_strong' },
+    { id: 'autoMeasurement', label: 'Automata mérés', icon: 'playlist_add_check' },
     { id: 'advanced', label: 'Haladó', icon: 'build' }
   ];
 
@@ -137,6 +166,12 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     { id: 'uv310', label: '310 nm' },
     { id: 'uv365', label: '365 nm' },
     { id: 'vis', label: 'VIS' }
+  ];
+  readonly cameraFilterRows: ReadonlyArray<{ key: string; label: string }> = [
+    { key: 'empty', label: 'Üres szűrő' },
+    { key: 'rgb', label: 'Piros\nZöld\nKék' },
+    { key: 'filter_255nm', label: '255 nm' },
+    { key: 'filter_365nm', label: '365 nm' }
   ];
   readonly autofocusLightOptions: ReadonlyArray<AutofocusLightOption> = [
     { channel: 'uv255', brightness: 'dimmed', label: '255 nm – tompított fényerő' },
@@ -159,7 +194,10 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     private readonly filterSettingsService: FilterSettingsService,
     private readonly motionSettingsService: MotionSettingsService,
     private readonly cameraImageSettingsService: CameraImageSettingsService,
+    private readonly cameraCombinationSettingsService: CameraCombinationSettingsService,
+    private readonly settingsUpdatesService: SettingsUpdatesService,
     private readonly autofocusSettingsService: AutofocusSettingsService,
+    private readonly autoMeasurementService: AutoMeasurementService,
     private readonly sharedService: SharedService
   ) {}
 
@@ -187,6 +225,15 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     this.cameraSaveRequests$.pipe(
       debounceTime(500),
       concatMap(() => this.persistCameraSettings()),
+      takeUntil(this.destroy$)
+    ).subscribe();
+    this.cameraCombinationSaveRequests$.pipe(
+      debounceTime(500),
+      concatMap(() => this.persistCameraCombinationSettings()),
+      takeUntil(this.destroy$)
+    ).subscribe();
+    this.autoMeasurementSaveRequests$.pipe(
+      concatMap(() => this.persistAutoMeasurementSettings()),
       takeUntil(this.destroy$)
     ).subscribe();
     this.measurementSubscription = this.sharedService.measurementActive$.subscribe(active => {
@@ -225,6 +272,36 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     if (type === 'advanced' && !this.loadingAdvancedSettings && !this.hasLoadedAdvancedSettings()) {
       this.loadAdvancedSettings();
     }
+    if (type === 'autoMeasurement' && !this.loadingAutoMeasurementSettings
+      && !this.autoMeasurementSettingsLoaded) {
+      this.loadAutoMeasurementSettings();
+    }
+  }
+
+  get saveStatus(): 'saving' | 'saved' | null {
+    switch (this.selectedType) {
+      case 'filter':
+        return this.savingFilterSettings ? 'saving' : (this.filterSaved ? 'saved' : null);
+      case 'focus':
+        return this.savingAutofocusSettings || this.savingFilterSettings
+          ? 'saving'
+          : (this.autofocusSaved || this.filterSaved ? 'saved' : null);
+      case 'camera':
+        return this.savingCameraSettings || this.centeringCameraAxis
+          ? 'saving'
+          : (this.cameraSaved ? 'saved' : null);
+      case 'autoMeasurement':
+        return this.savingAutoMeasurementSettings ? 'saving' : (this.autoMeasurementSaved ? 'saved' : null);
+      case 'advanced':
+        return this.savingAdvancedSettings ? 'saving' : (this.advancedSaved ? 'saved' : null);
+      case 'lamp':
+        return this.savingLampSettings ? 'saving' : (this.lampSaved ? 'saved' : null);
+    }
+  }
+
+  get saveStatusText(): string {
+    if (this.saveStatus === 'saved') return 'Automatikusan mentve';
+    return this.selectedType === 'camera' ? 'Alkalmazás és mentés…' : 'Automatikus mentés…';
   }
 
   dismiss(): void {
@@ -298,6 +375,56 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     this.cameraSaveRequests$.next();
   }
 
+  onCameraCombinationChanged(): void {
+    this.cameraError = '';
+    this.cameraSaved = false;
+    this.cameraCombinationSaveRequests$.next();
+  }
+
+  cameraParameterLimit(name: 'ExposureTime' | 'Gain'): CameraParameterLimit | undefined {
+    return this.cameraParameterLimits[name];
+  }
+
+  isCameraCombinationUnavailable(filterKey: string, channel: HeightOffsetChannel): boolean {
+    return (channel === 'vis' && (filterKey === 'filter_255nm' || filterKey === 'filter_365nm'))
+      || (channel === 'uv255' && (filterKey === 'empty' || filterKey === 'filter_365nm'))
+      || (channel === 'uv365' && filterKey === 'filter_255nm');
+  }
+
+  private persistCameraCombinationSettings(): Observable<boolean> {
+    const payload = Object.fromEntries(Object.entries(this.cameraCombinationSettings).map(([filterKey, row]) => [
+      filterKey,
+      Object.fromEntries(this.heightOffsetChannels.map(channel => [channel.id, {
+        exposure_time: Number(row[channel.id]?.exposure_time),
+        gain: Number(row[channel.id]?.gain)
+      }]))
+    ])) as CameraCombinationSettings;
+    const invalid = Object.values(payload).some(row => Object.values(row).some(
+      cell => !Number.isFinite(cell.exposure_time) || cell.exposure_time <= 0
+        || !Number.isFinite(cell.gain) || cell.gain < 0
+    ));
+    if (invalid) {
+      this.cameraError = 'A záridő pozitív, az erősítés nemnegatív szám legyen.';
+      return of(false);
+    }
+    this.savingCameraSettings = true;
+    return this.cameraCombinationSettingsService.update(payload).pipe(
+      tap(response => {
+        this.cameraCombinationSettings = response.camera_combination_settings;
+        this.cameraParameterLimits = response.ranges;
+        this.settingsUpdatesService.updateCameraSettings(response.camera_params as any);
+        this.cameraSaved = true;
+        this.savingCameraSettings = false;
+      }),
+      map(() => true),
+      catchError(error => {
+        this.cameraError = error?.error?.error || 'A kombinációs kamerabeállítások mentése sikertelen.';
+        this.savingCameraSettings = false;
+        return of(false);
+      })
+    );
+  }
+
   centerCamera(axis: 'x' | 'y'): void {
     if (!this.cameraImageSettings.override_enabled || !this.cameraConnected || this.centeringCameraAxis) return;
     this.cameraError = '';
@@ -347,9 +474,14 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
   private loadCameraSettings(): void {
     this.loadingCameraSettings = true;
     this.cameraError = '';
-    this.cameraImageSettingsService.get().subscribe({
+    forkJoin({
+      image: this.cameraImageSettingsService.get(),
+      combinations: this.cameraCombinationSettingsService.get()
+    }).subscribe({
       next: response => {
-        this.applyCameraSettingsResponse(response);
+        this.applyCameraSettingsResponse(response.image);
+        this.cameraCombinationSettings = response.combinations.camera_combination_settings;
+        this.cameraParameterLimits = response.combinations.ranges;
         this.cameraSettingsLoaded = true;
         this.loadingCameraSettings = false;
       },
@@ -509,11 +641,18 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     }
 
     this.savingAutofocusSettings = true;
-    return this.autofocusSettingsService.update({ ...this.autofocusSettings }).pipe(
+    const submitted = { ...this.autofocusSettings };
+    return this.autofocusSettingsService.update(submitted).pipe(
       tap(response => {
-        this.autofocusSettings = { ...response.autofocus_settings };
-        this.autofocusSaved = true;
-        this.autofocusDirty = false;
+        // Keep a newer dropdown selection (and its displayed matrix zero) while
+        // a preceding automatic save is still finishing.
+        if (this.autofocusSettings.channel === submitted.channel
+          && this.autofocusSettings.brightness === submitted.brightness
+          && this.autofocusSettings.filter_position === submitted.filter_position) {
+          this.autofocusSettings = { ...response.autofocus_settings };
+          this.autofocusSaved = true;
+          this.autofocusDirty = false;
+        }
         this.savingAutofocusSettings = false;
       }),
       map(() => true),
@@ -525,26 +664,61 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     );
   }
 
+  onAutoMeasurementChanged(): void {
+    this.autoMeasurementError = '';
+    this.autoMeasurementSaved = false;
+    this.autoMeasurementSaveRequests$.next();
+  }
+
+  private persistAutoMeasurementSettings(): Observable<boolean> {
+    this.savingAutoMeasurementSettings = true;
+    return this.autoMeasurementService.updateSettings(
+      'save_autofocus_image', this.saveAutofocusImage
+    ).pipe(
+      switchMap(() => this.autoMeasurementService.updateSettings(
+        'check_tablet_presence', this.checkTabletPresence
+      )),
+      tap(() => {
+        this.autoMeasurementSaved = true;
+        this.savingAutoMeasurementSettings = false;
+      }),
+      map(() => true),
+      catchError(error => {
+        this.autoMeasurementError = error?.error?.error
+          || 'Az automata mérés beállításainak mentése sikertelen.';
+        this.savingAutoMeasurementSettings = false;
+        return of(false);
+      })
+    );
+  }
+
   isHeightOffsetReferenceCell(filterKey: string, channel: HeightOffsetChannel): boolean {
-    if (channel !== 'vis') return false;
-    const filterName = this.filterSettings.filters.find(filter => filter.id === filterKey)?.name;
-    if (!filterName) return false;
-    const normalizedName = filterName.trim().toLocaleLowerCase('hu-HU');
-    return normalizedName === 'kék' || normalizedName === 'blue';
+    return filterKey === focusReferenceKey(this.filterSettings, this.autofocusSettings)
+      && channel === this.autofocusSettings.channel;
+  }
+
+  get heightOffsetReference(): number {
+    return focusReferenceOffset(this.filterSettings, this.autofocusSettings);
+  }
+
+  relativeHeightOffset(filterKey: string, channel: HeightOffsetChannel): number {
+    return relativeFocusOffset(this.filterSettings, this.autofocusSettings, filterKey, channel);
+  }
+
+  onRelativeHeightOffsetChanged(filterKey: string, channel: HeightOffsetChannel, value: number | null): void {
+    if (value === null || !Number.isFinite(value)) {
+      this.filterError = 'A magasság-eltolás mezőjében érvényes számot adjon meg.';
+      return;
+    }
+    editRelativeFocusOffset(this.filterSettings, this.autofocusSettings, filterKey, channel, value);
+    this.onFilterChanged();
   }
 
   isUnavailableHeightOffsetCombination(
     filter: FilterDefinition,
     channel: HeightOffsetChannel
   ): boolean {
-    if (channel !== 'vis') return false;
-    const normalizedName = filter.name
-      .trim()
-      .toLocaleLowerCase('hu-HU')
-      .replace(/[\s_-]+/g, '');
-    return normalizedName === '255nm'
-      || normalizedName === '265nm'
-      || normalizedName === '365nm';
+    return isUnavailableOffset(this.filterSettings, filter.id, channel);
   }
 
   private persistFilterSettings(): Observable<boolean> {
@@ -580,7 +754,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       for (const channel of this.heightOffsetChannels) {
         const unavailable = !!filter
           && this.isUnavailableHeightOffsetCombination(filter, channel.id);
-        const referenceCell = this.isHeightOffsetReferenceCell(key, channel.id);
+        const referenceCell = isMasterOffset(this.filterSettings, key, channel.id);
         const value = referenceCell || unavailable
           ? 0
           : Number(sourceRow[channel.id]);
@@ -615,6 +789,7 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     return this.filterSettingsService.update(payload).pipe(
       tap(() => {
         this.filterSaved = true;
+        this.cameraSettingsLoaded = false;
         this.filterDirty = false;
         this.savingFilterSettings = false;
       }),
@@ -661,6 +836,8 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     this.savingAdvancedSettings = true;
     return this.motionSettingsService.updateAdvanced({
       use_virtual_com_port: this.useVirtualComPort,
+      lower_z_before_xy_move: this.lowerZBeforeXyMove,
+      xy_move_z_limit_mm: Number(this.xyMoveZLimitMm),
       max_height_offset_up_mm: Number(this.maxHeightOffsetUpMm),
       max_height_offset_down_mm: Number(this.maxHeightOffsetDownMm),
       first_tablet_x_mm: Number(this.firstTabletXMm),
@@ -758,6 +935,8 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
           ...response.lamp.advanced_lamp_settings.output_selectors
         };
         this.useVirtualComPort = response.motion.advanced_motion_settings.use_virtual_com_port;
+        this.lowerZBeforeXyMove = response.motion.advanced_motion_settings.lower_z_before_xy_move;
+        this.xyMoveZLimitMm = response.motion.advanced_motion_settings.xy_move_z_limit_mm;
         this.maxHeightOffsetUpMm = response.motion.advanced_motion_settings.max_height_offset_up_mm;
         this.maxHeightOffsetDownMm = response.motion.advanced_motion_settings.max_height_offset_down_mm;
         this.firstTabletXMm = response.motion.advanced_motion_settings.first_tablet_x_mm;
@@ -770,6 +949,26 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       error: error => {
         this.advancedError = error?.error?.error || 'A haladó lámpabeállítások betöltése sikertelen.';
         this.loadingAdvancedSettings = false;
+      }
+    });
+  }
+
+  private loadAutoMeasurementSettings(): void {
+    this.loadingAutoMeasurementSettings = true;
+    this.autoMeasurementError = '';
+    this.autoMeasurementService.getSettings().subscribe({
+      next: response => {
+        this.saveAutofocusImage =
+          response.auto_measurement_settings.save_autofocus_image !== false;
+        this.checkTabletPresence =
+          response.auto_measurement_settings.check_tablet_presence !== false;
+        this.autoMeasurementSettingsLoaded = true;
+        this.loadingAutoMeasurementSettings = false;
+      },
+      error: error => {
+        this.autoMeasurementError = error?.error?.error
+          || 'Az automata mérés beállításainak betöltése sikertelen.';
+        this.loadingAutoMeasurementSettings = false;
       }
     });
   }
@@ -827,17 +1026,62 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
     const z = Number(this.firstTabletZMm);
     const spacing = Number(this.tabletSpacingMm);
     return [x, y, z, spacing].every(Number.isFinite)
-      && x >= 0 && y >= 0 && z >= 0 && z <= 40 && spacing > 0
-      && x + 9 * spacing <= 175.5
-      && y + 9 * spacing <= 165.5;
+      && x >= 0 && x <= this.xTravelMaxMm
+      && y >= 0 && y <= this.yTravelMaxMm
+      && z >= 0 && z <= this.zTravelMaxMm
+      && spacing > 0
+      && x + this.trayGridIntervals * spacing
+        <= this.xTravelMaxMm + this.trayEdgeCalibrationToleranceMm + this.trayGeometryEpsilonMm
+      && y + this.trayGridIntervals * spacing
+        <= this.yTravelMaxMm + this.trayEdgeCalibrationToleranceMm + this.trayGeometryEpsilonMm;
+  }
+
+  get firstTabletXMaxMm(): number {
+    return this.firstTabletCoordinateMax(this.xTravelMaxMm);
+  }
+
+  get firstTabletYMaxMm(): number {
+    return this.firstTabletCoordinateMax(this.yTravelMaxMm);
+  }
+
+  private firstTabletCoordinateMax(axisTravelMaxMm: number): number {
+    const spacing = Number(this.tabletSpacingMm);
+    if (!Number.isFinite(spacing) || spacing <= 0) {
+      return axisTravelMaxMm;
+    }
+    const maximum = Math.max(
+      0,
+      axisTravelMaxMm + this.trayEdgeCalibrationToleranceMm - this.trayGridIntervals * spacing
+    );
+    return Number(maximum.toFixed(6));
   }
 
   private getAdvancedValidationError(): string | null {
+    const xyMoveZLimit = Number(this.xyMoveZLimitMm);
+    if (!Number.isFinite(xyMoveZLimit) || xyMoveZLimit < 0 || xyMoveZLimit > 40) {
+      return 'Az X/Y mozgás biztonságos Z-határa 0 és 40 mm közötti szám legyen.';
+    }
     if (!this.hasValidHeightOffsetLimits()) {
       return 'A felfelé határ pozitív, a lefelé határ negatív szám legyen.';
     }
+    const spacing = Number(this.tabletSpacingMm);
+    if (!Number.isFinite(spacing) || spacing <= 0) {
+      return 'A tabletták közötti távolság pozitív szám legyen.';
+    }
+    const x = Number(this.firstTabletXMm);
+    if (!Number.isFinite(x) || x < 0 || x > this.firstTabletXMaxMm) {
+      return `Az első tabletta X koordinátája 0 és ${this.formatMillimetres(this.firstTabletXMaxMm)} mm között lehet a jelenlegi kiosztással.`;
+    }
+    const y = Number(this.firstTabletYMm);
+    if (!Number.isFinite(y) || y < 0 || y > this.firstTabletYMaxMm) {
+      return `Az első tabletta Y koordinátája 0 és ${this.formatMillimetres(this.firstTabletYMaxMm)} mm között lehet a jelenlegi kiosztással.`;
+    }
+    const z = Number(this.firstTabletZMm);
+    if (!Number.isFinite(z) || z < 0 || z > this.zTravelMaxMm) {
+      return `Az első tabletta Z koordinátája 0 és ${this.zTravelMaxMm} mm között lehet.`;
+    }
     if (!this.hasValidTrayGeometry()) {
-      return 'Az első tabletta és a 10×10-es kiosztás minden koordinátája maradjon a gép mozgástartományában.';
+      return 'A 10×10-es kiosztás nem fér el a gép mozgástartományában.';
     }
     const offsetsOutsideLimits = Object.values(this.filterSettings.height_offsets_mm)
       .some(row => Object.values(row).some(value => {
@@ -850,5 +1094,9 @@ export class SoftwareSettingsComponent implements OnInit, OnDestroy {
       return 'A megadott határokon kívül eső magasság-eltolásokat előbb módosítsa.';
     }
     return null;
+  }
+
+  private formatMillimetres(value: number): string {
+    return Number(value.toFixed(3)).toLocaleString('hu-HU');
   }
 }

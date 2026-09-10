@@ -9,6 +9,7 @@ import {
   ValidationResponse,
   PreviewResponse,
   RecipeSummary,
+  RecipeFolder,
 } from '../models/pipeline.models';
 
 export interface CalibrationRecord {
@@ -162,6 +163,36 @@ export class RecipeService {
     return this.http
       .get<{ recipes: RecipeSummary[] }>(`${BASE_URL}/recipes`)
       .pipe(map((res) => res.recipes));
+  }
+
+  listRecipeFolders(): Observable<RecipeFolder[]> {
+    return this.http
+      .get<{ folders: RecipeFolder[] }>(`${BASE_URL}/recipe-folders`)
+      .pipe(map((res) => res.folders));
+  }
+
+  createRecipeFolder(name: string): Observable<{ folder: RecipeFolder }> {
+    return this.http.post<{ folder: RecipeFolder }>(`${BASE_URL}/recipe-folders`, { name });
+  }
+
+  renameRecipeFolder(folderId: string, name: string): Observable<{ folder: RecipeFolder }> {
+    return this.http.patch<{ folder: RecipeFolder }>(
+      `${BASE_URL}/recipe-folders/${encodeURIComponent(folderId)}`,
+      { name },
+    );
+  }
+
+  deleteRecipeFolder(folderId: string): Observable<{ message: string }> {
+    return this.http.delete<{ message: string }>(
+      `${BASE_URL}/recipe-folders/${encodeURIComponent(folderId)}`,
+    );
+  }
+
+  assignRecipeFolder(name: string, folderId: string | null): Observable<{ message: string }> {
+    return this.http.patch<{ message: string }>(
+      `${BASE_URL}/recipes/${encodeURIComponent(name)}/folder`,
+      { folder_id: folderId },
+    );
   }
 
   /** Load a recipe by name. */

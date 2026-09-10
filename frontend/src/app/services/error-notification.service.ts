@@ -3,8 +3,10 @@ import { Injectable } from '@angular/core';
 import { BehaviorSubject, of } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { catchError, tap } from 'rxjs/operators';
+import { CaptureWarning } from '../models/capture-metadata.models';
 
 export interface AppError {
+  severity?: 'error' | 'warning' | 'info' | 'success';
   code: string;
   message: string;
   popupStyle?: 'default' | 'center';
@@ -18,6 +20,19 @@ const CENTER_POPUP_CODES = new Set([
 
 @Injectable({ providedIn: 'root' })
 export class ErrorNotificationService {
+  private readonly seenWarnings = new Set<string>();
+
+  addWarnings(warnings: CaptureWarning[] = []): void {
+    for (const warning of warnings) {
+      if (this.seenWarnings.has(warning.id)) continue;
+      this.seenWarnings.add(warning.id);
+      if (this.seenWarnings.size > 1000) this.seenWarnings.delete(this.seenWarnings.values().next().value!);
+      const message = this.getMessage(warning.code)
+        .replace('{target_z}', String(warning.target_z))
+        .replace('{missing_offset_mm}', String(warning.missing_offset_mm));
+      this.addError({ code: warning.id, message, severity: 'warning' });
+    }
+  }
   private errorsSubject = new BehaviorSubject<AppError[]>([]);
   errors$ = this.errorsSubject.asObservable();
 

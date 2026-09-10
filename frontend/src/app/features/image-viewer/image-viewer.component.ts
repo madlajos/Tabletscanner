@@ -11,12 +11,16 @@ import {
   NgClass
 } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { Subscription } from 'rxjs';
+import { Subscription, Subject, takeUntil } from 'rxjs';
+import { CaptureMetadata, wavelengthLabel } from '../../models/capture-metadata.models';
+import { ImageGalleryService } from '../../services/image-gallery.service';
 import { MatIconModule } from '@angular/material/icon';
 import { SharedService, SavedImageInfo } from '../../shared.service';
 import { BASE_URL } from '../../api-config';
 
 interface SavedImage {
+  metadata?: CaptureMetadata;
+  wavelength: string;
   path: string;   // full-size image path on disk (used for openImage)
   url: string;    // thumbnail URL (served by backend)
 }
@@ -39,11 +43,14 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
 
   saveLocationValid = false;
   private saveDirectory = '';
-  private currentLight: 'dome' | 'bar' | null = null;
+  private readonly destroyed = new Subject<void>();
+  private readonly metadataRequested = new Set<string>();
+  private cooldownTimer?: ReturnType<typeof setTimeout>;
+  private readonly hideMenu = () => this.hideContextMenu();
+  private readonly eventCleanup: Array<() => void> = [];
 
   // Thumbnails of recently saved images
   savedImages: SavedImage[] = [];
-  private readonly MAX_GALLERY_ITEMS = 8;  // smaller list = less work
 
   // Zoom and pan state
   zoomLevel = 1.0;
@@ -69,33 +76,36 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
 
   constructor(
     public http: HttpClient,
-    public sharedService: SharedService
+    public sharedService: SharedService,
+    private readonly gallery: ImageGalleryService
   ) { }
 
   ngOnInit(): void {
-    const saveDir$ = (this.sharedService as any).saveDirectory$;
-    if (saveDir$?.subscribe) {
-      this.saveDirSub = saveDir$.subscribe((dir: string) => {
-        this.saveDirectory = (dir || '').trim();
-        this.validateSaveDirectory();
-      });
-    } else {
-      this.saveDirectory = (this.sharedService.getSaveDirectory() || '').trim();
+    this.saveDirSub = this.sharedService.saveDirectory$.subscribe(dir => {
+      this.saveDirectory = (dir || '').trim();
       this.validateSaveDirectory();
-    }
-
-    // Subscribe to active light changes
-    const lightSettings$ = (this.sharedService as any).lightSettings$;
-    if (lightSettings$?.subscribe) {
-      lightSettings$.subscribe((light: 'dome' | 'bar' | null) => {
-        this.currentLight = light;
-      });
-    }
+    });
+    this.savedImageSub = this.sharedService.recentSavedImages$.subscribe(images => {
+      this.savedImages = images.map(image => ({
+        path: image.path,
+        url: `${BASE_URL}/get_thumbnail?path=${encodeURIComponent(image.path)}`,
+        metadata: image.metadata,
+        wavelength: wavelengthLabel(image.metadata?.wavelength)
+      }));
+      for (const image of images) {
+        if (image.metadata || this.metadataRequested.has(image.path)) continue;
+        this.metadataRequested.add(image.path);
+        this.gallery.metadata(image.path).pipe(takeUntil(this.destroyed)).subscribe({
+          next: metadata => this.sharedService.updateSavedImageMetadata(image.path, metadata),
+          error: () => undefined
+        });
+      }
+    });
   }
 
   ngAfterViewInit(): void {
     // Hide context menu on any click outside
-    document.addEventListener('click', () => this.hideContextMenu());
+    document.addEventListener('click', this.hideMenu);
 
     if (typeof (this.sharedService as any).getCameraStreamStatus === 'function') {
       this.isStreaming = (this.sharedService as any).getCameraStreamStatus();
@@ -121,39 +131,27 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
     // Add zoom/pan event listeners to the video container
     if (this.videoContainer) {
       const container = this.videoContainer.nativeElement;
-      container.addEventListener('wheel', (e) => this.onMouseWheel(e), false);
-      container.addEventListener('mousedown', (e) => this.onMouseDown(e));
-      container.addEventListener('mousemove', (e) => this.onMouseMove(e));
-      container.addEventListener('mouseup', () => this.onMouseUp());
-      container.addEventListener('mouseleave', () => this.onMouseUp());
-      container.addEventListener('dblclick', () => this.resetZoomAndPan());
-    }
-
-    // Subscribe to saved images from auto-measurement
-    this.savedImageSub = this.sharedService.newSavedImage$.subscribe(
-      (imageInfo: SavedImageInfo) => {
-        this.addImageToGallery(imageInfo.path);
-      }
-    );
-  }
-
-  /**
-   * Add an image to the gallery given its file path.
-   * Used by both manual capture and auto-measurement.
-   */
-  private addImageToGallery(imagePath: string): void {
-    const img: SavedImage = {
-      path: imagePath,
-      url: `${BASE_URL}/get_thumbnail?path=${encodeURIComponent(imagePath)}`
-    };
-
-    this.savedImages.unshift(img);
-    if (this.savedImages.length > this.MAX_GALLERY_ITEMS) {
-      this.savedImages.pop();
+      const listen = <K extends keyof HTMLElementEventMap>(name: K, handler: (event: HTMLElementEventMap[K]) => void) => {
+        container.addEventListener(name, handler);
+        this.eventCleanup.push(() => container.removeEventListener(name, handler));
+      };
+      listen('wheel', event => this.onMouseWheel(event));
+      listen('mousedown', event => this.onMouseDown(event));
+      listen('mousemove', event => this.onMouseMove(event));
+      listen('mouseup', () => this.onMouseUp());
+      listen('mouseleave', () => this.onMouseUp());
+      listen('dblclick', () => this.resetZoomAndPan());
     }
   }
 
   ngOnDestroy(): void {
+    this.destroyed.next();
+    this.destroyed.complete();
+    clearTimeout(this.cooldownTimer);
+    document.removeEventListener('click', this.hideMenu);
+    this.eventCleanup.forEach(cleanup => cleanup());
+    const stream = this.videoContainer?.nativeElement.querySelector('img');
+    if (stream) { stream.removeAttribute('src'); stream.remove(); }
     this.streamSub?.unsubscribe();
     this.savedImageSub?.unsubscribe();
     this.saveDirSub?.unsubscribe();
@@ -208,104 +206,16 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   captureImage(): void {
-    if (this.isCaptureCooldown) {
-      return;
-    }
-
-    if (!this.saveLocationValid) {
-      console.warn('Save location is invalid. Cannot capture image.');
-      return;
-    }
-
-    // Start cooldown
+    if (this.isCaptureCooldown || !this.saveLocationValid || this.sharedService.getMeasurementActive()) return;
     this.isCaptureCooldown = true;
-    setTimeout(() => {
-      this.isCaptureCooldown = false;
-    }, this.CAPTURE_COOLDOWN_MS);
-
-    const targetDir = ((this.sharedService as any).getSaveDirectory
-      ? (this.sharedService as any).getSaveDirectory()
-      : null) || '';
-
-    if (!targetDir) {
-      console.warn('No save directory set. Cannot capture image.');
-      return;
-    }
-
-    // Normalize path for cross-platform consistency
-    const normalizedDir = targetDir.replace(/\\/g, '/');
-
-    // Fetch current "other_settings" and camera settings from backend so we can embed metadata
-    this.http.get<{ other_settings: any }>(`${BASE_URL}/get-other-settings?category=other_settings`)
-      .subscribe({
-        next: (resp) => {
-          const metadata = resp?.other_settings || {};
-
-          const activeLight = this.currentLight || 'dome';
-
-          // Also fetch camera settings to include in metadata
-          this.http.get<any>(`${BASE_URL}/get-camera-settings`)
-            .subscribe({
-              next: (camResp) => {
-                // Add only the currently active light's camera settings to metadata
-                const category = `camera_params_${activeLight}`;
-                if (camResp?.[category]) {
-                  metadata[`exposure_time`] = camResp[category]['ExposureTime'];
-                  metadata[`gamma`] = camResp[category]['Gamma'];
-                }
-
-                this.http.post<{
-                  message?: string;
-                  path?: string;
-                  error?: string;
-                }>(
-                  `${BASE_URL}/save_raw_image`,
-                  { target_folder: normalizedDir, metadata, light_type: activeLight }
-                ).subscribe({
-                  next: (res) => {
-                    if (res?.path) {
-                      console.log(`Image saved to: ${res.path}`);
-                      this.addImageToGallery(res.path);
-                    } else if (res?.message) {
-                      console.log(`Save image response: ${res.message}`);
-                    } else {
-                      console.log('Save image request completed with no path.');
-                    }
-                  },
-                  error: (err) => {
-                    console.error('Failed to save image.', err);
-                  }
-                });
-              },
-              error: (err) => {
-                console.warn('Could not fetch camera settings; saving with other_settings only.', err);
-                // Fallback: save with only other_settings
-                this.http.post<{ path?: string; message?: string }>(
-                  `${BASE_URL}/save_raw_image`,
-                  { target_folder: normalizedDir, metadata, light_type: activeLight }
-                ).subscribe({
-                  next: (res) => {
-                    if (res?.path) {
-                      console.log(`Image saved to: ${res.path}`);
-                      this.addImageToGallery(res.path);
-                    }
-                  },
-                  error: (e) => console.error('Failed to save image.', e)
-                });
-              }
-            });
-        },
-        error: (err) => {
-          console.warn('Could not fetch other_settings; saving without metadata.', err);
-          // fallback: save without metadata
-          this.http.post(`${BASE_URL}/save_raw_image`, { target_folder: normalizedDir, light_type: this.currentLight || 'dome' }).subscribe({
-            next: () => console.log('Saved image without metadata'),
-            error: (e) => console.error('Failed to save image.', e)
-          });
-        }
-      });
+    this.cooldownTimer = setTimeout(() => this.isCaptureCooldown = false, this.CAPTURE_COOLDOWN_MS);
+    this.gallery.save(this.saveDirectory).pipe(takeUntil(this.destroyed)).subscribe({
+      next: response => {
+        if (response.path) this.sharedService.emitSavedImage({ path: response.path, tabletIndex: 0, metadata: response.metadata });
+      },
+      error: () => undefined
+    });
   }
-
 
   openImage(img: SavedImage): void {
     this.verifyFileExists(img.path).then((exists: boolean) => {
@@ -330,12 +240,12 @@ export class ImageViewerComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   clearGallery(): void {
-    this.savedImages = [];
+    this.sharedService.clearSavedImages();
     this.hideContextMenu();
   }
 
   private removeImageFromGallery(imagePath: string): void {
-    this.savedImages = this.savedImages.filter(img => img.path !== imagePath);
+    this.sharedService.removeSavedImage(imagePath);
     if (this.contextMenuImage?.path === imagePath) {
       this.hideContextMenu();
     }

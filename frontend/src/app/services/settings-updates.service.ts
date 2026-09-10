@@ -70,7 +70,7 @@ export class SettingsUpdatesService {
     this.saveSettingsSubject.next(newSettings);
   }
 
-  updateCameraSettings(newSettings: CameraSettings): void {
-    this.cameraSettingsSubject.next(newSettings);
+  updateCameraSettings(newSettings: Partial<CameraSettings>): void {
+    this.cameraSettingsSubject.next({ ...this.cameraSettingsSubject.value, ...newSettings } as CameraSettings);
   }
 }

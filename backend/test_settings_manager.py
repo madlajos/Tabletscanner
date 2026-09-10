@@ -17,6 +17,43 @@ def height_offset_matrix(*filter_ids, value=0):
 
 
 class SettingsMigrationTests(unittest.TestCase):
+    def test_v9_seeds_camera_matrix_from_global_values(self):
+        self.write_json({
+            'settings_schema_version': 9,
+            'camera_params': {'ExposureTime': 123456, 'Gain': 3.5, 'Gamma': 1.2},
+            'filter_settings': {
+                'filters': [{'id': 'red', 'name': 'Piros', 'wavelength_range': '600-650', 'color': '#ff0000'}],
+                'slots': [None, 'red', None, None, None, None],
+                'height_offsets_mm': height_offset_matrix('red'),
+            },
+        })
+        migrated = settings_manager.load_settings(self.settings_path)
+        self.assertEqual(settings_manager.SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
+        self.assertEqual(set(settings_manager.CAMERA_FILTER_GROUPS), set(migrated['camera_combination_settings']))
+        self.assertEqual(
+            {'exposure_time': 123456.0, 'gain': 3.5},
+            migrated['camera_combination_settings']['rgb']['uv365'])
+
+    def test_camera_matrix_validation_and_filter_reconciliation(self):
+        filters = {
+            'filters': [{'id': 'green', 'name': 'Zöld', 'wavelength_range': '500-550', 'color': '#00ff00'}],
+            'slots': [None, 'green', None, None, None, None],
+            'height_offsets_mm': height_offset_matrix('green'),
+        }
+        matrix = settings_manager.default_camera_combination_settings(
+            filters, {'ExposureTime': 50000, 'Gain': 2})
+        matrix['rgb']['uv255'] = {'exposure_time': 75000, 'gain': 4.25}
+        self.assertEqual(matrix, settings_manager.validate_camera_combination_settings(matrix, filters))
+        expanded = {**filters, 'filters': [*filters['filters'], {
+            'id': 'red', 'name': 'Piros', 'wavelength_range': '600-650', 'color': '#ff0000'}]}
+        reconciled = settings_manager.reconcile_camera_combination_settings(
+            matrix, expanded, {'ExposureTime': 100000, 'Gain': 1})
+        self.assertEqual({'exposure_time': 75000.0, 'gain': 4.25}, reconciled['rgb']['uv255'])
+        self.assertEqual({'exposure_time': 50000.0, 'gain': 2.0}, reconciled['filter_365nm']['vis'])
+        self.assertEqual('rgb', settings_manager.camera_filter_group(filters, 2))
+        with self.assertRaises(ValueError):
+            settings_manager.validate_camera_combination_settings({'empty': {}}, filters)
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.settings_path = os.path.join(self.temp_dir.name, 'settings.json')
@@ -44,12 +81,12 @@ class SettingsMigrationTests(unittest.TestCase):
 
         settings = settings_manager.load_settings(self.settings_path)
 
-        self.assertEqual(9, settings['settings_schema_version'])
+        self.assertEqual(settings_manager.SETTINGS_SCHEMA_VERSION, settings['settings_schema_version'])
         self.assertEqual({'ExposureTime': 123456.0, 'Gain': 4.0, 'Gamma': 1.2}, settings['camera_params'])
         self.assertNotIn('camera_params_dome', settings)
         self.assertNotIn('camera_params_bar', settings)
         self.assertEqual(
-            [{'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 123456.0, 'gain': 4.0, 'gamma': 1.2}],
+            [{'wavelength': 'vis', 'brightness': 'full', 'filter_position': 1, 'exposure_time': 123456.0, 'gain': 4.0}],
             settings['auto_measurement_settings']['capture_plan'],
         )
         self.assertEqual({}, settings['lamp_settings']['channels'])
@@ -85,7 +122,7 @@ class SettingsMigrationTests(unittest.TestCase):
 
         migrated = settings_manager.load_settings(self.settings_path)
 
-        self.assertEqual(9, migrated['settings_schema_version'])
+        self.assertEqual(settings_manager.SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
         self.assertEqual(
             settings_manager.OCTOPUS_LIGHT_OUTPUT_SELECTORS,
             migrated['lamp_settings']['output_selectors'],
@@ -106,9 +143,9 @@ class SettingsMigrationTests(unittest.TestCase):
         self.write_json(v3)
 
         migrated = settings_manager.load_settings(self.settings_path)
-        self.assertEqual(9, migrated['settings_schema_version'])
+        self.assertEqual(settings_manager.SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
         self.assertEqual(
-            [{'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 50000.0, 'gain': 0.0, 'gamma': 1.0}],
+            [{'wavelength': 'vis', 'brightness': 'full', 'filter_position': 1, 'exposure_time': 50000.0, 'gain': 0.0}],
             migrated['auto_measurement_settings']['capture_plan'],
         )
         self.assertTrue(os.path.exists(f'{self.settings_path}.v3.bak'))
@@ -173,25 +210,60 @@ class SettingsMigrationTests(unittest.TestCase):
 
     def test_capture_plan_validation_normalizes_valid_rows(self):
         plan = [
-            {'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 50000, 'gain': 0, 'gamma': 1},
-            {'wavelength': 'uv365', 'filter_position': 6, 'exposure_time': 75000.5, 'gain': 2.5, 'gamma': 1.2},
+            {'wavelength': 'vis', 'brightness': 'full', 'filter_position': 1, 'exposure_time': 50000, 'gain': 0},
+            {'wavelength': 'uv365', 'brightness': 'dimmed', 'filter_position': 6, 'exposure_time': 75000.5, 'gain': 2.5},
         ]
         self.assertEqual(plan, settings_manager.validate_capture_plan(plan))
 
     def test_capture_plan_validation_rejects_unknown_wavelength_and_filter(self):
         with self.assertRaises(ValueError):
-            settings_manager.validate_capture_plan([{'wavelength': 'uv240', 'filter_position': 1, 'exposure_time': 1, 'gain': 0, 'gamma': 1}])
+            settings_manager.validate_capture_plan([{'wavelength': 'uv240', 'brightness': 'dimmed', 'filter_position': 1, 'exposure_time': 1, 'gain': 0}])
         with self.assertRaises(ValueError):
-            settings_manager.validate_capture_plan([{'wavelength': 'vis', 'filter_position': 7, 'exposure_time': 1, 'gain': 0, 'gamma': 1}])
+            settings_manager.validate_capture_plan([{'wavelength': 'vis', 'brightness': 'full', 'filter_position': 7, 'exposure_time': 1, 'gain': 0}])
         with self.assertRaises(ValueError):
-            settings_manager.validate_capture_plan([{'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 'bad', 'gain': 0, 'gamma': 1}])
+            settings_manager.validate_capture_plan([{'wavelength': 'vis', 'brightness': 'full', 'filter_position': 1, 'exposure_time': 'bad', 'gain': 0}])
         with self.assertRaises(ValueError):
-            settings_manager.validate_capture_plan([{'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 1, 'gain': -0.1, 'gamma': 1}])
+            settings_manager.validate_capture_plan([{'wavelength': 'vis', 'brightness': 'full', 'filter_position': 1, 'exposure_time': 1, 'gain': -0.1}])
         self.assertEqual(
-            [{'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 1.0, 'gain': 0.5, 'gamma': 1.0}],
+            [{'wavelength': 'uv365', 'brightness': 'full', 'filter_position': 2, 'exposure_time': 1.0, 'gain': 0.5}],
             settings_manager.validate_capture_plan([
-                {'wavelength': 'uv365', 'filter_position': 2, 'exposure_time': 1, 'gain': 0.5, 'gamma': 1}
+                {'wavelength': 'uv365', 'brightness': 'full', 'filter_position': 2, 'exposure_time': 1, 'gain': 0.5}
             ]),
+        )
+
+        with self.assertRaises(ValueError):
+            settings_manager.validate_capture_plan([
+                {'wavelength': 'vis', 'brightness': 'dimmed', 'filter_position': 1, 'exposure_time': 1, 'gain': 0}
+            ])
+
+    def test_schema_v11_migrates_capture_brightness_and_removes_row_gamma(self):
+        migrated, changed = settings_manager.migrate_settings({
+            'settings_schema_version': 11,
+            'auto_measurement_settings': {'capture_plan': [
+                {'wavelength': 'vis', 'filter_position': 1, 'exposure_time': 10, 'gain': 0, 'gamma': 1.1},
+                {'wavelength': 'uv365', 'filter_position': 2, 'exposure_time': 20, 'gain': 1, 'gamma': 1.2},
+            ]},
+        })
+
+        self.assertTrue(changed)
+        self.assertEqual(settings_manager.SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
+        self.assertEqual([
+            {'wavelength': 'vis', 'brightness': 'full', 'filter_position': 1, 'exposure_time': 10, 'gain': 0},
+            {'wavelength': 'uv365', 'brightness': 'dimmed', 'filter_position': 2, 'exposure_time': 20, 'gain': 1},
+        ], migrated['auto_measurement_settings']['capture_plan'])
+
+    def test_schema_v12_preserves_existing_capture_behavior(self):
+        migrated, changed = settings_manager.migrate_settings({
+            'settings_schema_version': 12,
+            'auto_measurement_settings': {'capture_plan': []},
+        })
+
+        self.assertTrue(changed)
+        self.assertTrue(
+            migrated['auto_measurement_settings']['save_autofocus_image']
+        )
+        self.assertTrue(
+            migrated['auto_measurement_settings']['check_tablet_presence']
         )
 
     def test_autofocus_settings_validate_light_mode_and_populated_filter(self):
@@ -364,6 +436,8 @@ class SettingsMigrationTests(unittest.TestCase):
     def test_motion_simulation_setting_requires_boolean(self):
         payload = {
             'use_virtual_com_port': True,
+            'lower_z_before_xy_move': True,
+            'xy_move_z_limit_mm': 35,
             'max_height_offset_up_mm': 5,
             'max_height_offset_down_mm': -4,
             'first_tablet_x_mm': 2.9,
@@ -374,6 +448,8 @@ class SettingsMigrationTests(unittest.TestCase):
         self.assertEqual(
             {
                 'use_virtual_com_port': True,
+                'lower_z_before_xy_move': True,
+                'xy_move_z_limit_mm': 35.0,
                 'max_height_offset_up_mm': 5.0,
                 'max_height_offset_down_mm': -4.0,
                 'first_tablet_x_mm': 2.9,
@@ -387,6 +463,11 @@ class SettingsMigrationTests(unittest.TestCase):
             settings_manager.validate_motion_simulation_settings({
                 **payload,
                 'use_virtual_com_port': 'true',
+            })
+        with self.assertRaises(ValueError):
+            settings_manager.validate_motion_simulation_settings({
+                **payload,
+                'xy_move_z_limit_mm': 40.1,
             })
         with self.assertRaises(ValueError):
             settings_manager.validate_motion_simulation_settings({
@@ -447,7 +528,7 @@ class SettingsMigrationTests(unittest.TestCase):
         })
 
         self.assertTrue(changed)
-        self.assertEqual(9, migrated['settings_schema_version'])
+        self.assertEqual(settings_manager.SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
         self.assertNotIn('height_offset_mm', migrated['filter_settings']['filters'][0])
         self.assertEqual(
             {channel: 1.25 for channel in settings_manager.LIGHT_CHANNELS},
@@ -466,7 +547,7 @@ class SettingsMigrationTests(unittest.TestCase):
         })
 
         self.assertTrue(changed)
-        self.assertEqual(9, migrated['settings_schema_version'])
+        self.assertEqual(settings_manager.SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
         self.assertEqual(
             settings_manager.default_autofocus_settings(),
             migrated['autofocus_settings'],

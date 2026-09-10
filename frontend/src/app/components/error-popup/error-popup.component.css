@@ -13,7 +13,36 @@
     border-left: 5px solid #b30000; /* Stronger left border */
     position: relative;
   }
-  
+
+  .error-popup.warning {
+    background: #ffcf4a;
+    color: #382b00;
+    border-left-color: #b58a00;
+    box-shadow: 0 4px 10px rgba(255, 193, 7, .4);
+    padding: 12px 30px 15px 20px;
+    overflow: hidden;
+  }
+  .warning .error-close { top: 5px; right: 6px; color: #382b00; }
+  .error-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
+  .warning-timer {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: #8a6800;
+    transform-origin: left;
+    animation-name: warning-countdown;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+  }
+
+  @keyframes warning-countdown {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+  }
+
   .error-popup::before {
     content: "⚠️"; /* ⚠️ Unicode warning icon */
     font-size: 20px;
@@ -31,10 +60,85 @@
     top: 24px;
     right: 20px;
     padding: 0 4px;
-    
+
   }
-  
+
   .error-close:hover {
     color: #ddd;
   }
-  
+
+/* Compact toolbar presentation shared by ordinary errors and warnings. */
+.error-popup {
+  width: 100%;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 6px 30px 6px 8px;
+  color: #fee2e2;
+  background: #5b2227;
+  border: 1px solid #8f343b;
+  border-left: 4px solid var(--state-error, #b9474d);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .35);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.error-popup p { margin: 0; }
+
+.error-popup.warning {
+  padding: 6px 30px 9px 8px;
+  color: #fef3c7;
+  background: #514016;
+  border-color: #80651e;
+  border-left-color: var(--state-warning, #d4a522);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .35);
+}
+
+.error-popup::before {
+  content: "!";
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: #5b2227;
+  background: #fee2e2;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.error-popup.warning::before { color: #514016; background: #fef3c7; }
+
+.error-popup.info {
+  color: #dbeafe;
+  background: #1e3a5f;
+  border-color: #315f8e;
+  border-left-color: var(--state-blue, #2e5f99);
+}
+
+.error-popup.info::before {
+  content: "i";
+  color: #1e3a5f;
+  background: #dbeafe;
+}
+
+.error-popup.success {
+  color: #dcfce7;
+  background: #17452d;
+  border-color: #2b7049;
+  border-left-color: var(--state-success, #35a65a);
+}
+
+.error-popup.success::before {
+  content: "✓";
+  color: #17452d;
+  background: #dcfce7;
+}
+
+.error-close {
+  top: 6px;
+  right: 6px;
+}
+

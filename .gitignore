@@ -16,4 +16,6 @@ electron
 backend/build
 backend/dist
 backend/proc_elements/__pycache__
+backend/recipes/.recipe-folders.json
+backend/recipes/.recipe-folders.json.*.tmp
 node_modules

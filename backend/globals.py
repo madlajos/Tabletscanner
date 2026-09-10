@@ -7,6 +7,15 @@ camera = None
 stream_running = False
 stream_thread = None
 grab_lock = threading.Lock()
+# Suppress preview retrieval only while an operation acquires its own frames.
+preview_grab_suppression_lock = threading.Lock()
+preview_grab_suppression_count = 0
+latest_preview_multipart_frame = None
+# Frames acquired by autofocus/measurement are published here while those
+# operations own the camera.  The MJPEG generator can display them without
+# taking an additional frame from the camera queue.
+latest_owned_preview_image = None
+latest_owned_preview_sequence = 0
 latest_image = None
 
 
@@ -32,6 +41,9 @@ filter_revolver_position = None
 last_best_z = None
 autofocus_reference_z = None
 autofocus_applied_offset_mm = 0.0
+height_reference_source = None
+height_reference_offset_mm = 0.0
+height_offset_application = None
 autofocus_abort = False  # Flag to abort autofocus if measurement is stopped
 last_autofocus_contour = None  # Contour from autofocus or manual_bgr for background subtraction
 color_values = None  # Reference color values from calc_color (used by autofocus before_auto check)

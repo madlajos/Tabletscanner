@@ -95,6 +95,17 @@ carefully because normal application use can modify the tracked JSON files.
 - Respect `globals.motion_busy`; status polling must not interleave commands with homing,
   autofocus, or long motion. The flag currently covers homing incompletely and is not a complete
   operation-ownership mechanism; extend coordination deliberately when touching these flows.
+- Height offsets retain blue/VIS as the stored master calibration; the Focus table displays
+  values relative to the selected autofocus pair. `height_reference_api.py` owns explicit
+  anchoring and guards manual movement against selection/anchor operations. An anchor survives
+  automatic corrections and XY moves, but manual Z changes, homing, motor-off, disconnect, and
+  calibration/slot edits clear it. Autofocus references still clear on any manual motion.
+- Manual RGB+UV capture snapshots the ordered wavelength toggle selection before autofocus, then
+  completes every required filter for one wavelength before advancing. UV selections use dimmed
+  mode and add their matching UV filter; VIS captures RGB only. `filter_series_camera.py` switches illumination
+  off between frames and starts a fresh normal timeout for each exposure; never suspend the UV
+  thermal monitor. Fresh acquisition must discard earlier preview frames and reject a frame if
+  its illumination expired. Capture request ownership stays in `BgrCaptureService` until completion.
 - Preserve disconnect cleanup in both `globals.motion_platform` and
   `porthandler.motion_platform` until ownership is intentionally consolidated.
 - Maintain the four-channel light interlock and configured automatic shutoff: each UV channel has
@@ -112,6 +123,9 @@ carefully because normal application use can modify the tracked JSON files.
   open state on disconnect.
 - Do not let preview, live stream, autofocus, and capture grab concurrently without an explicit
   arbitration design.
+- Keep RGB+UV live preview active during motion, autofocus calculation, and saving.
+  Suppress preview grabs only for individual owned acquisitions (including the guard/capture
+  pair); publish those frames to MJPEG without waiting for the camera lock.
 - Keep hardware-free failures recoverable. Do not replace a missing device with silent fake
   success in production paths.
 
@@ -282,6 +296,15 @@ Flask test-client contracts, or mocked adapter boundaries. Do not require a phys
 motion platform for ordinary CI tests.
 
 ## Definition of done for major UI/backend work
+
+Capture metadata and gallery: automatic Z corrections clamp at travel limits and expose W1205
+warnings; preserve the reference and record the signed unapplied correction in EXIF `Errors`.
+Use actual capture wavelength/filter and configured tray geometry for thumbnail labels. The
+shared gallery retains recent captures; filter-series status polling carries partial saved results.
+- Camera settings schema v10 stores ExposureTime/Gain by the empty, shared RGB, 255 nm, and
+  365 nm filter groups and canonical wavelength.
+  Lamp/filter selection applies the active cell and returns `camera_params` for UI synchronization;
+  Gamma remains global. Filter edits reconcile matrix rows without discarding unchanged cells.
 
 - The user flow and ownership boundary are clear.
 - Frontend and backend request/response models agree, including failure and cancellation paths.

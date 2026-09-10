@@ -1,9 +1,11 @@
 """Autofocus-referenced Z correction for filter/illumination combinations."""
 
 import math
+import uuid
 
 import globals
 import porthandler
+from error_codes import ErrorCode
 from settings_manager import EMPTY_FILTER_KEY, LIGHT_CHANNELS
 
 
@@ -12,9 +14,18 @@ class HeightOffsetCommandError(RuntimeError):
 
 
 def invalidate_reference() -> None:
-    """Disable automatic offsets until manual autofocus succeeds again."""
+    """Disable automatic offsets until autofocus or an explicit anchor sets zero."""
     globals.autofocus_reference_z = None
     globals.autofocus_applied_offset_mm = 0.0
+    globals.height_reference_source = None
+    globals.height_reference_offset_mm = 0.0
+    globals.height_offset_application = None
+
+
+def invalidate_for_manual_move(z_changed: bool) -> None:
+    """An explicit anchor survives XY moves; an autofocus reference does not."""
+    if z_changed or getattr(globals, 'height_reference_source', None) != 'anchor':
+        invalidate_reference()
 
 
 def record_reference(z_position) -> float:
@@ -30,10 +41,13 @@ def record_reference(z_position) -> float:
         raise ValueError('Autofocus Z reference is outside the configured travel range.')
     globals.autofocus_reference_z = reference_z
     globals.autofocus_applied_offset_mm = 0.0
+    globals.height_reference_source = 'autofocus'
+    globals.height_reference_offset_mm = 0.0
+    globals.height_offset_application = None
     return reference_z
 
 
-def record_combination_reference(z_position, configured_offset_mm) -> float:
+def record_combination_reference(z_position, configured_offset_mm, source='autofocus') -> float:
     """Rebase a focused filter/light combination onto the height-matrix zero.
 
     Matrix offsets are calibrated relative to blue-filter/VIS. When autofocus
@@ -49,8 +63,19 @@ def record_combination_reference(z_position, configured_offset_mm) -> float:
     if not math.isfinite(focused_z) or not math.isfinite(applied_offset):
         raise ValueError('Autofocus did not produce a finite Z reference.')
 
-    reference_z = record_reference(focused_z - applied_offset)
+    if source not in ('autofocus', 'anchor'):
+        raise ValueError('Unknown height reference source.')
+    z_min, z_max = globals.motion_limits['z']
+    if not z_min <= focused_z <= z_max:
+        raise ValueError('Focused Z is outside the configured travel range.')
+    # The mathematical master zero can lie outside travel; only actual physical
+    # positions (here and when applying another combination) must be in range.
+    reference_z = focused_z - applied_offset
+    globals.autofocus_reference_z = reference_z
     globals.autofocus_applied_offset_mm = applied_offset
+    globals.height_reference_source = source
+    globals.height_reference_offset_mm = applied_offset
+    globals.height_offset_application = None
     return reference_z
 
 
@@ -60,6 +85,8 @@ def status() -> dict:
         'available': isinstance(reference_z, (int, float)) and math.isfinite(reference_z),
         'reference_z': reference_z,
         'applied_offset_mm': getattr(globals, 'autofocus_applied_offset_mm', 0.0),
+        'source': getattr(globals, 'height_reference_source', None),
+        'baseline_offset_mm': getattr(globals, 'height_reference_offset_mm', 0.0),
     }
 
 
@@ -107,19 +134,31 @@ def apply_active_combination(motion_platform, filter_settings: dict, channel: st
         getattr(globals, 'filter_revolver_position', None),
         channel,
     )
-    target_z = float(reference_z) + offset
+    requested_z = float(reference_z) + offset
     z_min, z_max = globals.motion_limits['z']
-    if not z_min <= target_z <= z_max:
-        raise HeightOffsetCommandError(
-            f'The autofocus reference plus offset would move Z outside {z_min:g}-{z_max:g} mm.'
-        )
+    target_z = max(z_min, min(z_max, requested_z))
+    missing_offset = round(requested_z - target_z, 6)
+    result = {'applied': True, 'offset_mm': offset, 'target_z': target_z, 'moved': False}
+    if missing_offset:
+        result.update({
+            'requested_z': requested_z, 'missing_offset_mm': missing_offset,
+            'warning': {'id': uuid.uuid4().hex, 'code': ErrorCode.WARNING_Z_OFFSET_CLAMPED,
+                        'missing_offset_mm': missing_offset, 'target_z': target_z},
+        })
+
+    def record_application():
+        globals.autofocus_applied_offset_mm = target_z - float(reference_z)
+        globals.height_offset_application = {
+            'channel': channel, 'filter_position': globals.filter_revolver_position,
+            'target_z': target_z, 'missing_offset_mm': missing_offset,
+        }
 
     current_z = getattr(globals, 'last_toolhead_pos', {}).get('z')
     if isinstance(current_z, (int, float)) and math.isclose(
         float(current_z), target_z, abs_tol=1e-6
     ):
-        globals.autofocus_applied_offset_mm = offset
-        return {'applied': True, 'offset_mm': offset, 'target_z': target_z, 'moved': False}
+        record_application()
+        return result
 
     for command, timeout in (
         ('G90', 2.0),
@@ -132,11 +171,24 @@ def apply_active_combination(motion_platform, filter_settings: dict, channel: st
             timeout=timeout,
         )
         if not acknowledged:
+            invalidate_reference()
             raise HeightOffsetCommandError(
                 f'Automatic height correction was not acknowledged for {command!r}; '
                 f'controller reply: {reply[:256]!r}'
             )
 
     globals.last_toolhead_pos['z'] = target_z
-    globals.autofocus_applied_offset_mm = offset
-    return {'applied': True, 'offset_mm': offset, 'target_z': target_z, 'moved': True}
+    record_application()
+    result['moved'] = True
+    return result
+
+
+def capture_errors(channel, filter_position) -> list[str]:
+    """Report only an unapplied offset belonging to this physical capture state."""
+    application = getattr(globals, 'height_offset_application', None)
+    if not application or application['channel'] != channel or application['filter_position'] != filter_position:
+        return []
+    if globals.last_toolhead_pos.get('z') != application['target_z']:
+        return []
+    difference = application['missing_offset_mm']
+    return [f'ZOffset difference: {difference:g} mm'] if difference else []

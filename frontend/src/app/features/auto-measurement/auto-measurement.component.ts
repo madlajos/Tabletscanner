@@ -1,8 +1,8 @@
-import { Component, signal, OnInit, OnDestroy, AfterViewInit } from '@angular/core';
+import { Component, signal, OnInit, OnDestroy, AfterViewInit, ElementRef, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription, from } from 'rxjs';
-import { concatMap, last, finalize, switchMap } from 'rxjs/operators';
+import { Subscription, from, timer, EMPTY } from 'rxjs';
+import { catchError, concatMap, last, finalize, switchMap } from 'rxjs/operators';
 import { HttpClient } from '@angular/common/http';
 import {
   AutoMeasurementService,
@@ -10,13 +10,21 @@ import {
   TabletStepRequest
 } from '../../services/auto-measurement.service';
 import { FilterSettingsService } from '../../services/filter-settings.service';
+import { AutofocusSettingsService } from '../../services/autofocus-settings.service';
 import { MotionSettingsService } from '../../services/motion-settings.service';
 import { FilterSettings } from '../../models/filter-settings.models';
+import { AutofocusSettings } from '../../models/autofocus-settings.models';
 import { SharedService } from '../../shared.service';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { BASE_URL } from '../../api-config';
-import { CapturePlanRow, CaptureRequestRow, LightChannel, LIGHT_CHANNEL_LABELS } from '../../models/light.models';
+import { CapturePlanRow, CaptureRequestRow, LightChannel, LIGHT_CHANNEL_LABELS, UvBrightnessMode } from '../../models/light.models';
 import { AdvancedMotionSettings } from '../../models/motion.models';
+import { ToolheadPositionComponent } from './toolhead-position.component';
+import { CameraCombinationSettingsService } from '../../services/camera-combination-settings.service';
+import { CameraCombinationSettings } from '../../models/camera-combination-settings.models';
+import { ErrorPopupListComponent } from '../../components/error-popup-list/error-popup-list.component';
+import { AnalysisRecipeSelectorComponent } from '../../components/analysis-recipe-selector/analysis-recipe-selector.component';
+import { PipelineDocument } from '../../models/pipeline.models';
 
 // Type declaration for Electron API (exposed via preload.js)
 declare global {
@@ -45,17 +53,27 @@ interface TabletPosition {
 @Component({
   selector: 'app-auto-measurement',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [
+    CommonModule,
+    FormsModule,
+    ToolheadPositionComponent,
+    ErrorPopupListComponent,
+    AnalysisRecipeSelectorComponent,
+  ],
   templateUrl: './auto-measurement.component.html',
   styleUrls: ['./auto-measurement.component.css']
 })
 export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestroy {
+
+  @ViewChild('capturePlanScroll') private capturePlanScroll?: ElementRef<HTMLElement>;
 
   readonly gridSize = 10; // change to 9 later if needed
 
   // Connection status (from shared service)
   cameraConnected = false;
   motionConnected = false;
+  private cameraStatusInitialized = false;
+  private motionStatusInitialized = false;
   private cameraSub?: Subscription;
   private motionSub?: Subscription;
   private autofocusErrorSub?: Subscription;
@@ -78,13 +96,28 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   // Measurement settings
   autofocus = false;
   backgroundSubtraction = false;
+  selectedAnalysisRecipe: PipelineDocument | null = null;
   readonly wavelengthOptions: readonly LightChannel[] = ['uv255', 'uv310', 'uv365', 'vis'];
+  readonly lightOptions: ReadonlyArray<{ value: string; label: string }> = [
+    ...(['uv255', 'uv310', 'uv365'] as const).flatMap(wavelength => [
+      { value: `${wavelength}:dimmed`, label: `${LIGHT_CHANNEL_LABELS[wavelength]} – Tompított` },
+      { value: `${wavelength}:full`, label: `${LIGHT_CHANNEL_LABELS[wavelength]} – Teljes` }
+    ]),
+    { value: 'vis:full', label: 'VIS – Teljes' }
+  ];
   readonly filterOptions = [1, 2, 3, 4, 5, 6] as const;
   readonly lightLabels = LIGHT_CHANNEL_LABELS;
   private defaultExposureTime = 100000;
   private defaultGain = 0;
-  private defaultGamma = 1;
-  capturePlan: CapturePlanRow[] = [this.createCapturePlanRow('vis', 1)];
+  capturePlan: CapturePlanRow[] = [this.createCapturePlanRow('vis', 'full', 1)];
+  private autofocusSettings: AutofocusSettings = {
+    channel: 'vis',
+    brightness: 'full',
+    filter_position: 1
+  };
+  private autofocusSettingsLoaded = false;
+  private capturePlanLoaded = false;
+  private cameraCombinationSettings: CameraCombinationSettings | null = null;
   filterSettings: FilterSettings = {
     filters: [],
     slots: [null, null, null, null, null, null],
@@ -92,7 +125,6 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   };
   exposureRange?: CameraParameterRange;
   gainRange?: CameraParameterRange;
-  gammaRange?: CameraParameterRange;
 
   // Save location and measurement name
   saveLocation = '';
@@ -132,6 +164,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   // Subscription to current tablet measurement (for immediate cancellation on stop)
   private currentTabletSubscription: Subscription | null = null;
+  private currentProgressSubscription: Subscription | null = null;
+  private emittedProgressPaths = new Set<string>();
+  activePlanRowIndex: number | null = null;
+  private planRowScrollTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Subscription to homing operation (for immediate cancellation on stop)
   private homingSubscription: Subscription | null = null;
@@ -155,23 +191,49 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   tabletHomed = false;
   private homedSub?: Subscription;
   private traySettingsSub?: Subscription;
+  private cameraCombinationSettingsSub?: Subscription;
+  private filterSettingsSub?: Subscription;
 
   constructor(
     private autoService: AutoMeasurementService,
+    private autofocusSettingsService: AutofocusSettingsService,
     private filterSettingsService: FilterSettingsService,
+    private cameraCombinationSettingsService: CameraCombinationSettingsService,
     private motionSettingsService: MotionSettingsService,
     private sharedService: SharedService,
     private errorNotificationService: ErrorNotificationService,
     private http: HttpClient
   ) {}
 
+  onAnalysisRecipeSelected(recipe: PipelineDocument): void {
+    this.selectedAnalysisRecipe = recipe;
+  }
+
   ngOnInit(): void {
     // Subscribe to connection status from shared service
     this.cameraSub = this.sharedService.cameraConnectionStatus$.subscribe(status => {
+      const disconnectedNow = this.cameraStatusInitialized && this.cameraConnected && !status;
       this.cameraConnected = status;
+      this.cameraStatusInitialized = true;
+      if (disconnectedNow) {
+        this.errorNotificationService.addError({
+          code: 'E1111', message: this.errorNotificationService.getMessage('E1111')
+        });
+      } else if (status) {
+        this.errorNotificationService.removeError('E1111');
+      }
     });
     this.motionSub = this.sharedService.motionPlatformConnectionStatus$.subscribe(status => {
+      const disconnectedNow = this.motionStatusInitialized && this.motionConnected && !status;
       this.motionConnected = status;
+      this.motionStatusInitialized = true;
+      if (disconnectedNow) {
+        this.errorNotificationService.addError({
+          code: 'E1201', message: this.errorNotificationService.getMessage('E1201')
+        });
+      } else if (status) {
+        this.errorNotificationService.removeError('E1201');
+      }
     });
     this.scannerOperationSub = this.sharedService.measurementActive$.subscribe(active => {
       this.scannerOperationActive = active;
@@ -192,6 +254,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.autofocusErrorSub = this.sharedService.autofocusError$.subscribe(msg => {
       if (!this.measurementActive) {
         this.errorMessage = msg;
+        this.publishToolbarNotice('error', msg);
       }
     });
 
@@ -199,17 +262,36 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       next: config => {
         this.defaultExposureTime = config.values.ExposureTime;
         this.defaultGain = config.values.Gain;
-        this.defaultGamma = config.values.Gamma;
         this.exposureRange = config.ranges.ExposureTime;
         this.gainRange = config.ranges.Gain;
-        this.gammaRange = config.ranges.Gamma;
       },
       error: err => console.warn('Failed to load camera parameter ranges:', err)
     });
 
+    this.filterSettingsSub = this.filterSettingsService.settings$.subscribe(settings => {
+      if (!settings) return;
+      this.filterSettings = settings;
+      this.refreshPlanCameraCombinations();
+    });
     this.filterSettingsService.get().subscribe({
-      next: response => this.filterSettings = response.filter_settings,
       error: err => console.warn('Failed to load filter settings:', err)
+    });
+
+    this.cameraCombinationSettingsSub = this.cameraCombinationSettingsService.settings$.subscribe(settings => {
+      this.cameraCombinationSettings = settings;
+      this.refreshPlanCameraCombinations();
+    });
+    this.cameraCombinationSettingsService.get().subscribe({
+      error: err => console.warn('Failed to load camera combination settings:', err)
+    });
+
+    this.autofocusSettingsService.get().subscribe({
+      next: response => {
+        this.autofocusSettings = response.autofocus_settings;
+        this.autofocusSettingsLoaded = true;
+        this.syncAutofocusReferenceRow();
+      },
+      error: err => console.warn('Failed to load autofocus settings:', err)
     });
 
     this.traySettingsSub = this.motionSettingsService.advanced$.subscribe(settings => {
@@ -228,14 +310,17 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           if (Array.isArray(settings.capture_plan) && settings.capture_plan.length > 0) {
             this.capturePlan = settings.capture_plan
               .filter(row => this.isValidCaptureRequestRow(row))
-              .map((row, index) => this.createCapturePlanRow(
-                index === 0 ? 'vis' : row.wavelength,
-                index === 0 ? 1 : row.filter_position,
+              .map(row => this.createCapturePlanRow(
+                row.wavelength,
+                row.brightness,
+                row.filter_position,
                 row.exposure_time,
-                row.gain,
-                row.gamma
+                row.gain
               ));
           }
+          this.capturePlanLoaded = true;
+          this.syncAutofocusReferenceRow();
+          this.refreshPlanCameraCombinations();
         }
       },
       error: (err) => {
@@ -250,6 +335,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   ngOnDestroy(): void {
+    this.stopProgressPolling();
+    if (this.planRowScrollTimer) clearTimeout(this.planRowScrollTimer);
     this.cameraSub?.unsubscribe();
     this.motionSub?.unsubscribe();
     this.homedSub?.unsubscribe();
@@ -257,6 +344,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.autofocusActiveSub?.unsubscribe();
     this.scannerOperationSub?.unsubscribe();
     this.traySettingsSub?.unsubscribe();
+    this.cameraCombinationSettingsSub?.unsubscribe();
+    this.filterSettingsSub?.unsubscribe();
     
     // Ensure measurement is marked inactive on destroy
     if (this.measurementActive) {
@@ -272,6 +361,27 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   hasSelection(): boolean {
     return this.selectedSignal().size > 0;
+  }
+
+  get measurementButtonPrimary(): string {
+    return this.measurementActive ? 'Mérés leállítása' : 'Mérés indítása';
+  }
+
+  get measurementButtonDetail(): string | null {
+    if (this.measurementActive) {
+      if (this.reconnecting && this.reconnectMessage) return this.reconnectMessage;
+      if (this.validationMessage) return this.validationMessage;
+      return `Mérés folyamatban… (${this.currentTabletIndex}/${this.selectedCount})`;
+    }
+    if (this.isAutofocusing) return 'Autofókusz folyamatban…';
+    if (this.scannerOperationActive) return 'Másik művelet folyamatban…';
+    return this.getValidationMessage();
+  }
+
+  private publishToolbarNotice(
+    severity: 'info' | 'success' | 'error', message: string | null
+  ): void {
+    if (message) this.sharedService.setToolbarNotice({ severity, message });
   }
 
   // Get validation message based on current state
@@ -295,7 +405,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       return 'Adjon hozzá legalább egy mérési sort.';
     }
     if (this.capturePlan.some(row => !this.isCapturePlanRowValid(row))) {
-      return 'Adjon meg érvényes záridő-, erősítés- és gammaértéket minden mérési sorban.';
+      return 'Adjon meg érvényes záridő- és erősítésértéket minden mérési sorban.';
     }
     if (this.selectedSignal().size === 0) {
       return 'Válasszon legalább egy tablettát.';
@@ -329,13 +439,13 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   addCapturePlanRow(): void {
     const previous = this.capturePlan[this.capturePlan.length - 1];
-    this.capturePlan.push(this.createCapturePlanRow(
+    const row = this.createCapturePlanRow(
       previous?.wavelength ?? 'vis',
-      previous?.filter_position ?? 1,
-      previous?.exposure_time ?? this.defaultExposureTime,
-      previous?.gain ?? this.defaultGain,
-      previous?.gamma ?? this.defaultGamma
-    ));
+      previous?.brightness ?? 'full',
+      previous?.filter_position ?? 1
+    );
+    this.capturePlan.push(row);
+    this.applyCameraCombination(row);
     this.persistCapturePlan();
   }
 
@@ -344,6 +454,14 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       return;
     }
     this.capturePlan.splice(index, 1);
+    this.persistCapturePlan();
+  }
+
+  clearCapturePlan(): void {
+    if (this.measurementActive || this.capturePlan.length <= 1) {
+      return;
+    }
+    this.capturePlan.splice(1);
     this.persistCapturePlan();
   }
 
@@ -360,23 +478,22 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   private createCapturePlanRow(
     wavelength: LightChannel,
+    brightness: UvBrightnessMode,
     filterPosition: number,
     exposureTime = this.defaultExposureTime,
-    gain = this.defaultGain,
-    gamma = this.defaultGamma
+    gain = this.defaultGain
   ): CapturePlanRow {
     return {
       id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
       wavelength,
+      brightness: wavelength === 'vis' ? 'full' : brightness,
       filter_position: this.filterOptions.includes(filterPosition as 1 | 2 | 3 | 4 | 5 | 6)
         ? filterPosition as 1 | 2 | 3 | 4 | 5 | 6
         : 1,
       exposure_time: exposureTime,
       gain,
-      gamma,
       exposure_time_text: this.formatExposureText(String(exposureTime)),
-      gain_text: gain.toString(),
-      gamma_text: gamma.toFixed(1)
+      gain_text: gain.toString()
     };
   }
 
@@ -384,51 +501,113 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     if (!row || typeof row !== 'object') return false;
     const candidate = row as CaptureRequestRow;
     return this.wavelengthOptions.includes(candidate.wavelength)
+      && (candidate.brightness === 'dimmed' || candidate.brightness === 'full')
+      && (candidate.wavelength !== 'vis' || candidate.brightness === 'full')
       && this.filterOptions.includes(candidate.filter_position as 1 | 2 | 3 | 4 | 5 | 6)
       && this.isFinitePositive(candidate.exposure_time)
-      && this.isFiniteNonNegative(candidate.gain)
-      && this.isFinitePositive(candidate.gamma);
+      && this.isFiniteNonNegative(candidate.gain);
   }
 
   private persistCapturePlan(): void {
     this.enforceAutofocusReferenceRow();
     if (!this.capturePlan.every(row => this.isCapturePlanRowValid(row))) return;
     const capturePlan = this.capturePlan.map(
-      ({ wavelength, filter_position, exposure_time, gain, gamma }) =>
-        ({ wavelength, filter_position, exposure_time, gain, gamma })
+      ({ wavelength, brightness, filter_position, exposure_time, gain }) =>
+        ({ wavelength, brightness, filter_position, exposure_time, gain })
     );
     this.autoService.updateSettings('capture_plan', capturePlan).subscribe({
       error: err => console.warn('Failed to save capture plan:', err)
     });
   }
 
+  onCaptureOpticsChanged(row: CapturePlanRow): void {
+    this.applyCameraCombination(row);
+    this.onCapturePlanChanged();
+  }
+
+  onFilterSelectionChanged(row: CapturePlanRow, filterPosition: number): void {
+    if (!this.filterOptions.includes(filterPosition as 1 | 2 | 3 | 4 | 5 | 6)) return;
+    row.filter_position = filterPosition as 1 | 2 | 3 | 4 | 5 | 6;
+    this.onCaptureOpticsChanged(row);
+  }
+
+  getLightSelectionValue(row: CapturePlanRow): string {
+    return `${row.wavelength}:${row.brightness}`;
+  }
+
+  getLightSelectionLabel(row: CapturePlanRow): string {
+    const mode = row.brightness === 'dimmed' ? 'Tompított' : 'Teljes';
+    return `${this.lightLabels[row.wavelength]} – ${mode}`;
+  }
+
+  onLightSelectionChanged(row: CapturePlanRow, selection: string): void {
+    const [wavelength, brightness] = selection.split(':') as [LightChannel, UvBrightnessMode];
+    if (!this.wavelengthOptions.includes(wavelength)) return;
+    if (brightness !== 'dimmed' && brightness !== 'full') return;
+    row.wavelength = wavelength;
+    row.brightness = wavelength === 'vis' ? 'full' : brightness;
+    this.onCaptureOpticsChanged(row);
+  }
+
+  private refreshPlanCameraCombinations(): void {
+    if (!this.capturePlanLoaded || !this.cameraCombinationSettings) return;
+    for (const row of this.capturePlan) this.applyCameraCombination(row);
+    // Do not persist until the fixed autofocus row has also loaded; otherwise
+    // asynchronous startup responses could briefly save the fallback optics.
+    if (this.autofocusSettingsLoaded) this.persistCapturePlan();
+  }
+
+  private applyCameraCombination(row: CapturePlanRow): void {
+    const group = this.cameraFilterGroup(row.filter_position);
+    const cell = group ? this.cameraCombinationSettings?.[group]?.[row.wavelength] : null;
+    if (!cell) return;
+    row.exposure_time = cell.exposure_time;
+    row.gain = cell.gain;
+    row.exposure_time_text = this.formatExposureText(String(cell.exposure_time));
+    row.gain_text = String(cell.gain);
+  }
+
+  private cameraFilterGroup(position: number): string | null {
+    const filterId = this.filterSettings.slots[position - 1];
+    if (!filterId) return 'empty';
+    const definition = this.filterSettings.filters.find(item => item.id === filterId);
+    if (!definition) return null;
+    const name = definition.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLocaleLowerCase('hu').replace(/[\s-]/g, '');
+    if (['kek', 'zold', 'piros', 'blue', 'green', 'red'].includes(name)) return 'rgb';
+    if (name === '255nm' || name === '265nm') return 'filter_255nm';
+    if (name === '365nm') return 'filter_365nm';
+    return null;
+  }
+
   private enforceAutofocusReferenceRow(): void {
     const firstRow = this.capturePlan[0];
     if (!firstRow) return;
-    firstRow.wavelength = 'vis';
-    firstRow.filter_position = 1;
+    firstRow.wavelength = this.autofocusSettings.channel;
+    firstRow.brightness = this.autofocusSettings.channel === 'vis'
+      ? 'full'
+      : this.autofocusSettings.brightness;
+    firstRow.filter_position = this.autofocusSettings.filter_position;
+  }
+
+  private syncAutofocusReferenceRow(): void {
+    if (!this.autofocusSettingsLoaded || !this.capturePlanLoaded) return;
+    this.enforceAutofocusReferenceRow();
+    if (this.capturePlan[0]) this.applyCameraCombination(this.capturePlan[0]);
+    this.persistCapturePlan();
   }
 
   getFilterSlotLabel(position: number): string {
     const filterId = this.filterSettings.slots[position - 1];
+    if (!filterId) return position === 1 ? 'Üres' : '—';
     const filter = this.filterSettings.filters.find(item => item.id === filterId);
-    return filter?.wavelength_range ? `${filter.wavelength_range} nm` : '—';
+    return filter?.name || '—';
   }
 
   onCaptureNumberBlur(row: CapturePlanRow): void {
     if (this.isExposureValid(row)) {
       row.exposure_time = this.parseDecimal(row.exposure_time_text)!;
       row.exposure_time_text = this.formatExposureText(String(row.exposure_time));
-    }
-    if (this.isCapturePlanRowValid(row)) {
-      this.persistCapturePlan();
-    }
-  }
-
-  onGammaBlur(row: CapturePlanRow): void {
-    if (this.isGammaValid(row)) {
-      row.gamma = this.parseDecimal(row.gamma_text)!;
-      row.gamma_text = String(row.gamma);
     }
     if (this.isCapturePlanRowValid(row)) {
       this.persistCapturePlan();
@@ -447,7 +626,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   onCaptureNumberInput(
     row: CapturePlanRow,
-    field: 'exposure_time' | 'gain' | 'gamma',
+    field: 'exposure_time' | 'gain',
     value: string
   ): void {
     if (field === 'exposure_time') {
@@ -456,16 +635,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       row.exposure_time_text = this.formatExposureText(ungroupedValue);
       const parsed = this.parseDecimal(ungroupedValue);
       if (parsed !== null) row.exposure_time = parsed;
-    } else if (field === 'gain') {
+    } else {
       if (!/^\d*(?:[.,]\d*)?$/.test(value)) return;
       row.gain_text = value;
       const parsed = this.parseDecimal(value);
       if (parsed !== null) row.gain = parsed;
-    } else {
-      if (!/^\d*(?:[.,]\d*)?$/.test(value)) return;
-      row.gamma_text = value;
-      const parsed = this.parseDecimal(value);
-      if (parsed !== null) row.gamma = parsed;
     }
   }
 
@@ -498,15 +672,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   isCapturePlanRowValid(row: CapturePlanRow): boolean {
-    return this.isExposureValid(row) && this.isGainValid(row) && this.isGammaValid(row);
+    return this.isExposureValid(row) && this.isGainValid(row);
   }
 
   isExposureValid(row: CapturePlanRow): boolean {
     return this.isValueInRange(this.parseDecimal(row.exposure_time_text), this.exposureRange);
-  }
-
-  isGammaValid(row: CapturePlanRow): boolean {
-    return this.isValueInRange(this.parseDecimal(row.gamma_text), this.gammaRange);
   }
 
   isGainValid(row: CapturePlanRow): boolean {
@@ -549,23 +719,6 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   private isFiniteNonNegative(value: unknown): boolean {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  }
-
-  // Get info message to show when button is enabled
-  getInfoMessage(): string | null {
-    // Only show info message when:
-    // 1. Not currently measuring
-    // 2. Button is enabled (canStart returns true)
-    // 3. No validation message is being shown
-    if (this.measurementActive || this.validationMessage) {
-      return null;
-    }
-    
-    if (this.canStart()) {
-      return 'Ellenőrizze a mentési beállításokat!';
-    }
-    
-    return null;
   }
 
   // ===== Tablet context menu =====
@@ -865,6 +1018,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.errorMessage = null;
     this.successMessage = null;
     this.validationMessage = null;
+    this.sharedService.clearToolbarNotice();
   }
 
   // ===== Position calculation =====
@@ -902,6 +1056,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.errorMessage = null;
     this.successMessage = null;
     this.validationMessage = null;
+    this.sharedService.clearToolbarNotice();
     this.stopRequested = false;
     this.reconnectAttemptCount = 0;
     this.completedTablets.clear();
@@ -937,7 +1092,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     const axesOrder: Array<'z' | 'y' | 'x' | 'a'> = ['z', 'y', 'x', 'a'];
 
     const homing$ = from(axesOrder).pipe(
-      concatMap((axis) => this.http.post(`${BASE_URL}/home_toolhead`, { axes: [axis] })),
+      concatMap((axis) => this.http.post(`${BASE_URL}/home_toolhead`, {
+        axes: [axis],
+        select_autofocus_filter: axis === 'a'
+      })),
       last(),
       switchMap(() => this.http.get<{ x?: number | null; y?: number | null; z?: number | null }>(`${BASE_URL}/get_motion_platform_position`)),
       finalize(() => {
@@ -976,13 +1134,14 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           const device = this.detectDisconnectedDevice(err);
           this.attemptDeviceReconnect(
             device,
-            'homing',
+            'nullázás',
             () => this.homeMotionPlatformThenProceed(indices)
           );
           return;
         }
 
         this.errorMessage = 'Hiba: Nem sikerült pozicionálni a mozgásplatformot.';
+        this.publishToolbarNotice('error', this.errorMessage);
         this.finishMeasurement(false);
       }
     });
@@ -1016,6 +1175,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       this.currentTabletSubscription.unsubscribe();
       this.currentTabletSubscription = null;
     }
+    this.stopProgressPolling();
 
     // Cancel homing operation
     if (this.homingSubscription) {
@@ -1049,7 +1209,9 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     // Determine if this is the first tablet (for coarse vs fine autofocus)
     const isFirstTablet = queueIndex === 0;
 
+    const requestId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     const req: TabletStepRequest = {
+      request_id: requestId,
       tablet_index: tabletId,
       x: position.x,
       y: position.y,
@@ -1058,8 +1220,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       measurement_name: this.measurementName.trim(),
       autofocus: this.autofocus,
       capture_plan: this.capturePlan.map(
-        ({ wavelength, filter_position, exposure_time, gain, gamma }) =>
-          ({ wavelength, filter_position, exposure_time, gain, gamma })
+        ({ wavelength, brightness, filter_position, exposure_time, gain }) =>
+          ({ wavelength, brightness, filter_position, exposure_time, gain })
       ),
       is_first_tablet: isFirstTablet,
       background_subtraction: this.backgroundSubtraction
@@ -1071,6 +1233,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       return;
     }
 
+    this.startProgressPolling(requestId, tabletId);
     this.currentTabletSubscription = this.autoService.measureSingleTablet(req).subscribe({
       next: (resp) => {
         if (this.stopRequested) {
@@ -1081,12 +1244,18 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         }
 
         if (resp.status === 'success') {
+          this.stopProgressPolling();
           // Check if any E2xxx error was flagged (tablet missing, exposure, position, quality, etc.)
           if (resp.af_error_code && resp.af_error_code.startsWith('E2')) {
             // Mark tablet as failed (red) and store the error message
             this.failedTablets.add(tabletId);
             this.tabletErrors.set(tabletId, resp.af_error_message ?? resp.af_error_code);
             this.errorMessage = `${this.getTabletLabel(tabletId)} tabletta: ${resp.af_error_message ?? resp.af_error_code}`;
+            this.errorNotificationService.addError({
+              code: `AUTO_TABLET_${tabletId}_${resp.af_error_code}`,
+              message: this.errorMessage,
+              severity: 'warning',
+            });
           } else {
             // Mark tablet as completed (green)
             this.completedTablets.add(tabletId);
@@ -1100,12 +1269,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
                 continue;
               }
               nonMaskedPaths.push(imagePath);
-              const lightType = imagePath.includes('_dome_') ? 'dome' : 'bar';
-              this.sharedService.emitSavedImage({
-                path: imagePath,
-                tabletIndex: tabletId,
-                lightType: lightType as 'dome' | 'bar'
-              });
+              this.emitGalleryImage(imagePath, tabletId);
             }
             if (nonMaskedPaths.length > 0) {
               this.tabletImages.set(tabletId, nonMaskedPaths);
@@ -1117,14 +1281,17 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           this.currentTabletSubscription = null;
           this.processTabletQueue(indices, queueIndex + 1);
         } else {
+          this.stopProgressPolling();
           // Error during measurement
-          this.errorMessage = resp.message ?? `Hiba a ${tabletId}. tabletta mérésekor.`;
+          this.errorMessage = `A(z) ${this.getTabletLabel(tabletId)} tabletta mérése sikertelen.`;
+          this.publishToolbarNotice('error', this.errorMessage);
           this.currentTabletSubscription?.unsubscribe();
           this.currentTabletSubscription = null;
           this.finishMeasurement(false);
         }
       },
       error: (err) => {
+        this.stopProgressPolling();
         this.currentTabletSubscription?.unsubscribe();
         this.currentTabletSubscription = null;
 
@@ -1144,10 +1311,68 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
           return;
         }
 
-        this.errorMessage = err?.error?.message ?? `Szerver hiba a ${tabletId}. tabletta mérésekor.`;
+        const errorCode = err?.error?.code;
+        this.errorMessage = errorCode
+          ? this.errorNotificationService.getMessage(errorCode)
+          : `Szerverhiba a(z) ${this.getTabletLabel(tabletId)} tabletta mérésekor.`;
+        // Error responses are already presented by the HTTP interceptor. Do
+        // not add a second notice containing low-level backend exception text.
         this.finishMeasurement(false);
       }
     });
+  }
+
+  private startProgressPolling(requestId: string, tabletId: number): void {
+    this.stopProgressPolling();
+    this.emittedProgressPaths.clear();
+    this.currentProgressSubscription = timer(100, 250).pipe(
+      switchMap(() => this.autoService.getProgress(requestId).pipe(
+        catchError(err => {
+          if (err?.status !== 404) console.warn('Failed to poll measurement image progress:', err);
+          return EMPTY;
+        })
+      ))
+    ).subscribe({
+      next: progress => {
+        this.setActivePlanRow(progress.active_plan_row_index);
+        this.errorNotificationService.addWarnings(progress.warnings);
+        for (const image of progress.images) {
+          if (!image.masked) this.emitGalleryImage(image.path, tabletId);
+        }
+      }
+    });
+  }
+
+  private stopProgressPolling(): void {
+    this.currentProgressSubscription?.unsubscribe();
+    this.currentProgressSubscription = null;
+    this.setActivePlanRow(null);
+  }
+
+  private setActivePlanRow(rowIndex: number | null): void {
+    if (this.activePlanRowIndex === rowIndex) return;
+    this.activePlanRowIndex = rowIndex;
+    if (this.planRowScrollTimer) clearTimeout(this.planRowScrollTimer);
+    this.planRowScrollTimer = null;
+    if (rowIndex === null) return;
+
+    this.planRowScrollTimer = setTimeout(() => {
+      this.planRowScrollTimer = null;
+      const container = this.capturePlanScroll?.nativeElement;
+      const row = container?.querySelector<HTMLElement>(`[data-plan-row-index="${rowIndex}"]`);
+      row?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    });
+  }
+
+  private emitGalleryImage(path: string, tabletId: number): void {
+    const key = path.replace(/\\/g, '/').toLowerCase();
+    if (this.emittedProgressPaths.has(key)) return;
+    this.emittedProgressPaths.add(key);
+    this.sharedService.emitSavedImage({ path, tabletIndex: tabletId });
+    const current = this.tabletImages.get(tabletId) ?? [];
+    if (!current.some(existing => existing.replace(/\\/g, '/').toLowerCase() === key)) {
+      this.tabletImages.set(tabletId, [...current, path]);
+    }
   }
 
   private applyTrayGeometry(settings: AdvancedMotionSettings): void {
@@ -1218,10 +1443,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   /**
    * Attempt to reconnect to the specified device for up to 30 seconds.
    * If reconnection succeeds, call resumeCallback to continue the measurement.
-   * If it fails after 30s, show a center-error-popup and stop.
+   * If it fails after 30s, show a toolbar error and stop.
    *
    * @param device 'motion' or 'camera'
-   * @param context Human-readable context (e.g. 'homing' or 'tabletta 3')
+   * @param context Hungarian operator-facing context (e.g. 'nullázás' or 'tabletta 3')
    * @param resumeCallback Function to call after successful reconnection
    */
   private attemptDeviceReconnect(
@@ -1244,8 +1469,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       console.error(`${deviceName} reconnect cycle limit reached (${AutoMeasurementComponent.MAX_RECONNECT_CYCLES}). Stopping measurement.`);
       this.errorNotificationService.addError({
         code: errorCode,
-        message: `${deviceName} kapcsolat megszakadt (${context}). Többszöri újracsatlakozás sikertelen.`,
-        popupStyle: 'center'
+        message: `${deviceName} kapcsolat megszakadt (${context}). Többszöri újracsatlakozás sikertelen.`
       });
       this.errorMessage = `${deviceName} újracsatlakozás többszöri sikertelen próbálkozás után. Mérés megszakítva.`;
       this.reconnectAttemptCount = 0;
@@ -1271,11 +1495,10 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       if (elapsedMs >= RECONNECT_TIMEOUT_S * 1000) {
         this.clearReconnectState();
 
-        // Show center-error-popup
+        // Show the same compact toolbar error used by other scanner failures.
         this.errorNotificationService.addError({
           code: errorCode,
-          message: `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás sikertelen (${RECONNECT_TIMEOUT_S}s).`,
-          popupStyle: 'center'
+          message: `${deviceName} kapcsolat megszakadt (${context}). Újracsatlakozás sikertelen (${RECONNECT_TIMEOUT_S}s).`
         });
 
         this.errorMessage = `${deviceName} újracsatlakozás sikertelen (${RECONNECT_TIMEOUT_S}s). Mérés megszakítva.`;
@@ -1359,9 +1582,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     if (this.stopRequested) {
       const failedNote = this.failedTablets.size > 0 ? ` ${this.failedTablets.size} hibás.` : '';
       this.successMessage = `Mérés leállítva. ${this.completedTablets.size} tabletta mérése kész.${failedNote}`;
+      this.publishToolbarNotice('info', this.successMessage);
     } else if (success) {
       const failedNote = this.failedTablets.size > 0 ? ` ${this.failedTablets.size} hibás.` : '';
       this.successMessage = `Mérés sikeresen befejezve. ${this.completedTablets.size} tabletta mérése kész.${failedNote}`;
+      this.publishToolbarNotice('success', this.successMessage);
       this.scheduleBedMoveToZero();
     }
     // Error message is set in processTabletQueue if there was an error

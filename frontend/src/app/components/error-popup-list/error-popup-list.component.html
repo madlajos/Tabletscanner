@@ -1,7 +1,11 @@
-<!-- Default error popups (usually in a list) -->
-<div class="error-popup-list">
-  <div *ngFor="let error of defaultErrors$ | async; let i = index" class="error-item" [ngStyle]="{'margin-top': i === 0 ? '0' : '10px'}">
-    <app-error-popup [message]="error.message" [index]="error.code" (close)="dismissError($event)"></app-error-popup>
+<div *ngIf="stack$ | async as stack" class="error-popup-list">
+  <div *ngIf="stack.active as notification" class="notification-stack" [class.has-multiple]="stack.total > 1">
+    <app-error-popup [message]="notification.message" [index]="notification.code"
+      [severity]="notification.severity" (close)="dismissError($event)"></app-error-popup>
+    <div *ngIf="stack.badges.length" class="notification-badges" aria-label="További értesítések">
+      <span *ngFor="let badge of stack.badges" class="notification-badge" [ngClass]="badge.severity"
+        [attr.aria-label]="badge.count + ' ' + badge.label">{{ badge.count }}</span>
+    </div>
   </div>
 </div>
 

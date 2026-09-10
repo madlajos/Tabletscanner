@@ -93,6 +93,12 @@ export interface RecipeSummary {
   description: string;
   step_count: number;
   modified_at: string;
+  folder_id?: string | null;
+}
+
+export interface RecipeFolder {
+  id: string;
+  name: string;
 }
 
 export function createStepInstance(stepDefId: string, order: number, defaults?: Record<string, any>): StepInstance {

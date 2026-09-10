@@ -16,12 +16,13 @@ import filter_revolver
 from filter_capture_series import (
     FilterCaptureSeriesCoordinator,
     capture_filename,
-    capture_folder_is_empty,
     capture_series_stem,
     next_capture_series_index,
     resolve_filter_targets,
 )
 import height_offset_control
+from filter_series_camera import capture_series_frame
+from height_reference_api import create_height_reference_blueprint, guard_manual_motion, guard_capture_operation
 from height_offset_control import HeightOffsetCommandError
 import os
 import sys
@@ -37,11 +38,16 @@ from settings_manager import (
     DEFAULT_FIRST_TABLET_Y_MM,
     DEFAULT_FIRST_TABLET_Z_MM,
     DEFAULT_TABLET_SPACING_MM,
+    DEFAULT_LOWER_Z_BEFORE_XY_MOVE,
+    DEFAULT_XY_MOVE_Z_LIMIT_MM,
+    DEFAULT_SAVE_AUTOFOCUS_IMAGE,
+    DEFAULT_CHECK_TABLET_PRESENCE,
     load_settings,
     save_settings,
     update_lamp_output_selectors,
     update_filter_settings,
     update_autofocus_settings,
+    update_camera_combination_settings,
     get_settings,
     validate_capture_plan,
     default_autofocus_settings,
@@ -50,11 +56,17 @@ from settings_manager import (
     validate_filter_settings,
     validate_lamp_output_selectors,
     validate_lamp_settings,
+    validate_camera_combination_settings,
+    reconcile_camera_combination_settings,
+    camera_filter_group,
     validate_motion_simulation_settings,
     TrayGeometryError,
     UV_LAMP_CHANNELS,
+    HEIGHT_OFFSET_REFERENCE_FILTER_NAMES,
 )
 from light_control import (
+    CaptureIlluminationError,
+    LIGHT_CHANNELS,
     LampSettingsError,
     LightCommandError,
     LightConfigurationError,
@@ -83,9 +95,10 @@ import pipeline_engine
 import pipeline_validators
 import recipe_manager
 import calibration_manager
+import measurement_progress
 from pipeline_types import PipelineDocument
 from proc_elements.scale_bar import scale_bar_overlay as _apply_scale_bar_overlay
-from image_metadata import build_capture_metadata
+from image_metadata import build_capture_metadata, serialize_capture_metadata
 
 
 app = Flask(__name__)
@@ -102,6 +115,10 @@ light_controller = LightController(
     operation_lock=porthandler.motion_lock,
 )
 bgr_capture_coordinator = FilterCaptureSeriesCoordinator()
+BGR_HARDWARE_SETTLE_SECONDS = 0.5
+BGR_CAMERA_RETRY_SETTLE_SECONDS = 0.25
+AUTOFOCUS_HARDWARE_SETTLE_SECONDS = 0.5
+AUTOFOCUS_ILLUMINATION_SETTLE_SECONDS = 0.25
 
 
 def four_channel_lamp_timeout_monitor():
@@ -206,11 +223,20 @@ def _is_serial_disconnect(exc):
 
 def _is_camera_disconnect(exc):
     """Check if an exception is caused by a camera disconnection or failure."""
-    msg = str(exc).lower()
+    messages = []
+    current = exc
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current).lower())
+        current = current.__cause__ or current.__context__
+    msg = ' | '.join(messages)
     return any(keyword in msg for keyword in [
         'camera not ready', 'camera disconnected', 'grab failed',
         'failed to grab', 'physically removed', 'not open',
-        'camera is not grabbing'
+        'camera is not grabbing', 'device has been removed',
+        'device was removed', 'error setting exposuretime for camera',
+        'error setting gain for camera', 'error applying camera settings',
     ])
 
 
@@ -485,6 +511,16 @@ def api_home_toolhead():
         if 'a' in homed_now:
             globals.filter_revolver_homed = True
             globals.filter_revolver_position = 1
+            if data.get('select_autofocus_filter') is True:
+                autofocus_settings = _current_autofocus_settings()
+                _move_filter_revolver_to_position(
+                    ser,
+                    autofocus_settings['filter_position'],
+                )
+                app.logger.info(
+                    'A-axis homed and moved directly to autofocus filter position %s.',
+                    autofocus_settings['filter_position'],
+                )
         
         # Query and cache the position after successful homing
         try:
@@ -532,6 +568,17 @@ def api_home_toolhead():
             'error': str(e),
             'code': ErrorCode.MOTION_HOMING_TIMEOUT,
             'popup': True
+        }), 504
+    except filter_revolver.FilterRevolverCommandError as e:
+        globals.homed_axes.discard('a')
+        globals.filter_revolver_homed = False
+        globals.filter_revolver_position = None
+        app.logger.warning('Autofocus-filter selection after A homing failed: %s', e)
+        return jsonify({
+            'ok': False,
+            'error': str(e),
+            'code': ErrorCode.GENERIC,
+            'popup': True,
         }), 504
     except (OSError, PermissionError) as e:
         app.logger.warning(f"Motion platform disconnected during homing (USB error): {e}")
@@ -600,10 +647,21 @@ def _move_filter_revolver_to_position(motion_platform, target_position):
         )
 
 
-def _select_configured_autofocus_hardware(motion_platform, manage_motion_busy=False):
-    """Select the saved filter/light combination and return validated settings."""
+def _select_configured_autofocus_hardware(
+    motion_platform,
+    manage_motion_busy=False,
+    capture_plan_row=None,
+):
+    """Select and arm the saved autofocus optical/camera combination.
+
+    The old preview acquisition is stopped only after the autofocus matrix cell
+    has been applied. Acquisition restarts after the filter, camera parameters
+    and illumination are all settled, so autofocus cannot consume a queued
+    frame made with the previously selected exposure or gain.
+    """
     filter_settings = _current_filter_settings()
     autofocus_settings = _current_autofocus_settings(filter_settings)
+    light_controller.off()
     if manage_motion_busy:
         _select_measurement_filter_position(
             motion_platform,
@@ -614,12 +672,56 @@ def _select_configured_autofocus_hardware(motion_platform, manage_motion_busy=Fa
             motion_platform,
             autofocus_settings['filter_position'],
         )
+    time.sleep(AUTOFOCUS_HARDWARE_SETTLE_SECONDS)
+
+    camera_params = _apply_selected_camera_combination(
+        autofocus_settings['channel'], autofocus_settings['filter_position'])
+    if capture_plan_row is not None:
+        applied = _apply_capture_plan_camera_settings(capture_plan_row)
+        camera_params = {
+            **camera_params,
+            'ExposureTime': applied['exposure_time'],
+            'Gain': applied['gain'],
+        }
+    camera = globals.camera
+    if not camera or not camera.IsOpen():
+        raise RuntimeError('Camera is disconnected before autofocus.')
+    for setting_name in ('ExposureTime', 'Gain'):
+        expected = float(camera_params[setting_name])
+        actual = float(getattr(camera, setting_name).GetValue())
+        if not math.isfinite(actual) or not math.isclose(actual, expected, rel_tol=1e-6, abs_tol=1e-6):
+            raise RuntimeError(
+                f'Camera {setting_name} did not reach the autofocus setting '
+                f'(expected {expected:g}, actual {actual:g}).'
+            )
+
     activation_mode = (
         autofocus_settings['brightness']
         if autofocus_settings['channel'] in UV_LAMP_CHANNELS
         else None
     )
-    light_controller.activate(autofocus_settings['channel'], activation_mode)
+
+    if not globals.grab_lock.acquire(timeout=5):
+        raise RuntimeError('The camera is busy before autofocus.')
+    was_grabbing = False
+    try:
+        was_grabbing = camera.IsGrabbing()
+        if was_grabbing:
+            camera.StopGrabbing()
+        light_controller.activate(autofocus_settings['channel'], activation_mode)
+        time.sleep(AUTOFOCUS_ILLUMINATION_SETTLE_SECONDS)
+        camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+    except Exception:
+        try:
+            light_controller.off()
+        except Exception:
+            pass
+        if was_grabbing and camera.IsOpen() and not camera.IsGrabbing():
+            camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+        raise
+    finally:
+        globals.grab_lock.release()
+
     return autofocus_settings, filter_settings
 
 
@@ -630,6 +732,88 @@ def _apply_selected_height_offset(motion_platform):
         _current_filter_settings(),
         light_controller.status()['active_channel'],
     )
+
+
+def _camera_combination_cell(channel=None, filter_position=None):
+    """Resolve the configured exposure/gain for the active optical pair."""
+    channel = channel or light_controller.status()['active_channel']
+    filter_position = filter_position or getattr(globals, 'filter_revolver_position', None)
+    if channel is None or not isinstance(filter_position, int):
+        return None
+    filter_settings = _current_filter_settings()
+    slots = filter_settings['slots']
+    if not 1 <= filter_position <= len(slots):
+        return None
+    filter_key = camera_filter_group(filter_settings, filter_position)
+    if filter_key is None:
+        return None
+    matrix = reconcile_camera_combination_settings(
+        get_settings().get('camera_combination_settings'), filter_settings,
+        get_settings().get('camera_params'))
+    return matrix.get(filter_key, {}).get(channel)
+
+
+def _apply_selected_camera_combination(channel=None, filter_position=None):
+    """Apply exposure/gain and return the current camera panel values."""
+    cell = _camera_combination_cell(channel, filter_position)
+    settings_data = get_settings()
+    current = settings_data.setdefault('camera_params', {})
+    if cell is None:
+        return current
+    applied = {'ExposureTime': cell['exposure_time'], 'Gain': cell['gain']}
+    camera = globals.camera
+    if camera and camera.IsOpen():
+        properties = getattr(globals, 'camera_properties', None)
+        if not properties or any(name not in properties for name in applied):
+            properties = get_camera_properties(camera)
+            globals.camera_properties = properties
+        applied = {
+            name: validate_and_set_camera_param(camera, name, value, properties)
+            for name, value in applied.items()
+        }
+    current.update(applied)
+    return dict(current)
+
+
+def _blue_filter_position(filter_settings):
+    """Return the configured wheel position of the Kék/Blue VIS filter."""
+    blue_ids = {
+        definition['id']
+        for definition in filter_settings.get('filters', [])
+        if isinstance(definition, dict)
+        and str(definition.get('name', '')).casefold()
+        in HEIGHT_OFFSET_REFERENCE_FILTER_NAMES
+    }
+    return next(
+        (position for position, filter_id in enumerate(filter_settings.get('slots', []), 1)
+         if filter_id in blue_ids),
+        None,
+    )
+
+
+def _select_blue_filter_for_vis(motion_platform):
+    """Move incompatible 255/365 filters out of the optical path before VIS."""
+    filter_settings = _current_filter_settings()
+    current_position = globals.filter_revolver_position
+    if camera_filter_group(filter_settings, current_position) not in (
+        'filter_255nm', 'filter_365nm'
+    ):
+        return False
+
+    blue_position = _blue_filter_position(filter_settings)
+    if blue_position is None:
+        raise ValueError('A configured Kék/Blue filter is required before activating VIS.')
+
+    # Do not illuminate while the revolver is moving. If the move fails, VIS
+    # is never activated and the controller remains in its safe all-off state.
+    light_controller.off()
+    _move_filter_revolver_to_position(motion_platform, blue_position)
+    return True
+
+
+app.register_blueprint(create_height_reference_blueprint(
+    light_controller, _current_filter_settings, _handle_motion_usb_disconnect,
+))
 
 
 @app.route('/api/filter-revolver/status', methods=['GET'])
@@ -680,10 +864,12 @@ def rotate_filter_revolver():
             direction,
         )
         height_offset = _apply_selected_height_offset(motion_platform)
+        camera_params = _apply_selected_camera_combination()
         globals.motion_busy = False
         return jsonify({
             **_filter_revolver_status(),
             'height_offset': height_offset,
+            'camera_params': camera_params,
         }), 200
     except filter_revolver.FilterRevolverCommandError as error:
         globals.homed_axes.discard('a')
@@ -775,12 +961,14 @@ def select_filter_revolver_position():
                 direction,
             )
         height_offset = _apply_selected_height_offset(motion_platform)
+        camera_params = _apply_selected_camera_combination()
         globals.motion_busy = False
         return jsonify({
             **_filter_revolver_status(),
             'direction': direction,
             'steps': steps,
             'height_offset': height_offset,
+            'camera_params': camera_params,
         }), 200
     except filter_revolver.FilterRevolverCommandError as error:
         globals.homed_axes.discard('a')
@@ -917,9 +1105,8 @@ def get_camera_status():
     Return {"connected": bool, "streaming": bool} and
     detect if a previously-open camera was physically removed while idle.
     
-    Uses a cached serial number to avoid expensive EnumerateDevices()
-    calls on every 1-second poll. Only re-enumerates on cache miss or
-    when the camera was previously disconnected.
+    Verifies physical presence as well as the open-handle state. Some camera
+    drivers keep IsOpen() true after a USB disconnect.
     """
     camera = getattr(globals, 'camera', None)
     is_streaming = bool(getattr(globals, 'stream_running', False))
@@ -932,56 +1119,57 @@ def get_camera_status():
         except Exception:
             is_connected = False
 
-    # Only re-enumerate devices when we need to verify physical presence.
-    # Cache the serial number at connect time to avoid expensive USB
-    # enumeration on every poll.
     if is_connected:
-        cached_serial = getattr(globals, '_cached_camera_serial', None)
         try:
             open_serial = camera.GetDeviceInfo().GetSerialNumber()
-            # Cache for future polls
             globals._cached_camera_serial = open_serial
         except Exception:
             open_serial = None
             globals._cached_camera_serial = None
 
-        # Fast path: serial matches cache → device is still there
-        if cached_serial and open_serial and cached_serial == open_serial:
-            pass  # All good, skip enumeration
-        else:
-            # Slow path: verify via device enumeration (first poll or serial changed)
+        device_removed = False
+        removal_check_available = False
+        removal_check = getattr(camera, 'IsCameraDeviceRemoved', None)
+        if callable(removal_check):
+            removal_check_available = True
+            try:
+                device_removed = bool(removal_check())
+            except Exception:
+                device_removed = True
+
+        present_serials = {open_serial} if open_serial else set()
+        if not removal_check_available:
+            # Compatibility fallback for camera APIs without the dedicated
+            # removal probe. GetDeviceInfo() alone may return cached data.
             try:
                 devices = pylon.TlFactory.GetInstance().EnumerateDevices()
-            except Exception:
-                devices = []
-
-            present_serials = []
-            try:
+                present_serials = set()
                 for dev in devices:
                     try:
-                        present_serials.append(dev.GetSerialNumber())
+                        serial = dev.GetSerialNumber()
+                        if serial:
+                            present_serials.add(serial)
+                    except Exception:
+                        continue
+            except Exception:
+                present_serials = set()
+
+        if device_removed or not open_serial or open_serial not in present_serials:
+            try:
+                if is_streaming:
+                    try:
+                        camera.StopGrabbing()
                     except Exception:
                         pass
+                camera.Close()
             except Exception:
                 pass
 
-            if not present_serials or (open_serial and open_serial not in present_serials):
-                # Device is gone → clean up and flip to disconnected
-                try:
-                    if is_streaming:
-                        try:
-                            camera.StopGrabbing()
-                        except Exception:
-                            pass
-                    camera.Close()
-                except Exception:
-                    pass
-
-                globals.camera = None
-                globals.stream_running = False
-                globals._cached_camera_serial = None
-                is_connected = False
-                is_streaming = False
+            globals.camera = None
+            globals.stream_running = False
+            globals._cached_camera_serial = None
+            is_connected = False
+            is_streaming = False
     else:
         # Camera not connected → clear cache so next connect re-enumerates
         globals._cached_camera_serial = None
@@ -1026,6 +1214,54 @@ def get_camera_settings():
             "details": str(e),
             "popup": True
         }), 500
+
+
+@app.route('/api/settings/camera/combinations', methods=['GET', 'PUT'])
+def camera_combination_settings():
+    """Read or replace per-filter/per-wavelength exposure and gain."""
+    try:
+        filter_settings = _current_filter_settings()
+        if request.method == 'GET':
+            matrix = reconcile_camera_combination_settings(
+                get_settings().get('camera_combination_settings'), filter_settings,
+                get_settings().get('camera_params'))
+        else:
+            matrix = validate_camera_combination_settings(
+                request.get_json(silent=True), filter_settings)
+            camera = globals.camera
+            if camera and camera.IsOpen():
+                properties = getattr(globals, 'camera_properties', None) or get_camera_properties(camera)
+                globals.camera_properties = properties
+                for row in matrix.values():
+                    for cell in row.values():
+                        for field, camera_name in (('exposure_time', 'ExposureTime'), ('gain', 'Gain')):
+                            accepted = validate_param(camera_name, cell[field], properties)
+                            if not math.isclose(accepted, cell[field], rel_tol=1e-9, abs_tol=1e-6):
+                                limits = properties[camera_name]
+                                raise ValueError(
+                                    f'{camera_name} must match the camera range/increment '
+                                    f"({limits['min']}..{limits['max']}, step {limits['inc']})."
+                                )
+            if not update_camera_combination_settings(matrix):
+                raise OSError('Failed to persist camera combination settings.')
+        camera_params = (_apply_selected_camera_combination() if request.method == 'PUT'
+                         else dict(get_settings().get('camera_params', {})))
+        ranges = {}
+        camera = globals.camera
+        if camera and camera.IsOpen():
+            properties = getattr(globals, 'camera_properties', None) or get_camera_properties(camera)
+            globals.camera_properties = properties
+            ranges = {name: properties[name] for name in ('ExposureTime', 'Gain') if name in properties}
+        return jsonify({
+            'camera_combination_settings': matrix,
+            'camera_params': camera_params,
+            'ranges': ranges,
+        }), 200
+    except ValueError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    except Exception as error:
+        app.logger.exception('Failed to update camera combination settings')
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 500
 
 
 def _saved_camera_image_settings():
@@ -1343,11 +1579,64 @@ def _clamp_axis(axis: str, target: float):
     lo, hi = globals.motion_limits[axis]
     clamped = max(lo, min(hi, target))
     return clamped, (clamped != target), lo, hi    
+
+
+class XyMoveSafetyError(RuntimeError):
+    """Raised when an X/Y move cannot be preceded by its configured safe Z move."""
+
+
+def _xy_move_safety_settings():
+    advanced = get_settings().get('advanced_settings', {})
+    return (
+        bool(advanced.get('lower_z_before_xy_move', DEFAULT_LOWER_Z_BEFORE_XY_MOVE)),
+        float(advanced.get('xy_move_z_limit_mm', DEFAULT_XY_MOVE_Z_LIMIT_MM)),
+    )
+
+
+def _lower_z_before_xy_move(motion_platform):
+    """Lower Z and wait for physical completion before a manual X/Y command."""
+    enabled, limit = _xy_move_safety_settings()
+    if not enabled:
+        return None
+
+    current_z = getattr(globals, 'last_toolhead_pos', {}).get('z')
+    if current_z is None:
+        try:
+            position = motioncontrols.get_toolhead_position(
+                motion_platform, timeout=0.5, allow_busy=True
+            )
+        except (OSError, PermissionError):
+            raise
+        except Exception as error:
+            raise XyMoveSafetyError('Current Z position is unavailable.') from error
+        if not isinstance(position, dict) or not isinstance(position.get('z'), (int, float)):
+            raise XyMoveSafetyError('Current Z position is unavailable.')
+        globals.last_toolhead_pos = position
+        current_z = position['z']
+
+    if float(current_z) <= limit + _EPS:
+        return None
+
+    acknowledged, _ = porthandler.write_and_wait(motion_platform, 'G90', timeout=2.0)
+    if not acknowledged:
+        raise XyMoveSafetyError('Absolute motion mode was not acknowledged.')
+    acknowledged, _ = porthandler.write_and_wait(
+        motion_platform, f'G1 Z{limit}', timeout=30.0
+    )
+    if not acknowledged:
+        raise XyMoveSafetyError('Safe Z move was not acknowledged.')
+    if not porthandler.write_and_wait_motion(motion_platform, 'M400', timeout=30.0):
+        raise XyMoveSafetyError('Safe Z move did not complete in time.')
+
+    globals.last_toolhead_pos['z'] = limit
+    app.logger.info('Lowered Z from %.4f to %.4f before X/Y motion.', current_z, limit)
+    return {'from_z': float(current_z), 'to_z': limit}
     
     
 # Function to move the toolhead by a given amount (relative movement)
 # Function to move the toolhead by a given amount (relative movement)
 @app.route('/api/move_toolhead_relative', methods=['POST'])
+@guard_manual_motion
 def move_toolhead_relative():
     data = request.get_json()
     axis = data.get('axis')
@@ -1388,6 +1677,7 @@ def move_toolhead_relative():
                 'message': f'Already at {axis.upper()} limit.'
             }), 200
 
+        safety_z_move = _lower_z_before_xy_move(motion_platform) if axis in ('x', 'y') else None
         move_args = {axis: adj}
         try:
             motioncontrols.move_relative(motion_platform, **move_args)
@@ -1396,22 +1686,33 @@ def move_toolhead_relative():
 
         # Update cached position after successful relative move
         globals.last_toolhead_pos[axis] = clamped
-        height_offset_control.invalidate_reference()
+        height_offset_control.invalidate_for_manual_move(z_changed=axis == 'z')
 
-        return jsonify({
+        response = {
             'status': 'success',
             'requested': {'axis': axis, 'delta': value},
             'sent': {'axis': axis, 'delta': adj},
             'clamped': {axis: bool(clipped)},
             'limits': {axis: {'min': lo, 'max': hi}}
-        }), 200
+        }
+        if safety_z_move is not None:
+            response['safety_z_move'] = safety_z_move
+        return jsonify(response), 200
 
+    except (OSError, PermissionError):
+        return _handle_motion_usb_disconnect(globals.motion_platform, 'XY safety move')
+    except XyMoveSafetyError as error:
+        return jsonify({
+            'status': 'error', 'error': str(error),
+            'code': ErrorCode.MOTION_XY_SAFETY_FAILED, 'popup': True,
+        }), 409
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
     
     
 @app.route('/api/move_toolhead_absolute', methods=['POST'])
+@guard_manual_motion
 def move_toolhead_absolute():
     try:
         data = request.get_json() or {}
@@ -1435,6 +1736,11 @@ def _run_configured_manual_autofocus(motion_platform, skip_empty_check: bool) ->
     autofocus_settings, filter_settings = _select_configured_autofocus_hardware(
         motion_platform
     )
+    autofocus_camera_params = {
+        'ExposureTime': float(globals.camera.ExposureTime.GetValue()),
+        'Gain': float(globals.camera.Gain.GetValue()),
+    }
+    bgr_capture_coordinator.record_camera_params(autofocus_camera_params)
     height_offset_control.invalidate_reference()
 
     response = autofocus_main.autofocus_coarse(
@@ -1451,10 +1757,12 @@ def _run_configured_manual_autofocus(motion_platform, skip_empty_check: bool) ->
         reference_z = height_offset_control.record_combination_reference(
             getattr(globals, 'last_toolhead_pos', {}).get('z'),
             configured_offset,
+            source='anchor',
         )
         response['autofocus_reference'] = height_offset_control.status()
         response['autofocus_settings'] = autofocus_settings
-        app.logger.info('Manual autofocus height-offset reference set to Z=%.4f.', reference_z)
+        response['camera_params'] = autofocus_camera_params
+        app.logger.info('Manual autofocus anchored height-offset reference set to Z=%.4f.', reference_z)
     else:
         height_offset_control.invalidate_reference()
     return response
@@ -1571,14 +1879,22 @@ def activate_light():
                 }), 409
             globals.motion_busy = True
             owns_motion = True
+        motion_platform = porthandler.motion_platform or globals.motion_platform
+        filter_changed = (
+            data.get('channel') == 'vis'
+            and _select_blue_filter_for_vis(motion_platform)
+        )
         status = light_controller.activate(data.get('channel'), data.get('mode'))
         height_offset = _apply_selected_height_offset(
-            porthandler.motion_platform or globals.motion_platform
+            motion_platform
         )
+        camera_params = _apply_selected_camera_combination()
         return jsonify({
             **status,
             'height_offset': height_offset,
             'height_offset_reference': height_offset_control.status(),
+            'camera_params': camera_params,
+            'filter_revolver': _filter_revolver_status() if filter_changed else None,
         }), 200
     except LampSettingsError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.LAMP_SETTINGS_MISSING, 'popup': True}), 400
@@ -1586,6 +1902,20 @@ def activate_light():
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
     except LightCommandError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'popup': True}), 503
+    except filter_revolver.FilterRevolverCommandError as error:
+        globals.homed_axes.discard('a')
+        globals.filter_revolver_homed = False
+        globals.filter_revolver_position = None
+        app.logger.warning('Automatic blue-filter selection failed: %s', error)
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 504
+    except ValueError as error:
+        app.logger.warning('VIS activation rejected: %s', error)
+        return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 409
+    except (OSError, PermissionError):
+        return _handle_motion_usb_disconnect(
+            porthandler.motion_platform or globals.motion_platform,
+            'automatic VIS filter selection',
+        )
     except HeightOffsetCommandError as error:
         app.logger.warning('Light changed, but automatic height correction failed: %s', error)
         try:
@@ -1648,7 +1978,9 @@ def send_gcode():
 
     # 1) Move the existing logic into a helper:
 
-def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
+def _move_toolhead_absolute_impl(
+    x_pos=None, y_pos=None, z_pos=None, *, preserve_height_reference=False
+):
     motion_platform = globals.motion_platform
     if motion_platform is None or not motion_platform.is_open:
         # same 404 as before
@@ -1690,7 +2022,7 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
     # If cached position has None values, try a live M114 query to refresh
     if any(curr_pos.get(ax) is None for ax in planned):
         try:
-            live_pos = motioncontrols.get_toolhead_position(motion_platform, timeout=0.4)
+            live_pos = motioncontrols.get_toolhead_position(motion_platform, timeout=0.4, allow_busy=True)
             if live_pos and all(k in live_pos and isinstance(live_pos[k], (int, float)) for k in ('x', 'y', 'z')):
                 globals.last_toolhead_pos = live_pos
                 curr_pos = live_pos
@@ -1722,12 +2054,27 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
         }, 200
 
     try:
+        xy_moving = any(
+            ax in planned and (
+                curr_pos.get(ax) is None
+                or not math.isclose(float(curr_pos[ax]), planned[ax], abs_tol=_EPS)
+            )
+            for ax in ('x', 'y')
+        )
+        safety_z_move = _lower_z_before_xy_move(motion_platform) if xy_moving else None
+        z_after_xy = (
+            safety_z_move is not None
+            and 'z' in planned
+            and planned['z'] > safety_z_move['to_z'] + _EPS
+        )
         motioncontrols.move_to_position(
             motion_platform,
             planned.get('x'),
             planned.get('y'),
-            planned.get('z')
+            None if z_after_xy else planned.get('z')
         )
+        if z_after_xy:
+            motioncontrols.move_to_position(motion_platform, z_pos=planned['z'])
     except (OSError, PermissionError) as e:
         app.logger.warning(f"Motion platform disconnected during move (USB error): {e}")
         try:
@@ -1743,24 +2090,37 @@ def _move_toolhead_absolute_impl(x_pos=None, y_pos=None, z_pos=None):
             'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED,
             'popup': True
         }, 503
+    except XyMoveSafetyError as error:
+        return {
+            'status': 'error', 'error': str(error),
+            'code': ErrorCode.MOTION_XY_SAFETY_FAILED, 'popup': True,
+        }, 409
     except Exception as e:
         return {
             'status': 'error',
             'message': str(e)
         }, 500
 
+    z_changed = 'z' in planned and (
+        curr_pos.get('z') is None
+        or not math.isclose(float(curr_pos['z']), planned['z'], abs_tol=_EPS)
+    )
     # Update cached position with the planned values
     for ax, val in planned.items():
         globals.last_toolhead_pos[ax] = float(val)
-    height_offset_control.invalidate_reference()
+    if z_changed or not preserve_height_reference:
+        height_offset_control.invalidate_for_manual_move(z_changed=z_changed)
 
-    return {
+    response = {
         'status': 'success',
         'requested': requested,
         'sent': planned,
         'clamped': clamped_flags,
         'limits': limits_out
-    }, 200
+    }
+    if safety_z_move is not None:
+        response['safety_z_move'] = safety_z_move
+    return response, 200
 
 
 def _turn_on_dome_light():
@@ -1804,40 +2164,17 @@ def _turn_off_all_lights():
         return True
 
 def _apply_camera_settings_for_light(light: str):
-    """Apply the global camera settings used by every illumination channel.
-
-    ``light`` is retained only for legacy callers and diagnostics.  Camera
-    Exposure, gain, and gamma are no longer coupled to the active lamp.
-    """
-    settings_data = get_settings()
-    camera = globals.camera
-    camera_properties = globals.camera_properties
-    
-    if not camera or not camera.IsOpen():
-        app.logger.warning("Camera not open, cannot apply light settings")
-        return
-    
-    if not camera_properties:
-        try:
-            camera_properties = get_camera_properties(camera)
-            globals.camera_properties = camera_properties
-        except Exception as e:
-            app.logger.warning(f"Could not get camera properties: {e}")
-            return
-    
-    light_settings = settings_data.get('camera_params', {})
-    
-    for setting_name, setting_value in light_settings.items():
-        try:
-            validate_and_set_camera_param(camera, setting_name, setting_value, camera_properties)
-        except Exception as e:
-            app.logger.warning(f"Could not apply {setting_name} for {light}: {e}")
+    """Apply the selected optical pair, retaining legacy light aliases."""
+    channel = {'dome': 'vis', 'bar': 'uv365'}.get(light, light)
+    try:
+        _apply_selected_camera_combination(channel)
+    except Exception as error:
+        app.logger.warning('Could not apply camera combination for %s: %s', channel, error)
 
 
 CAPTURE_PLAN_CAMERA_FIELDS = {
     'exposure_time': 'ExposureTime',
     'gain': 'Gain',
-    'gamma': 'Gamma',
 }
 
 
@@ -1960,6 +2297,7 @@ def _current_capture_metadata(
         filter_position=filter_position,
         camera_values=_live_camera_capture_values(),
         requested_metadata=requested_metadata,
+        errors=height_offset_control.capture_errors(_canonical_light_channel(light_type), filter_position),
     )
 
 
@@ -1969,9 +2307,10 @@ def _save_capture_jpeg(
     light_type: str | None,
     filter_position: int | None = None,
     requested_metadata: dict | None = None,
+    capture_metadata: dict | None = None,
 ) -> dict:
     """Save a BGR image and embed the complete capture snapshot as JSON EXIF."""
-    metadata = _current_capture_metadata(
+    metadata = capture_metadata if capture_metadata is not None else _current_capture_metadata(
         light_type,
         filter_position=filter_position,
         requested_metadata=requested_metadata,
@@ -1979,13 +2318,16 @@ def _save_capture_jpeg(
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(image_rgb)
     exif_obj = Image.Exif()
-    exif_obj[0x010E] = json.dumps(metadata, ensure_ascii=False)
+    exif_obj[0x010E] = serialize_capture_metadata(metadata)
     pil_img.save(full_path, format='JPEG', quality=95, exif=exif_obj)
     return metadata
 
 
 def _capture_and_save_image(target_folder: str, filename: str, background_subtraction: bool = False,
-                            light_type: str = None, filter_position: int | None = None) -> list:
+                            light_type: str = None, filter_position: int | None = None,
+                            prepared_frame: np.ndarray | None = None,
+                            capture_metadata: dict | None = None,
+                            on_image_saved=None) -> list:
     """Capture image from camera and save to target folder.
     
     If background_subtraction is True, also saves a masked version.
@@ -1998,7 +2340,7 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     target_folder = _normalize_path(target_folder)
 
     # Grab frame from camera
-    frame_result = grab_camera_image()
+    frame_result = prepared_frame if prepared_frame is not None else _grab_owned_camera_frame()
     
     if isinstance(frame_result, tuple):
         frame = frame_result[0]
@@ -2012,6 +2354,7 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     img_cv = np.asarray(frame)
     if not isinstance(img_cv, np.ndarray) or img_cv.ndim < 2:
         raise RuntimeError("Invalid image data from camera")
+    globals.latest_image = img_cv
     
     full_path = os.path.join(target_folder, f"{filename}.jpg")
     
@@ -2020,9 +2363,12 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
         full_path,
         light_type,
         filter_position=filter_position,
+        capture_metadata=capture_metadata,
     )
     
     saved_paths = [full_path]
+    if on_image_saved is not None:
+        on_image_saved(full_path, False)
     
     _cache_latest_capture(light_type, img_cv)
     
@@ -2040,6 +2386,8 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
                     dst_image_path=masked_path
                 )
                 saved_paths.append(masked_path)
+                if on_image_saved is not None:
+                    on_image_saved(masked_path, True)
                 _cache_latest_capture(light_type, masked, masked=True)
                 app.logger.info(f"Background-subtracted image saved: {masked_path} (kind={kind})")
             else:
@@ -2048,6 +2396,17 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
             app.logger.warning(f"Background subtraction failed for {filename}: {e}")
     
     return saved_paths
+
+
+def _grab_owned_camera_frame(timeout_ms=5000, retries=2):
+    """Grab for measurement/capture without allowing preview queue competition."""
+    from cameracontrol import grab_and_convert_frame, suppress_preview_grabs
+    cam = globals.camera
+    if cam is None or not cam.IsOpen():
+        raise RuntimeError('Camera not ready')
+    with suppress_preview_grabs():
+        with globals.grab_lock:
+            return grab_and_convert_frame(cam, timeout_ms=timeout_ms, retries=retries)
 
 
 def _canonical_light_channel(light_type):
@@ -2116,17 +2475,22 @@ def _check_devices_connected():
 
 def _bgr_capture_result(status: str, series_index: int, saved_images: list[dict]):
     """Build the common completed/cancelled BGR series response."""
+    camera_params = bgr_capture_coordinator.status().get('camera_params')
     return jsonify({
         'status': status,
         'series_index': series_index,
         'saved_images': saved_images,
+        'camera_params': camera_params,
     }), 200
 
 
 @app.route('/api/bgr-capture-series', methods=['POST'])
 def capture_bgr_filter_series():
-    """Select the configured blue, green, and red filters and save one image per filter."""
-    if not bgr_capture_coordinator.begin():
+    """Capture RGB+UV for each requested wavelength, in request order."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get('capture_id', ''), str) or len(data.get('capture_id', '')) > 128:
+        return jsonify({'error': 'Invalid capture request.', 'code': ErrorCode.GENERIC, 'popup': True}), 400
+    if not bgr_capture_coordinator.begin(data.get('capture_id')):
         return jsonify({
             'error': 'A BGR capture series is already running.',
             'code': ErrorCode.BGR_CAPTURE_BUSY,
@@ -2136,10 +2500,33 @@ def capture_bgr_filter_series():
     owns_motion = False
     saved_images = []
     series_index = 1
-    initial_autofocus_started = False
+    selected_channel = None
+    selected_mode = None
+    wavelength_qualified_filenames = False
     series_completed = False
     try:
         data = request.get_json(silent=True) or {}
+        raw_wavelengths = data.get('wavelengths')
+        if raw_wavelengths is not None:
+            if (
+                not isinstance(raw_wavelengths, list)
+                or not 1 <= len(raw_wavelengths) <= 4
+                or any(channel not in LIGHT_CHANNELS for channel in raw_wavelengths)
+                or len(set(raw_wavelengths)) != len(raw_wavelengths)
+            ):
+                return jsonify({
+                    'error': 'Select between one and four unique, valid wavelengths.',
+                    'code': ErrorCode.BGR_WAVELENGTH_SELECTION_INVALID,
+                    'popup': True,
+                }), 400
+            capture_channels = raw_wavelengths
+            wavelength_qualified_filenames = True
+        else:
+            # Temporary compatibility for older renderer builds.
+            if data.get('mode', 'rgb') not in ('rgb', 'uv_rgb'):
+                return jsonify({'error': 'Capture mode must be rgb or uv_rgb.', 'code': ErrorCode.GENERIC, 'popup': True}), 400
+            capture_channels = None
+        mode = data.get('mode', 'rgb')
         raw_target_folder = data.get('target_folder', '')
         target_folder = (
             _normalize_path(raw_target_folder).strip()
@@ -2155,7 +2542,6 @@ def capture_bgr_filter_series():
 
         try:
             stem = capture_series_stem(target_folder)
-            folder_was_empty = capture_folder_is_empty(target_folder)
         except (OSError, ValueError) as error:
             app.logger.warning('BGR capture save location rejected: %s', error)
             return jsonify({
@@ -2174,16 +2560,6 @@ def capture_bgr_filter_series():
                 'popup': True,
             }), 409
 
-        try:
-            targets = resolve_filter_targets(_current_filter_settings())
-        except ValueError as error:
-            app.logger.warning('BGR capture filter configuration rejected: %s', error)
-            return jsonify({
-                'error': str(error),
-                'code': ErrorCode.BGR_FILTER_CONFIGURATION_INVALID,
-                'popup': True,
-            }), 400
-
         with porthandler.motion_lock:
             if globals.motion_busy:
                 return jsonify({
@@ -2191,17 +2567,42 @@ def capture_bgr_filter_series():
                     'code': ErrorCode.BGR_CAPTURE_BUSY,
                     'popup': True,
                 }), 409
+            if capture_channels is None:
+                selected_light = light_controller.status()
+                selected_channel = selected_light['active_channel']
+                selected_mode = selected_light.get('active_mode')
+                if selected_channel is None:
+                    return jsonify({'error': 'Activate a lamp before capture.', 'code': ErrorCode.CAPTURE_LIGHT_REQUIRED, 'popup': True}), 409
             globals.motion_busy = True
             owns_motion = True
 
-        if folder_was_empty:
+        try:
+            filter_settings_data = _current_filter_settings()
+            capture_steps = []
+            if capture_channels is None:
+                capture_steps.extend(
+                    (selected_channel, selected_mode, target)
+                    for target in resolve_filter_targets(filter_settings_data, mode, selected_channel)
+                )
+            else:
+                for channel in capture_channels:
+                    channel_mode = 'dimmed' if channel in UV_LAMP_CHANNELS else None
+                    channel_capture_mode = 'rgb' if channel == 'vis' else 'uv_rgb'
+                    capture_steps.extend(
+                        (channel, channel_mode, target)
+                        for target in resolve_filter_targets(
+                            filter_settings_data, channel_capture_mode, channel)
+                    )
+        except ValueError as error:
+            return jsonify({'error': str(error), 'code': ErrorCode.BGR_FILTER_CONFIGURATION_INVALID, 'popup': True}), 400
+
+        if not height_offset_control.status()['available']:
             if bgr_capture_coordinator.cancellation_requested():
                 return _bgr_capture_result('cancelled', series_index, saved_images)
             bgr_capture_coordinator.set_autofocus_in_progress(True)
             try:
                 if bgr_capture_coordinator.cancellation_requested():
                     return _bgr_capture_result('cancelled', series_index, saved_images)
-                initial_autofocus_started = True
                 autofocus_response = _run_configured_manual_autofocus(
                     motion_platform,
                     skip_empty_check=True,
@@ -2262,13 +2663,18 @@ def capture_bgr_filter_series():
                 'popup': True,
             }), 400
 
-        for target in targets:
+        for selected_channel, selected_mode, target in capture_steps:
             if bgr_capture_coordinator.cancellation_requested():
                 return _bgr_capture_result('cancelled', series_index, saved_images)
 
             try:
+                light_controller.off()
                 _move_filter_revolver_to_position(motion_platform, target.position)
-                height_offset = _apply_selected_height_offset(motion_platform)
+                height_offset = height_offset_control.apply_active_combination(
+                    motion_platform, filter_settings_data, selected_channel,
+                )
+                if not height_offset['applied']:
+                    raise HeightOffsetCommandError('A valid Z reference is required for capture.')
             except filter_revolver.FilterRevolverCommandError as error:
                 globals.homed_axes.discard('a')
                 globals.filter_revolver_homed = False
@@ -2300,21 +2706,62 @@ def capture_bgr_filter_series():
                 )
 
             # A selected filter and its Z correction form one safe, indivisible step.
+            capture_camera_params = _apply_selected_camera_combination(
+                selected_channel, target.position)
+            bgr_capture_coordinator.record_camera_params(capture_camera_params)
             if bgr_capture_coordinator.cancellation_requested():
                 return _bgr_capture_result('cancelled', series_index, saved_images)
-            if bgr_capture_coordinator.wait_for_cancellation(0.2):
+            # M400 confirms command completion. This quiet interval also lets
+            # the revolver, Z stage and camera settings settle before the lamp
+            # is activated and exposure begins.
+            if bgr_capture_coordinator.wait_for_cancellation(BGR_HARDWARE_SETTLE_SECONDS):
                 return _bgr_capture_result('cancelled', series_index, saved_images)
 
-            filename = capture_filename(stem, series_index, target.suffix)
-            active_light = light_controller.status().get('active_channel')
+            filename = capture_filename(
+                stem,
+                series_index,
+                target.suffix,
+                selected_channel if wavelength_qualified_filenames else None,
+            )
             try:
+                frame = None
+                for capture_attempt in range(2):
+                    try:
+                        frame = capture_series_frame(
+                            _camera,
+                            light_controller,
+                            selected_channel,
+                            selected_mode,
+                            bgr_capture_coordinator,
+                        )
+                        break
+                    except CaptureIlluminationError:
+                        raise
+                    except RuntimeError as error:
+                        camera_alive = bool(_camera and _camera.IsOpen())
+                        if capture_attempt or not camera_alive or bgr_capture_coordinator.cancellation_requested():
+                            raise
+                        app.logger.warning(
+                            'Transient BGR camera grab failed for %s; retrying once: %s',
+                            filename,
+                            error,
+                        )
+                        if bgr_capture_coordinator.wait_for_cancellation(BGR_CAMERA_RETRY_SETTLE_SECONDS):
+                            return _bgr_capture_result('cancelled', series_index, saved_images)
+                if frame is None or bgr_capture_coordinator.cancellation_requested():
+                    return _bgr_capture_result('cancelled', series_index, saved_images)
+                capture_metadata = _current_capture_metadata(selected_channel, target.position)
                 paths = _capture_and_save_image(
                     target_folder,
                     filename,
                     background_subtraction=False,
-                    light_type=active_light,
+                    light_type=selected_channel,
                     filter_position=target.position,
+                    prepared_frame=frame,
+                    capture_metadata=capture_metadata,
                 )
+            except (CaptureIlluminationError, LightCommandError):
+                raise
             except (OSError, PermissionError) as error:
                 app.logger.warning('BGR image save failed for %s: %s', filename, error)
                 return jsonify({
@@ -2336,10 +2783,23 @@ def capture_bgr_filter_series():
                 'filter_position': target.position,
                 'path': paths[0],
                 'height_offset': height_offset,
+                'wavelength': selected_channel,
+                'metadata': capture_metadata,
             })
+            bgr_capture_coordinator.record_image(saved_images[-1])
 
+        if bgr_capture_coordinator.cancellation_requested():
+            return _bgr_capture_result('cancelled', series_index, saved_images)
+        if len(saved_images) != len(capture_steps):
+            raise RuntimeError('The filter capture series did not save every required image.')
         series_completed = True
         return _bgr_capture_result('completed', series_index, saved_images)
+    except CaptureIlluminationError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.CAPTURE_LIGHT_TIMEOUT, 'popup': True}), 422
+    except LightConfigurationError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.BGR_CAPTURE_NOT_READY, 'popup': True}), 400
+    except LightCommandError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'popup': True}), 503
     except Exception as error:
         app.logger.exception('Unexpected BGR capture series failure')
         return jsonify({
@@ -2348,13 +2808,23 @@ def capture_bgr_filter_series():
             'popup': True,
         }), 500
     finally:
-        if owns_motion and initial_autofocus_started and not series_completed:
+        try:
+            _turn_off_all_lights()
+        except Exception as off_error:
+            app.logger.warning(
+                'Could not switch off lights after filter capture: %s',
+                off_error,
+            )
+        if series_completed:
             try:
-                _turn_off_all_lights()
-            except Exception as off_error:
+                _select_blue_filter_for_vis(motion_platform)
+                _apply_selected_height_offset(motion_platform)
+                _apply_selected_camera_combination('vis')
+                light_controller.activate('vis')
+            except Exception as vis_error:
                 app.logger.warning(
-                    'Could not switch off lights after interrupted initial BGR autofocus: %s',
-                    off_error,
+                    'Could not restore VIS with the Blue filter after completed filter capture: %s',
+                    vis_error,
                 )
         if owns_motion:
             globals.motion_busy = False
@@ -2371,6 +2841,36 @@ def cancel_bgr_filter_series():
     return jsonify({
         'status': 'cancellation_requested' if requested else 'idle',
     }), 200
+
+
+@app.route('/api/bgr-capture-series/status', methods=['GET'])
+def filter_capture_status():
+    return jsonify(bgr_capture_coordinator.status())
+
+
+@app.after_request
+def add_capture_warnings(response):
+    """Expose nonfatal motion warnings consistently to every API consumer."""
+    if response.is_json:
+        data = response.get_json()
+        if isinstance(data, dict):
+            changed = False
+            if request.path == '/api/bgr-capture-series' and response.status_code >= 400 and response.status_code != 409:
+                capture_status = bgr_capture_coordinator.status()
+                payload = request.get_json(silent=True) or {}
+                if (isinstance(payload, dict) and payload.get('capture_id')
+                        and payload.get('capture_id') == capture_status['capture_id']):
+                    data['saved_images'] = capture_status['saved_images']
+                    changed = True
+            applications = [data.get('height_offset', {})]
+            applications.extend(item.get('height_offset', {}) for item in (data.get('saved_images') or []) if isinstance(item, dict))
+            warnings = [item['warning'] for item in applications if isinstance(item, dict) and item.get('warning')]
+            if warnings:
+                data['warnings'] = warnings
+                changed = True
+            if changed:
+                response.set_data(app.json.dumps(data))
+    return response
 
 
 def _format_capture_timestamp(dt: datetime) -> str:
@@ -2420,7 +2920,8 @@ def _capture_image_with_light(light_type: str, measurement_folder: str, measurem
 
 
 def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_name: str,
-                              tablet_index: int, background_subtraction: bool = False) -> list:
+                              tablet_index: int, background_subtraction: bool = False,
+                              on_image_saved=None) -> list:
     """Capture one persisted wavelength/filter row with the Octopus controller.
 
     The caller positions the filter revolver before this function enables the
@@ -2428,7 +2929,7 @@ def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_na
     """
     wavelength = row['wavelength']
     filter_position = row['filter_position']
-    mode = 'dimmed' if wavelength in ('uv255', 'uv310', 'uv365') else None
+    mode = row['brightness'] if wavelength in ('uv255', 'uv310', 'uv365') else None
     activated = False
     try:
         _apply_capture_plan_camera_settings(row)
@@ -2444,6 +2945,7 @@ def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_na
             background_subtraction=background_subtraction,
             light_type=wavelength,
             filter_position=filter_position,
+            on_image_saved=on_image_saved,
         )
     finally:
         if activated:
@@ -2451,6 +2953,61 @@ def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_na
                 light_controller.off(wavelength)
             except Exception as error:
                 app.logger.error('Could not switch off %s after capture: %s', wavelength, error)
+
+
+def _measurement_capture_rows(
+    capture_plan: list[dict], settings: dict, should_autofocus: bool
+) -> list[tuple[int, dict]]:
+    """Return indexed capture rows, treating row zero as autofocus-only."""
+    auto_settings = settings.get('auto_measurement_settings', {})
+    save_autofocus_image = (
+        auto_settings.get('save_autofocus_image', DEFAULT_SAVE_AUTOFOCUS_IMAGE)
+        if isinstance(auto_settings, dict)
+        else DEFAULT_SAVE_AUTOFOCUS_IMAGE
+    )
+    first_capture_index = 0 if save_autofocus_image and should_autofocus else 1
+    return list(enumerate(capture_plan))[first_capture_index:]
+
+
+def _check_tablet_presence_enabled(settings: dict) -> bool:
+    auto_settings = settings.get('auto_measurement_settings', {})
+    return (
+        auto_settings.get('check_tablet_presence', DEFAULT_CHECK_TABLET_PRESENCE)
+        if isinstance(auto_settings, dict)
+        else DEFAULT_CHECK_TABLET_PRESENCE
+    )
+
+
+def _prepare_tablet_presence_check(
+    motion_platform,
+    capture_plan: list[dict],
+) -> None:
+    """Restore the first-tablet optical conditions before a presence frame."""
+    if not capture_plan:
+        raise ValueError('A capture plan is required for the tablet-presence check.')
+    autofocus_settings, filter_settings = _select_configured_autofocus_hardware(
+        motion_platform,
+        manage_motion_busy=True,
+        capture_plan_row=capture_plan[0],
+    )
+    height_offset_control.apply_active_combination(
+        motion_platform,
+        filter_settings,
+        autofocus_settings['channel'],
+    )
+    time.sleep(0.3)
+
+
+@app.route('/api/auto_measurement/progress', methods=['GET'])
+def auto_measurement_progress():
+    request_id = request.args.get('request_id', '')
+    progress = measurement_progress.snapshot(request_id)
+    if progress is None:
+        # Flask can schedule this GET before the concurrent step POST has
+        # registered its progress record. This is a normal startup state, not
+        # an operator-facing failure.
+        return jsonify(measurement_progress.pending_snapshot(request_id)), 200
+    return jsonify(progress), 200
 
 
 @app.route('/api/auto_measurement/step', methods=['POST'])
@@ -2470,6 +3027,8 @@ def auto_measurement_step():
     Every serial command waits for board acknowledgement ('ok') before
     proceeding to ensure the BTT SKR Mini E3 is never overwhelmed.
     """
+    request_id = None
+    progress_outcome = 'failed'
     try:
         # Reset abort flag for each new tablet
         if globals.autofocus_abort:
@@ -2477,6 +3036,11 @@ def auto_measurement_step():
             app.logger.info("Autofocus abort flag cleared for new tablet")
         
         data = request.get_json() or {}
+        request_id = data.get('request_id')
+        try:
+            measurement_progress.start(request_id)
+        except ValueError as error:
+            return jsonify({'status': 'error', 'message': str(error)}), 400
         
         # ---------- Parse & validate parameters ----------
         tablet_index = data.get('tablet_index')
@@ -2521,7 +3085,7 @@ def auto_measurement_step():
         motion_platform, camera, err_response, err_status = _check_devices_connected()
         if err_response:
             return err_response, err_status
-        
+
         # Ensure folder exists
         try:
             os.makedirs(measurement_folder, exist_ok=True)
@@ -2554,7 +3118,8 @@ def auto_measurement_step():
         resp, status = _move_toolhead_absolute_impl(
             x_pos=move_x,
             y_pos=move_y,
-            z_pos=move_z
+            z_pos=move_z,
+            preserve_height_reference=move_z is None,
         )
         if status != 200:
             _turn_off_all_lights()
@@ -2596,6 +3161,7 @@ def auto_measurement_step():
         af_error_code = None  # Track AF error codes (E2000/E2002/E2003) for the response
         
         if should_autofocus:
+            measurement_progress.set_active_plan_row(request_id, 0)
             app.logger.info(f"Tablet {tablet_index}: Starting autofocus ({'coarse' if is_first_tablet else 'fine'})")
             
             # Autofocus uses its dedicated saved light/filter selection. The
@@ -2603,10 +3169,10 @@ def auto_measurement_step():
             autofocus_settings, _ = _select_configured_autofocus_hardware(
                 motion_platform,
                 manage_motion_busy=True,
+                capture_plan_row=capture_plan[0] if capture_plan is not None else None,
             )
-            if capture_plan is not None:
-                _apply_capture_plan_camera_settings(capture_plan[0])
-            else:
+            height_offset_control.invalidate_reference()
+            if capture_plan is None:
                 _apply_camera_settings_for_light('dome')
             app.logger.info(
                 'Tablet %s: Autofocus using %s/%s with filter position %s',
@@ -2637,16 +3203,31 @@ def auto_measurement_step():
             try:
                 if autofocus_enabled:
                     # Autofocus selected: run with before_auto=True for every tablet
-                    af_result = autofocus_main.autofocus_coarse(motion_platform, do_frame_touch_check=True, before_auto=True)
+                    af_result = autofocus_main.autofocus_coarse(
+                        motion_platform, do_frame_touch_check=True, before_auto=True, debug=False
+                    )
                 elif is_first_tablet:
                     # Autofocus unselected, first tablet: find focal plane with skip_empty_check + no color check
-                    af_result = autofocus_main.autofocus_coarse(motion_platform, skip_empty_check=True, before_auto=False)
+                    af_result = autofocus_main.autofocus_coarse(
+                        motion_platform, skip_empty_check=True, before_auto=False, debug=False
+                    )
                 
                 af_status = af_result.get('status', 'ERROR')
                 af_error_code = af_result.get('code')  # e.g. "E2000", "E2002", "E2003"
                 if af_status == 'OK':
                     contour = af_result.get("final_contour") or af_result.get("contour")
                     globals.last_autofocus_contour = contour if contour else None
+                    filter_settings = _current_filter_settings()
+                    configured_offset = height_offset_control.configured_offset(
+                        filter_settings,
+                        autofocus_settings['filter_position'],
+                        autofocus_settings['channel'],
+                    )
+                    height_offset_control.record_combination_reference(
+                        getattr(globals, 'last_toolhead_pos', {}).get('z'),
+                        configured_offset,
+                        source='autofocus',
+                    )
                     app.logger.info(f"Tablet {tablet_index}: Autofocus OK at Z={af_result.get('z_rel', '?')}")
                     
                     # When autofocus is unselected and first tablet just finished AF,
@@ -2704,6 +3285,7 @@ def auto_measurement_step():
             
             # Settle time after autofocus Z movements
             time.sleep(0)
+            measurement_progress.set_active_plan_row(request_id, None)
         
         # =====================================================
         # STEP 3b: Manual contour detection (no AF, BGR on)
@@ -2721,10 +3303,7 @@ def auto_measurement_step():
 
             try:
                 # --- Pre-check: run check_only before manual_bgr_with_check ---
-                from cameracontrol import grab_and_convert_frame
-                cam = globals.camera
-                with globals.grab_lock:
-                    check_frame = grab_and_convert_frame(cam, timeout_ms=5000, retries=2)
+                check_frame = _grab_owned_camera_frame(timeout_ms=5000, retries=2)
 
                 # Greyscale difference score
                 gds_result = check_only.grayscale_difference_score(check_frame)
@@ -2820,17 +3399,21 @@ def auto_measurement_step():
         # we still need to verify that a tablet is present and
         # correctly positioned. Use check_only's greyscale
         # difference score and out-of-frame detection.
-        if not should_autofocus and not background_subtraction:
+        if (
+            not should_autofocus
+            and not background_subtraction
+            and _check_tablet_presence_enabled(get_settings())
+        ):
+            measurement_progress.set_active_plan_row(request_id, 0)
             app.logger.info(f"Tablet {tablet_index}: Running check_only (no AF, no BGR)")
-            _turn_on_dome_light()
-            _apply_camera_settings_for_light('dome')
-            time.sleep(0.3)  # Let light and camera settings stabilize
+            # Re-select the same acknowledged filter/light pair and camera
+            # values used to build the first-tablet reference. The previous
+            # capture row may have left a UV filter selected, which makes a
+            # VIS presence frame appear falsely underexposed.
+            _prepare_tablet_presence_check(motion_platform, capture_plan)
 
             try:
-                from cameracontrol import grab_and_convert_frame
-                cam = globals.camera
-                with globals.grab_lock:
-                    frame_bgr = grab_and_convert_frame(cam, timeout_ms=5000, retries=2)
+                frame_bgr = _grab_owned_camera_frame(timeout_ms=5000, retries=2)
 
                 # -- Greyscale difference score --
                 gds_result = check_only.grayscale_difference_score(frame_bgr)
@@ -2891,31 +3474,71 @@ def auto_measurement_step():
                     return _handle_camera_disconnect(f"check_only tablet {tablet_index}")
                 app.logger.warning(f"Tablet {tablet_index}: check_only failed: {e}")
                 # Continue — check failure should not block the measurement
+            finally:
+                _turn_off_all_lights()
+                measurement_progress.set_active_plan_row(request_id, None)
 
         # =====================================================
         # STEP 4: Capture images with selected lights
         # =====================================================
         if capture_plan is not None:
-            for row in capture_plan:
+            capture_rows = _measurement_capture_rows(
+                capture_plan, get_settings(), should_autofocus
+            )
+            if len(capture_rows) != len(capture_plan):
+                app.logger.info(
+                    'Tablet %s: Skipping autofocus-only plan row 1 capture',
+                    tablet_index,
+                )
+            for plan_row_index, row in capture_rows:
                 wavelength = row['wavelength']
                 filter_position = row['filter_position']
                 try:
+                    measurement_progress.set_active_plan_row(request_id, plan_row_index)
                     app.logger.info(
                         'Tablet %s: Capturing %s image with filter position %s',
                         tablet_index, wavelength, filter_position,
                     )
                     _select_measurement_filter_position(motion_platform, filter_position)
+                    height_offset = height_offset_control.apply_active_combination(
+                        motion_platform,
+                        _current_filter_settings(),
+                        wavelength,
+                    )
+                    if height_offset.get('warning'):
+                        measurement_progress.record_warning(
+                            request_id, height_offset['warning']
+                        )
+                    if not height_offset['applied']:
+                        app.logger.warning(
+                            'Tablet %s: Z offset was not applied for plan row %s: %s',
+                            tablet_index, plan_row_index + 1, height_offset.get('reason'),
+                        )
+
+                    def publish_saved_image(saved_path, masked):
+                        measurement_progress.record_image(request_id, {
+                            'path': saved_path,
+                            'tablet_index': tablet_index,
+                            'wavelength': wavelength,
+                            'brightness': row['brightness'],
+                            'filter_position': filter_position,
+                            'exposure_time': row['exposure_time'],
+                            'gain': row['gain'],
+                            'masked': masked,
+                        })
+
                     saved_paths = _capture_capture_plan_row(
                         row, measurement_folder, measurement_name, tablet_index,
                         background_subtraction=background_subtraction,
+                        on_image_saved=publish_saved_image,
                     )
                     saved_images.extend(saved_paths)
                     captured_plan_rows.append({
                         'wavelength': wavelength,
+                        'brightness': row['brightness'],
                         'filter_position': filter_position,
                         'exposure_time': row['exposure_time'],
                         'gain': row['gain'],
-                        'gamma': row['gamma'],
                         'saved_images': saved_paths,
                     })
                 except (OSError, PermissionError) as error:
@@ -2937,6 +3560,7 @@ def auto_measurement_step():
                         'status': 'error',
                         'message': f'Failed to capture {wavelength} with filter {filter_position} for tablet {tablet_index}: {error}'
                     }), 500
+            measurement_progress.set_active_plan_row(request_id, None)
 
             # The request contained the new capture plan, so skip the legacy
             # dome/bar capture path below even when old compatibility flags are
@@ -2982,10 +3606,8 @@ def auto_measurement_step():
                 bar_gate_error_code = None
                 cam = globals.camera
                 if cam and cam.IsOpen():
-                    from cameracontrol import grab_and_convert_frame
                     try:
-                        with globals.grab_lock:
-                            gate_frame = grab_and_convert_frame(cam, timeout_ms=3000)
+                        gate_frame = _grab_owned_camera_frame(timeout_ms=3000)
                         gate_result = under_over.exposure_gate_from_frame(gate_frame)
                         gate_code = gate_result.get('code')
                         gate_metrics = {k: v for k, v in gate_result.items() if k not in ('status', 'code')}
@@ -3051,6 +3673,7 @@ def auto_measurement_step():
         if af_error_code:
             response_data['af_error_code'] = af_error_code
             response_data['af_error_message'] = ERROR_MESSAGES.get(af_error_code, af_error_code)
+        progress_outcome = 'completed'
         return jsonify(response_data), 200
         
     except (OSError, PermissionError) as e:
@@ -3076,6 +3699,9 @@ def auto_measurement_step():
             'status': 'error',
             'message': str(e)
         }), 500
+    finally:
+        if request_id:
+            measurement_progress.finish(request_id, progress_outcome)
 
 
 
@@ -3194,11 +3820,15 @@ def grab_camera_image():
 
         
 @app.route('/api/save_raw_image', methods=['POST'])
+@guard_capture_operation
 def save_raw_image_endpoint():
     data = request.get_json() or {}
     target_folder = _normalize_path(data.get('target_folder', ''))
     measurement_name = data.get('measurement_name')
-    light_type = data.get('light_type') or 'dome'
+    selected_light = light_controller.status()
+    light_type = selected_light['active_channel']
+    if light_type is None:
+        return jsonify({'error': 'Activate a lamp before capture.', 'code': ErrorCode.CAPTURE_LIGHT_REQUIRED, 'popup': True}), 409
 
     if not target_folder:
         return jsonify({"message": "Cancelled"}), 200
@@ -3221,7 +3851,7 @@ def save_raw_image_endpoint():
         app.logger.info(f"Manual save: {light_type} light + BGR — obtaining contour under dome light")
         try:
             # Always switch to dome light for contour detection
-            if light_type != 'dome':
+            if light_type != 'vis':
                 _turn_on_dome_light()
                 _apply_camera_settings_for_light('dome')
                 time.sleep(0.3)  # Let light and camera settings stabilize
@@ -3238,24 +3868,30 @@ def save_raw_image_endpoint():
                 app.logger.warning(f"Manual save: manual_bgr_with_check returned {mbgr_status} ({mbgr_code})")
 
             # Switch back to original light for the actual capture
-            if light_type == 'bar':
-                _turn_on_uv_dome_light()
-                _apply_camera_settings_for_light('bar')
+            if light_type != 'vis':
+                light_controller.activate(light_type, selected_light['active_mode'])
                 time.sleep(0.3)  # Let light and camera settings stabilize
         except Exception as e:
             app.logger.warning(f"Manual save: contour detection under dome light failed: {e}")
             globals.last_autofocus_contour = None
             # Restore original light and continue — save image without background subtraction
-            if light_type == 'bar':
+            if light_type != 'vis':
                 try:
-                    _turn_on_uv_dome_light()
-                    _apply_camera_settings_for_light('bar')
+                    light_controller.activate(light_type, selected_light['active_mode'])
                     time.sleep(0.3)
                 except Exception:
-                    pass
+                    return jsonify({'error': 'Could not restore capture illumination.', 'code': ErrorCode.CAPTURE_LIGHT_REQUIRED, 'popup': True}), 503
 
     # --- Grab frame from camera ---
     img = grab_camera_image()  # your existing helper
+    if isinstance(img, tuple) and len(img) == 3:
+        img, capture_error, capture_status = img
+        if capture_error is not None:
+            return capture_error, capture_status
+    try:
+        light_controller.capture_remaining_seconds(light_type, selected_light['active_mode'])
+    except CaptureIlluminationError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.CAPTURE_LIGHT_TIMEOUT, 'popup': True}), 422
 
     if img is None:
         return jsonify({
@@ -3336,6 +3972,22 @@ def save_raw_image_endpoint():
     if masked_path:
         result["masked_path"] = masked_path
     return jsonify(result), 200
+
+
+@app.route('/api/image-metadata', methods=['GET'])
+def get_saved_image_metadata():
+    path = request.args.get('path', '')
+    if not os.path.isfile(path):
+        return jsonify({'error': 'Image not found.', 'code': ErrorCode.GENERIC, 'popup': False}), 404
+    try:
+        with Image.open(path) as image:
+            description = image.getexif().get(0x010E, '{}')
+            if isinstance(description, bytes):
+                description = description.decode('utf-8')
+            metadata = json.loads(description)
+        return jsonify({'metadata': metadata if isinstance(metadata, dict) else {}})
+    except (ValueError, OSError, UnicodeError):
+        return jsonify({'metadata': {}})
 
 
 @app.route('/api/get_thumbnail', methods=['GET'])
@@ -3545,8 +4197,15 @@ def filter_settings():
             max_height_offset_up_mm=max_up,
             max_height_offset_down_mm=max_down,
         )
-        if not update_filter_settings(normalized_settings):
-            raise OSError('Failed to persist filter settings.')
+        with porthandler.motion_lock:
+            if globals.motion_busy:
+                return jsonify({'error': 'Motion platform is busy.', 'code': ErrorCode.GENERIC, 'popup': True}), 409
+            previous = get_settings().get('filter_settings', default_filter_settings())
+            if not update_filter_settings(normalized_settings):
+                raise OSError('Failed to persist filter settings.')
+            if (previous.get('slots') != normalized_settings['slots']
+                    or previous.get('height_offsets_mm') != normalized_settings['height_offsets_mm']):
+                height_offset_control.invalidate_reference()
         return jsonify({'filter_settings': normalized_settings}), 200
     except ValueError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': True}), 400
@@ -3586,6 +4245,12 @@ def advanced_motion_settings():
         return jsonify({
             'advanced_motion_settings': {
                 'use_virtual_com_port': _use_virtual_motion_platform(),
+                'lower_z_before_xy_move': advanced.get(
+                    'lower_z_before_xy_move', DEFAULT_LOWER_Z_BEFORE_XY_MOVE
+                ),
+                'xy_move_z_limit_mm': advanced.get(
+                    'xy_move_z_limit_mm', DEFAULT_XY_MOVE_Z_LIMIT_MM
+                ),
                 'max_height_offset_up_mm': max_up,
                 'max_height_offset_down_mm': max_down,
                 'first_tablet_x_mm': advanced.get('first_tablet_x_mm', DEFAULT_FIRST_TABLET_X_MM),
@@ -3658,6 +4323,12 @@ def update_other_settings():
         if category == 'auto_measurement_settings' and setting_name == 'capture_plan':
             setting_value = validate_capture_plan(setting_value)
             _validate_capture_plan_camera_values(setting_value)
+        elif category == 'auto_measurement_settings' and setting_name == 'save_autofocus_image':
+            if not isinstance(setting_value, bool):
+                raise ValueError('save_autofocus_image must be a boolean.')
+        elif category == 'auto_measurement_settings' and setting_name == 'check_tablet_presence':
+            if not isinstance(setting_value, bool):
+                raise ValueError('check_tablet_presence must be a boolean.')
 
         # Normalize path-like settings to use forward slashes
         updated_value = setting_value
@@ -4940,6 +5611,37 @@ def list_recipes():
     return jsonify({'recipes': recipes}), 200
 
 
+@app.route('/api/recipe-folders', methods=['GET'])
+def list_recipe_folders():
+    return jsonify({'folders': recipe_manager.list_recipe_folders()}), 200
+
+
+@app.route('/api/recipe-folders', methods=['POST'])
+def create_recipe_folder():
+    data = request.get_json(silent=True) or {}
+    folder, error = recipe_manager.create_recipe_folder(data.get('name', ''))
+    if error:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 400
+    return jsonify({'folder': folder}), 201
+
+
+@app.route('/api/recipe-folders/<folder_id>', methods=['PATCH'])
+def rename_recipe_folder(folder_id):
+    data = request.get_json(silent=True) or {}
+    folder, error = recipe_manager.rename_recipe_folder(folder_id, data.get('name', ''))
+    if error:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 400
+    return jsonify({'folder': folder}), 200
+
+
+@app.route('/api/recipe-folders/<folder_id>', methods=['DELETE'])
+def delete_recipe_folder(folder_id):
+    success, error = recipe_manager.delete_recipe_folder(folder_id)
+    if not success:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 404
+    return jsonify({'message': 'Receptmappa törölve'}), 200
+
+
 @app.route('/api/recipes/<name>', methods=['GET'])
 def get_recipe(name):
     """Load a recipe by name."""
@@ -4987,6 +5689,18 @@ def update_recipe_description(name):
     if not success:
         return jsonify({'error': error, 'code': ErrorCode.RECIPE_NOT_FOUND, 'popup': True}), 404
     return jsonify({'message': 'Leírás frissítve'}), 200
+
+
+@app.route('/api/recipes/<name>/folder', methods=['PATCH'])
+def assign_recipe_folder(name):
+    data = request.get_json(silent=True) or {}
+    folder_id = data.get('folder_id')
+    if folder_id is not None and not isinstance(folder_id, str):
+        return jsonify({'error': 'Érvénytelen mappaazonosító', 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 400
+    success, error = recipe_manager.assign_recipe_folder(name, folder_id)
+    if not success:
+        return jsonify({'error': error, 'code': ErrorCode.RECIPE_IO_ERROR, 'popup': True}), 400
+    return jsonify({'message': 'Receptmappa frissítve'}), 200
 
 
 @app.route('/api/recipes/<name>/duplicate', methods=['POST'])

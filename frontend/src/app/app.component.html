@@ -22,8 +22,14 @@
   </button>
 </nav>
 
-@if (activeSection === 'scanner') {
-  <main class="app-grid">
+<!-- Keep the scanner workspace mounted while recipe tabs are open. Automatic
+     measurement is coordinated by its component, so destroying this subtree
+     would also destroy the running request and its progress state. -->
+<main
+  class="app-grid"
+  [class.section-inactive]="activeSection !== 'scanner'"
+  [attr.aria-hidden]="activeSection !== 'scanner'"
+>
     <!-- Left column (1/5): Camera Settings -->
     <section class="panel scanner-panel">
       <div class="side-section-header side-section-header-subtle">
@@ -63,11 +69,9 @@
           </div>
           <app-auto-measurement></app-auto-measurement>
         </div>
-        <app-error-popup-list></app-error-popup-list>
       </div>
     </section>
-  </main>
-}
+</main>
 
 @if (activeSection === 'creator') {
   <main class="section-container">

@@ -4,7 +4,10 @@ from settings_manager import (
     DEFAULT_FIRST_TABLET_X_MM,
     DEFAULT_FIRST_TABLET_Y_MM,
     DEFAULT_FIRST_TABLET_Z_MM,
+    DEFAULT_LOWER_Z_BEFORE_XY_MOVE,
     DEFAULT_TABLET_SPACING_MM,
+    DEFAULT_XY_MOVE_Z_LIMIT_MM,
+    SETTINGS_SCHEMA_VERSION,
     TrayGeometryError,
     migrate_settings,
     validate_motion_simulation_settings,
@@ -14,6 +17,8 @@ from settings_manager import (
 def advanced_payload(**overrides):
     payload = {
         'use_virtual_com_port': False,
+        'lower_z_before_xy_move': DEFAULT_LOWER_Z_BEFORE_XY_MOVE,
+        'xy_move_z_limit_mm': DEFAULT_XY_MOVE_Z_LIMIT_MM,
         'max_height_offset_up_mm': 5,
         'max_height_offset_down_mm': -5,
         'first_tablet_x_mm': DEFAULT_FIRST_TABLET_X_MM,
@@ -49,6 +54,12 @@ class TraySettingsTests(unittest.TestCase):
                 advanced_payload(first_tablet_y_mm=1, tablet_spacing_mm=18.3)
             )
 
+    def test_decimal_value_at_inclusive_y_edge_is_accepted(self):
+        normalized = validate_motion_simulation_settings(
+            advanced_payload(first_tablet_y_mm=0.8, tablet_spacing_mm=18.3)
+        )
+        self.assertEqual(0.8, normalized['first_tablet_y_mm'])
+
     def test_schema_four_coordinates_migrate_to_advanced_settings(self):
         migrated, changed = migrate_settings({
             'settings_schema_version': 4,
@@ -66,10 +77,23 @@ class TraySettingsTests(unittest.TestCase):
             },
         })
         self.assertTrue(changed)
-        self.assertEqual(9, migrated['settings_schema_version'])
+        self.assertEqual(SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
         self.assertEqual(3, migrated['advanced_settings']['first_tablet_x_mm'])
         self.assertEqual(18, migrated['advanced_settings']['tablet_spacing_mm'])
+        self.assertTrue(migrated['advanced_settings']['lower_z_before_xy_move'])
+        self.assertEqual(35, migrated['advanced_settings']['xy_move_z_limit_mm'])
         self.assertNotIn('first_tablet_x', migrated['auto_measurement_settings'])
+
+    def test_schema_ten_adds_xy_collision_defaults(self):
+        migrated, changed = migrate_settings({
+            'settings_schema_version': 10,
+            'advanced_settings': {'use_virtual_com_port': False},
+        })
+
+        self.assertTrue(changed)
+        self.assertEqual(SETTINGS_SCHEMA_VERSION, migrated['settings_schema_version'])
+        self.assertTrue(migrated['advanced_settings']['lower_z_before_xy_move'])
+        self.assertEqual(35, migrated['advanced_settings']['xy_move_z_limit_mm'])
 
 
 if __name__ == '__main__':

@@ -3,6 +3,20 @@
   padding-left: 0px;
   padding-top: 12px;
   font-family: 'Arial', sans-serif;
+  --state-blue: #176bc2;
+  --state-blue-hover: #247dd8;
+  --state-blue-rgb: 23, 107, 194;
+  --state-warning: #d4a522;
+  --state-warning-hover: #e0b334;
+  --state-warning-rgb: 212, 165, 34;
+  --state-success: #20b657;
+  --state-success-hover: #2bca66;
+  --state-success-rgb: 32, 182, 87;
+  --state-error: #ca3d47;
+  --state-error-hover: #dc4b55;
+  --state-error-rgb: 202, 61, 71;
+  --state-stop: #a43e45;
+  --state-stop-hover: #b24950;
 }
 /* Outer container */
 .auto-measurement {
@@ -17,6 +31,13 @@
 /* =======================
    Save location row
    ======================= */
+
+.measurement-destination-row {
+  display: grid;
+  grid-template-columns: minmax(100px, .8fr) minmax(0, 1.2fr);
+  gap: 7px;
+  align-items: end;
+}
 
 .save-location-row {
   display: flex;
@@ -163,8 +184,8 @@
 }
 
 .toggle-button.active {
-  background-color: var(--main-blue, #1f4b8f);
-  border-color: #1f4b8f;
+  background-color: var(--state-blue);
+  border-color: var(--state-blue);
   color: #fff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
 }
@@ -187,16 +208,27 @@
   background: #2f2f2f;
 }
 
+.capture-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
 .capture-plan-header h4 {
-  margin: 0 0 4px;
-  font-size: 11px;
-  color: #ddd;
+  margin: 0;
+  color: #ccc;
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .capture-plan-scroll {
-  height: 94px;
+  height: 174px;
   overflow-y: auto;
   overflow-x: hidden;
+  padding-right: 3px;
+  scrollbar-gutter: stable;
 }
 
 .capture-plan-table {
@@ -232,7 +264,20 @@
 }
 
 .wavelength-column {
-  width: 52px;
+  width: 108px;
+}
+
+.capture-plan-table tbody tr {
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.capture-plan-table tbody tr.active-plan-row {
+  background: rgba(93, 156, 196, 0.14);
+  box-shadow: inset 2px 0 0 rgba(110, 181, 224, 0.8);
+}
+
+.capture-plan-table tbody tr.active-plan-row td {
+  border-bottom-color: rgba(110, 181, 224, 0.35);
 }
 
 .filter-column {
@@ -247,10 +292,6 @@
   width: 48px;
 }
 
-.gamma-column {
-  width: 42px;
-}
-
 .action-column {
   width: 22px;
 }
@@ -260,8 +301,7 @@
   padding-right: 19px;
 }
 
-.gain-column input,
-.gamma-column input {
+.gain-column input {
   text-align: center;
 }
 
@@ -346,8 +386,8 @@
 /* Clear button: faint red -> normal red on hover */
 .clear-button {
   border-radius: 4px;
-  border: 1px solid rgba(255, 0, 0, 0.6);
-  background-color: rgba(200, 60, 60, 0.1);
+  border: 1px solid rgba(var(--state-error-rgb), .65);
+  background-color: rgba(var(--state-error-rgb), .1);
   color: #f0b0b0;
 
   font-size: 11px;
@@ -362,8 +402,8 @@
 }
 
 .clear-button:hover:not(:disabled) {
-  background-color: #fa0000; /* normal red */
-  border-color: #ff0000;
+  background-color: var(--state-error-hover);
+  border-color: var(--state-error-hover);
   color: #fff;
   transform: translateY(-1px);
 }
@@ -377,11 +417,16 @@
   cursor: default;
 }
 
+.clear-capture-plan {
+  flex: 0 0 auto;
+}
+
 /* =======================
    Grid and dots
    ======================= */
 
 .tablet-grid {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(10, 1fr); /* match gridSize in TS */
   gap: 10px;
@@ -395,6 +440,14 @@
 
   justify-items: center;
   align-items: center;
+}
+
+.toolhead-position-area {
+  /* Centers of the outer cells: 6px padding, 1px border, ten columns and nine 10px gaps. */
+  position: absolute;
+  inset: 18px calc(6px + (100% - 102px) / 20);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .tablet-dot {
@@ -431,13 +484,13 @@
 
 /* Selected state (blue) - for selection before measurement starts */
 .tablet-dot.selected {
-  background-color: var(--main-blue, #224477);
-  box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
+  background-color: var(--state-blue);
+  box-shadow: 0 0 8px rgba(var(--state-blue-rgb), .9);
 }
 
 .tablet-dot.selected:hover {
-  background-color: var(--main-blue, #1f4b8f);
-  box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
+  background-color: var(--state-blue-hover);
+  box-shadow: 0 0 10px rgba(var(--state-blue-rgb), .95);
     transform: scale(1.15);
 }
 
@@ -448,9 +501,11 @@
 
 /* Pending state (blue) - tablets waiting to be measured during measurement */
 .tablet-dot.pending {
-  background-color: var(--main-blue, #224477);
-  box-shadow: 0 0 8px rgba(31, 75, 143, 0.9);
+  background-color: var(--state-blue);
+  box-shadow: 0 0 8px rgba(var(--state-blue-rgb), .9);
 }
+
+.tablet-dot.pending:hover { background-color: var(--state-blue-hover); }
 
 .tablet-dot.pending .tablet-number {
   color: #f9f9f9;
@@ -459,8 +514,8 @@
 
 /* In-progress state (yellow) - tablet currently being measured */
 .tablet-dot.in-progress {
-  background-color: #f9a825;
-  box-shadow: 0 0 12px rgba(249, 168, 37, 0.9);
+  background-color: var(--state-warning);
+  box-shadow: 0 0 12px rgba(var(--state-warning-rgb), .9);
   animation: pulse-yellow 1s ease-in-out infinite;
 }
 
@@ -472,23 +527,27 @@
 @keyframes pulse-yellow {
   0%, 100% {
     transform: scale(1);
-    box-shadow: 0 0 8px rgba(249, 168, 37, 0.7);
+    box-shadow: 0 0 8px rgba(var(--state-warning-rgb), .7);
   }
   50% {
     transform: scale(1.15);
-    box-shadow: 0 0 16px rgba(249, 168, 37, 1);
+    box-shadow: 0 0 16px rgba(var(--state-warning-rgb), 1);
   }
 }
 
 /* Completed state (green) – tablets that have been measured */
 .tablet-dot.completed {
-  background-color: #00b809;
-  box-shadow: 0 0 8px rgba(0, 161, 8, 0.9);
+  background-color: var(--state-success);
+  box-shadow: 0 0 8px rgba(var(--state-success-rgb), .9);
+}
+
+.tablet-dot.in-progress:hover {
+  background-color: var(--state-warning-hover);
 }
 
 .tablet-dot.completed:hover {
-  background-color: #388e3c;
-  box-shadow: 0 0 10px rgba(0, 156, 8, 0.9);
+  background-color: var(--state-success-hover);
+  box-shadow: 0 0 10px rgba(var(--state-success-rgb), .95);
   transform: scale(1.1);
 }
 
@@ -499,13 +558,13 @@
 
 /* Failed state (red) – tablets where autofocus returned E2000/E2002/E2003 */
 .tablet-dot.failed {
-  background-color: #c62828;
-  box-shadow: 0 0 8px rgba(198, 40, 40, 0.9);
+  background-color: var(--state-error);
+  box-shadow: 0 0 8px rgba(var(--state-error-rgb), .9);
 }
 
 .tablet-dot.failed:hover {
-  background-color: #e53935;
-  box-shadow: 0 0 10px rgba(198, 40, 40, 0.9);
+  background-color: var(--state-error-hover);
+  box-shadow: 0 0 10px rgba(var(--state-error-rgb), .95);
   transform: scale(1.1);
 }
 
@@ -522,16 +581,18 @@
   margin-top: 4px;
   border: none;
   border-radius: 6px;
-  background-color: var(--main-blue, #224477);
+  background-color: var(--state-blue);
   color: #fff;
 
   font-size: 13px;
   font-weight: 500;
 
+  min-height: 50px;
   padding: 7px 10px;
   cursor: pointer;
 
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
 
@@ -547,19 +608,32 @@
     box-shadow 0.2s ease-out;
 }
 
+.start-button-primary {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.start-button-detail {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, .76);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.15;
+}
+
 /* Red variant when measurementActive = true */
 .start-button.stop {
-  background-color: #f80000;
+  background-color: var(--state-stop);
 }
 
 .start-button:hover:not(:disabled) {
-  background-color: #2360b2;
+  background-color: var(--state-blue-hover);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
   transform: translateY(-1px);
 }
 
 .start-button.stop:hover:not(:disabled) {
-  background-color: #e53935;
+  background-color: var(--state-stop-hover);
 }
 
 .start-button:active:not(:disabled) {
@@ -572,49 +646,13 @@
   cursor: default;
 }
 
-
-/* =======================
-   Status messages
-   ======================= */
-
-.status {
-  font-size: 12px;
-  font-weight: 600;
-  margin-top: 6px;
-  display: inline-flex;
-  align-items: center;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.02);
-  letter-spacing: 0.02em;
-  line-height: 1.3;
+.measurement-notifications {
+  display: block;
+  width: 100%;
+  margin-top: -2px;
+  padding-bottom: 7px;
 }
 
-.status.success {
-  color: #86e29b;
-  border-color: rgba(134, 226, 155, 0.6);
-  box-shadow: 0 0 8px rgba(134, 226, 155, 0.32);
-}
-
-.status.error {
-  color: #ff7a7a;
-  border-color: rgba(255, 122, 122, 0.6);
-  box-shadow: 0 0 8px rgba(255, 122, 122, 0.3);
-}
-
-.status.warning {
-  color: #f9a825;
-  border-color: rgba(249, 168, 37, 0.65);
-  box-shadow: 0 0 8px rgba(249, 168, 37, 0.32);
-}
-
-.status.info {
-  color: #64b5f6;
-  border-color: rgba(100, 181, 246, 0.6);
-  box-shadow: 0 0 8px rgba(100, 181, 246, 0.32);
-}
 
 /* Context menu styling */
 .context-menu {

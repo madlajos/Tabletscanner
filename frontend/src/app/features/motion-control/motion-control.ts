@@ -20,13 +20,16 @@ import { FilterSettingsService } from '../../services/filter-settings.service';
 import { MotionSettingsService } from '../../services/motion-settings.service';
 import { FilterRevolverService } from '../../services/filter-revolver.service';
 import { FilterRevolverComponent } from '../../components/filter-revolver/filter-revolver.component';
+import { FocusAnchorComponent } from '../../components/focus-anchor/focus-anchor.component';
+import { FilterCaptureButtonsComponent } from '../../components/filter-capture-buttons/filter-capture-buttons.component';
+import { SettingsUpdatesService } from '../../services/settings-updates.service';
 
 
 @Component({
   selector: 'app-motion-control',
   // Important for Angular 15+ when using `imports` here:
   standalone: true,
-  imports: [CommonModule, FormsModule, FilterRevolverComponent],
+  imports: [CommonModule, FormsModule, FilterRevolverComponent, FocusAnchorComponent, FilterCaptureButtonsComponent],
   templateUrl: './motion-control.html',
   styleUrls: ['./motion-control.scss'], // fixed key (plural)
 })
@@ -130,7 +133,8 @@ export class MotionControl implements OnInit, OnDestroy {
     private sharedService: SharedService,
     private filterSettingsService: FilterSettingsService,
     private motionSettingsService: MotionSettingsService,
-    private filterRevolverService: FilterRevolverService
+    private filterRevolverService: FilterRevolverService,
+    private settingsUpdatesService: SettingsUpdatesService
   ) { }
 
   ngOnInit(): void {
@@ -249,6 +253,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
 
   stopPositionPolling(): void {
+    this.sharedService.setReportedToolheadPosition(null);
     if (this.positionPolling && !this.positionPolling.closed) {
       this.positionPolling.unsubscribe();
     }
@@ -262,6 +267,12 @@ export class MotionControl implements OnInit, OnDestroy {
       .get<{ x?: number | null; y?: number | null; z?: number | null }>(`${BASE_URL}/get_motion_platform_position`)
       .subscribe({
         next: (position) => {
+          this.sharedService.setReportedToolheadPosition(
+            this.isConnected && !this.motorOffState && !this.isHoming && this.xHomed && this.yHomed
+              && typeof position.x === 'number' && Number.isFinite(position.x)
+              && typeof position.y === 'number' && Number.isFinite(position.y)
+              ? { x: position.x, y: position.y } : null
+          );
           const hasNum = (v: any) => typeof v === 'number' && Number.isFinite(v);
           const round3 = (v: number) => Math.round(v * 1000) / 1000;
 
@@ -297,6 +308,8 @@ export class MotionControl implements OnInit, OnDestroy {
         },
         error: (error) => {
           console.error('Failed to get Motion platform position!', error);
+          // Keep displaying the last known telemetry after a transient failed poll.
+          // Confirmed disconnects, motor-off and homing clear it through their own paths.
         },
       });
   }
@@ -399,7 +412,8 @@ export class MotionControl implements OnInit, OnDestroy {
       next: status => {
         this.lightStatus = status;
         if (!this.isAutofocusing && status.height_offset_reference) {
-          this.autofocusDone = status.height_offset_reference.available;
+          this.autofocusDone = status.height_offset_reference.available
+            && status.height_offset_reference.source === 'autofocus';
         }
         this.applyHeightOffsetPosition(status.height_offset);
       },
@@ -441,13 +455,19 @@ export class MotionControl implements OnInit, OnDestroy {
       || this.filterRevolverStatus.busy;
   }
 
+  private publishAppliedCameraSettings(response: { camera_params?: Record<string, number> }): void {
+    if (response.camera_params) this.settingsUpdatesService.updateCameraSettings(response.camera_params as any);
+  }
+
   get activeHeightOffset(): number | null {
     const channel = this.lightStatus.active_channel;
     const position = this.filterRevolverStatus.position;
     if (!channel || !position) return null;
     const filterKey = this.filterSettings.slots[position - 1] || 'empty';
     const value = this.filterSettings.height_offsets_mm[filterKey]?.[channel];
-    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    const reference = this.lightStatus.height_offset_reference;
+    return Number((value - (reference?.available ? reference.baseline_offset_mm : 0)).toFixed(10));
   }
 
   openHomeContextMenu(event: MouseEvent): void {
@@ -496,6 +516,7 @@ export class MotionControl implements OnInit, OnDestroy {
         this.filterRevolverRotationInitialized = true;
         this.filterRevolverStatus = status;
         this.applyHeightOffsetPosition(status.height_offset);
+        this.publishAppliedCameraSettings(status);
       },
       error: error => {
         console.error('Filter revolver rotation failed:', error);
@@ -526,6 +547,7 @@ export class MotionControl implements OnInit, OnDestroy {
         this.filterRevolverRotationInitialized = true;
         this.filterRevolverStatus = response;
         this.applyHeightOffsetPosition(response.height_offset);
+        this.publishAppliedCameraSettings(response);
       },
       error: error => {
         console.error('Filter revolver position selection failed:', error);
@@ -566,16 +588,30 @@ export class MotionControl implements OnInit, OnDestroy {
   private toggleFourChannelLight(channel: LightChannel, mode?: 'dimmed' | 'full', forceOn = false): void {
     if (this.lightBusy || this.controlsDisabled) return;
     this.lightBusy = true;
-    const request = this.isLampActive(channel) && !forceOn
+    const activating = !this.isLampActive(channel) || forceOn;
+    if (activating && channel === 'vis') {
+      this.filterStatusGeneration++;
+      this.filterRevolverBusy = true;
+    }
+    const request = !activating
       ? this.http.post<LightStatus>(`${BASE_URL}/lights/off`, { channel })
       : this.http.post<LightStatus>(`${BASE_URL}/lights/activate`, mode ? { channel, mode } : { channel });
     request.subscribe({
       next: status => {
         this.lightStatus = status;
+        if (status.filter_revolver) this.applyFilterRevolverStatus(status.filter_revolver);
         this.applyHeightOffsetPosition(status.height_offset);
+        this.publishAppliedCameraSettings(status);
         this.lightBusy = false;
+        this.filterRevolverBusy = false;
       },
-      error: error => { console.error('Four-channel lamp command failed:', error); this.lightBusy = false; this.syncFourChannelLightStatus(); }
+      error: error => {
+        console.error('Four-channel lamp command failed:', error);
+        this.lightBusy = false;
+        this.filterRevolverBusy = false;
+        this.syncFourChannelLightStatus();
+        this.syncFilterRevolverStatus();
+      }
     });
   }
 
@@ -916,6 +952,7 @@ export class MotionControl implements OnInit, OnDestroy {
       next: () => {
         console.log('Motors have been turned off.');
         this.motorOffState = true;
+        this.sharedService.setReportedToolheadPosition(null);
         this.autofocusDone = false;
       },
       error: (error) => {
@@ -947,6 +984,7 @@ export class MotionControl implements OnInit, OnDestroy {
     this.http.post(`${BASE_URL}/autofocus_coarse`, { skip_empty_check: true }).subscribe({
       next: (resp: any) => {
         console.log('Autofocus response:', resp);
+        this.publishAppliedCameraSettings(resp);
         this.isAutofocusing = false;
         this.sharedService.setAutofocusActive(false);
         if (resp.status === 'ERROR' && resp.code) {
