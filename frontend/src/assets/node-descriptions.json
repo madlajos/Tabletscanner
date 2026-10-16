@@ -1,7 +1,7 @@
 {
   "load_image": {
     "purpose": "A képfájlok betöltése a feldolgozási pipeline-ba. Ez az első, kötelező lépés, amely előkészíti a képeket a további feldolgozáshoz.",
-    "usage": "Válassz egy képfájlt vagy egy mappát, amely képeket tartalmaz. A node automatikusan felismeri és rendezi az összes támogatott formátumú képet. Opcionálisan módosíthatod a feldolgozási sorrendet a Képek kezelése gombbal.",
+    "usage": "A Recept szerkesztőben válassz képfájlt vagy képmappát; a sorrend a Képek kezelése gombbal módosítható. Automata mérésnél a node a teljes elkészült tablettaképsorozatot fogadja, a mentett fájlútvonal helyett. A Recept alkalmazás lapon tablettánkénti vagy összesített feldolgozás választható. RGB-képösszeállításnál a metaadatok alapján, tablettánként és hullámhosszonként 1 = Piros, 2 = Zöld, 3 = Kék a forrássorrend.",
     "inputs": "Az elemnek nincs bemenete",
     "parameters": [
       {

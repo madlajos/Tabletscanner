@@ -213,6 +213,9 @@
   }
 
   <!-- START / STOP BUTTON FULL WIDTH -->
+  <p *ngIf="doorPaused" role="status" aria-live="polite">
+    A mérés szünetel. Az ajtók bezárása után automatikusan folytatódik.
+  </p>
   <button
     class="start-button"
     [ngClass]="{ stop: measurementActive }"

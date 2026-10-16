@@ -581,7 +581,7 @@
   margin-top: 4px;
   border: none;
   border-radius: 6px;
-  background-color: var(--state-blue);
+  background-color: #224477;
   color: #fff;
 
   font-size: 13px;
@@ -627,7 +627,7 @@
 }
 
 .start-button:hover:not(:disabled) {
-  background-color: var(--state-blue-hover);
+  background-color: #2360b2;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
   transform: translateY(-1px);
 }

@@ -43,6 +43,32 @@ def focus_stack(data, focus_radius=9, blend_radius=7, align_images=True,
     """Combine two or more registered images using local focus measures."""
     if not isinstance(data, dict) or data.get("error"):
         return data
+    if data.get("_inline_capture_input"):
+        from pipeline_live_inputs import live_focus_groups
+        groups = live_focus_groups(data)
+        if data.get("error"):
+            return data
+        output_images, output_paths, index_maps, metrics = [], [], [], []
+        for indices, metadata in groups:
+            subset = {"images": [data["images"][index] for index in indices],
+                      "paths": [data["paths"][index] for index in indices],
+                      "results": {}, "meta": {}, "history": [], "error": None}
+            result = focus_stack(subset, focus_radius, blend_radius, align_images, alignment_iterations)
+            if result.get("error"):
+                data["error"] = result["error"]
+                data["error_detail"] = f"{metadata['tablet_id']}, {metadata['wavelength']}"
+                return data
+            output_images.extend(result["images"])
+            output_paths.extend(result["paths"])
+            index_maps.append(result["results"]["focus_index_map"])
+            metrics.append(result["results"]["focus_stack_metrics"])
+        data.update(images=output_images, paths=output_paths, count=len(output_images),
+                    image_metadata=[metadata for _, metadata in groups])
+        data.setdefault("results", {})["focus_index_map"] = index_maps
+        data["results"]["focus_stack_metrics"] = metrics
+        data.setdefault("meta", {})["focus_stack"] = {"group_count": len(groups), "groups": metrics}
+        data.setdefault("history", []).append("focus_stack")
+        return data
     images = data.get("images") or []
     if len(images) < 2:
         data["error"] = "E2170"

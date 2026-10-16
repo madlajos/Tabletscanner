@@ -14,8 +14,18 @@ enabled, confirmed acknowledged explicit-off commands for `M106 P0 S0` through
 the physical header mapping until the revised firmware is compiled and flashed.
 
 The release firmware now embeds the mapping-specific `M115` marker
-`TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME`. Real-device discovery rejects firmware
+`TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME-DOORS1`. Real-device discovery rejects firmware
 without this exact marker so an older selector order cannot drive the lamps.
+
+DIAG4/PG12 monitors the front door and DIAG5/PG13 monitors the top cover. A magnet means
+closed, as on the DIAG6 Hall sensor. Firmware cuts all three UV channels when either opens;
+VIS stays available. `M119` and asynchronous state changes report
+`TS_DOORS FRONT:1 TOP:0 UV_BLOCKED:1 TRIP:4` (1=open). `TRIP` is a uint32 opening counter;
+compare for inequality across reset and wrap. Rejected UV emits `Error:TS_DOOR_OPEN`, a report,
+and `ok`; the trailing acknowledgement does not mean activation succeeded.
+The companion software requires an initial report, validates UV before and after ON and
+around acquisition, and pauses automatic measurement until both doors close.
+See [software behavior and verification](DOOR_SAFETY.md).
 
 The software controls four logical channels: `uv255`, `uv310`, `uv365`, and
 `vis`. Their selectors are locked to the mapping-specific firmware contract;

@@ -29,7 +29,12 @@ class LightControllerTests(unittest.TestCase):
                 },
             }
         }
-        self.controller = LightController(lambda: self.settings, lambda: self.serial, self.writer, lambda: self.now)
+        doors = {'known': True, 'front_open': False, 'top_open': False,
+                 'uv_blocked': False, 'trip_count': 0}
+        self.controller = LightController(
+            lambda: self.settings, lambda: self.serial, self.writer, lambda: self.now,
+            door_status_getter=lambda: dict(doors), door_status_refresher=lambda _port: dict(doors),
+        )
 
     def writer(self, _serial, command, timeout):
         self.commands.append((command, timeout))

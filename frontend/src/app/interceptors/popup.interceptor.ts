@@ -1,5 +1,5 @@
 // popup.interceptor.ts
-import { HttpInterceptorFn } from '@angular/common/http';
+import { HttpContextToken, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { catchError, tap, throwError } from 'rxjs';
 import { HttpRequest, HttpHandlerFn, HttpEvent, HttpResponse, HttpErrorResponse } from '@angular/common/http';
@@ -14,11 +14,16 @@ interface ApiResponse {
   code?: string;
 }
 
+/** Feature-owned background work presents its failures in that feature's view. */
+export const LOCAL_ERROR_HANDLING = new HttpContextToken<boolean>(() => false);
+
 export const popupInterceptor: HttpInterceptorFn = (
   req: HttpRequest<any>,
   next: HttpHandlerFn
 ): Observable<HttpEvent<any>> => {
   const errorNotificationService = inject(ErrorNotificationService);
+
+  if (req.context.get(LOCAL_ERROR_HANDLING)) return next(req);
 
   return next(req).pipe(
     tap((event) => {

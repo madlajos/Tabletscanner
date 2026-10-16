@@ -28,7 +28,12 @@ class FilterSeriesCameraTests(unittest.TestCase):
             channel: {'dim_percent': 50, 'full_percent': 100, 'dim_timeout_seconds': 30, 'full_timeout_seconds': 5}
             for channel in ('uv255', 'uv310', 'uv365')
         }}}
-        self.lights = LightController(lambda: config, lambda: self.device, self.write, clock=lambda: self.now)
+        doors = {'known': True, 'front_open': False, 'top_open': False,
+                 'uv_blocked': False, 'trip_count': 0}
+        self.lights = LightController(
+            lambda: config, lambda: self.device, self.write, clock=lambda: self.now,
+            door_status_getter=lambda: dict(doors), door_status_refresher=lambda _port: dict(doors),
+        )
         self.coordinator = FilterCaptureSeriesCoordinator()
         self.coordinator.begin()
 

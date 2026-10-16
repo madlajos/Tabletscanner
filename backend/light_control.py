@@ -11,6 +11,7 @@ import threading
 import time
 
 from settings_manager import UV_LAMP_CHANNELS, validate_lamp_output_selectors, validate_lamp_settings
+from door_interlock import unknown_door_status
 
 LIGHT_CHANNELS = (*UV_LAMP_CHANNELS, 'vis')
 UV_MODES = ('dimmed', 'full')
@@ -37,8 +38,16 @@ class LightCommandError(RuntimeError):
     pass
 
 
+class DoorOpenError(LightCommandError):
+    """UV is unavailable because a door opened or its status is unknown."""
+
+
 class CaptureIlluminationError(RuntimeError):
     """A frame cannot be exposed wholly within the selected lamp's safety window."""
+
+
+class DoorCaptureInterrupted(CaptureIlluminationError):
+    """A door report invalidated the illumination during an owned acquisition."""
 
 
 @dataclass(frozen=True)
@@ -56,11 +65,16 @@ class LightController:
         command_writer,
         clock=time.monotonic,
         operation_lock=None,
+        door_status_getter=None,
+        door_status_refresher=None,
     ):
         self._settings_getter = settings_getter
         self._serial_getter = serial_getter
         self._command_writer = command_writer
         self._clock = clock
+        self._door_status_getter = door_status_getter
+        self._door_status_refresher = door_status_refresher
+        self._active_door_trip = None
         self._operation_lock = operation_lock
         self._lock = threading.RLock()
         self._active: ActiveLight | None = None
@@ -70,7 +84,14 @@ class LightController:
 
     def status(self):
         with self._lock:
+            doors = self._door_status_getter() if self._door_status_getter else unknown_door_status()
             active = self._active
+            if active and active.channel in UV_LAMP_CHANNELS and doors and doors['known'] and (
+                doors['uv_blocked'] or doors['trip_count'] != self._active_door_trip
+            ):
+                self._active = None
+                self._active_serial = None
+                active = None
             if active:
                 try:
                     current_serial = self._serial_getter()
@@ -85,6 +106,7 @@ class LightController:
                 'active_mode': active.mode if active else None,
                 'channels': {channel: bool(active and active.channel == channel) for channel in LIGHT_CHANNELS},
                 'auto_turned_off': list(self._auto_turned_off),
+                **({'door_interlock': doors} if doors is not None else {}),
             }
 
     def consume_auto_off_event(self):
@@ -123,6 +145,15 @@ class LightController:
             self._active = None
             self._active_serial = None
 
+            doors = None
+            if channel in UV_LAMP_CHANNELS:
+                if not self._door_status_refresher or not self._door_status_getter:
+                    raise DoorOpenError('UV door status is unavailable.')
+                doors = self._door_status_refresher(self._serial_getter())
+                if not doors['known'] or doors['uv_blocked']:
+                    raise DoorOpenError('Close the front door and top cover before activating UV.')
+            self._active_door_trip = doors['trip_count'] if doors else None
+
             if channel == 'vis':
                 pwm = 255
                 deadline = None
@@ -135,7 +166,29 @@ class LightController:
             active_serial = self._send(channel, selectors, pwm)
             self._active = ActiveLight(channel, mode, deadline)
             self._active_serial = active_serial
-            return self.status()
+            if doors is not None:
+                try:
+                    current = self._door_status_refresher(active_serial)
+                except Exception:
+                    # ON may already have succeeded. Retain its deadline until
+                    # every OFF is confirmed, even if this readback fails.
+                    self._send_all_off(selectors)
+                    self._active = None
+                    self._active_serial = None
+                    raise
+                if not current['known'] or current['uv_blocked'] or current['trip_count'] != doors['trip_count']:
+                    # An opening can occur in the serial drain BEFORE ON and
+                    # close again before firmware executes ON. Explicitly undo
+                    # that activation; firmware's earlier cutoff is insufficient.
+                    self._active_door_trip = current['trip_count']
+                    self._send_all_off(selectors)
+                    self._active = None
+                    self._active_serial = None
+                    raise DoorOpenError('A door opened during UV activation.')
+            status = self.status()
+            if channel in UV_LAMP_CHANNELS and status['active_channel'] != channel:
+                raise DoorOpenError('A door opened during UV activation.')
+            return status
 
     def off(self, channel=None):
         if channel is not None and channel not in LIGHT_CHANNELS:
@@ -152,6 +205,7 @@ class LightController:
 
     def check_timeouts(self):
         with self._operation_guard(), self._lock:
+            self.status()
             if not self._active or self._active.deadline is None or self._clock() < self._active.deadline:
                 return None
             channel = self._active.channel
@@ -165,7 +219,14 @@ class LightController:
 
     def capture_remaining_seconds(self, channel, mode):
         """Check the capture lamp without renewing or bypassing its thermal cutoff."""
-        with self._lock:
+        with self._operation_guard(), self._lock:
+            if channel in UV_LAMP_CHANNELS:
+                if not self._door_status_refresher or not self._door_status_getter:
+                    raise DoorCaptureInterrupted('UV door status is unavailable.')
+                doors = self._door_status_refresher(self._serial_getter())
+                if not doors['known'] or doors['uv_blocked'] or doors['trip_count'] != self._active_door_trip:
+                    self.status()
+                    raise DoorCaptureInterrupted('UV door interlock interrupted the exposure or is unavailable.')
             status = self.status()
             if status['active_channel'] != channel or status['active_mode'] != mode:
                 raise CaptureIlluminationError('The capture illumination is no longer active.')
@@ -199,7 +260,9 @@ class LightController:
             serial_port = self._serial_getter()
             if not serial_port or not getattr(serial_port, 'is_open', False):
                 raise LightCommandError('Motion platform is not connected.')
-            acknowledged, _ = self._command_writer(serial_port, f'M106 {selector} S{pwm}', timeout=2.0)
+            acknowledged, reply = self._command_writer(serial_port, f'M106 {selector} S{pwm}', timeout=2.0)
+            if b'ts_door_open' in reply.lower():
+                raise DoorOpenError('Close the front door and top cover before activating UV.')
             if not acknowledged:
                 raise LightCommandError(f'Controller did not acknowledge {channel} command.')
             return serial_port

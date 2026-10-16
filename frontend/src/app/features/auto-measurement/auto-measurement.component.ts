@@ -2,7 +2,7 @@ import { Component, signal, OnInit, OnDestroy, AfterViewInit, ElementRef, ViewCh
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription, from, timer, EMPTY } from 'rxjs';
-import { catchError, concatMap, last, finalize, switchMap } from 'rxjs/operators';
+import { catchError, concatMap, last, finalize, switchMap, filter, take, tap } from 'rxjs/operators';
 import { HttpClient } from '@angular/common/http';
 import {
   AutoMeasurementService,
@@ -25,6 +25,9 @@ import { CameraCombinationSettings } from '../../models/camera-combination-setti
 import { ErrorPopupListComponent } from '../../components/error-popup-list/error-popup-list.component';
 import { AnalysisRecipeSelectorComponent } from '../../components/analysis-recipe-selector/analysis-recipe-selector.component';
 import { PipelineDocument } from '../../models/pipeline.models';
+import { InlineAnalysisService } from '../../services/inline-analysis.service';
+import { LightStatusService } from '../../services/light-status.service';
+import { DoorInterlockStatus, UNKNOWN_DOOR_INTERLOCK, doorsAllowUv } from '../../models/light.models';
 
 // Type declaration for Electron API (exposed via preload.js)
 declare global {
@@ -97,6 +100,8 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   autofocus = false;
   backgroundSubtraction = false;
   selectedAnalysisRecipe: PipelineDocument | null = null;
+  private analysisSessionId: string | null = null;
+  private measurementGeneration = 0;
   readonly wavelengthOptions: readonly LightChannel[] = ['uv255', 'uv310', 'uv365', 'vis'];
   readonly lightOptions: ReadonlyArray<{ value: string; label: string }> = [
     ...(['uv255', 'uv310', 'uv365'] as const).flatMap(wavelength => [
@@ -147,6 +152,15 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   // Is measurement currently running (toggled "on")
   measurementActive = false;
+  preflightActive = false;
+  measurementStopping = false;
+  doorPaused = false;
+  doorInterlock: DoorInterlockStatus = UNKNOWN_DOOR_INTERLOCK;
+  private doorStatusSub?: Subscription;
+  private preflightSub?: Subscription;
+  private doorWaitSub?: Subscription;
+  private lastDoorPauseCount = 0;
+  private lastObservedDoorTrip: number | null = null;
 
   // Flag to signal stop request
   private stopRequested = false;
@@ -164,6 +178,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   // Subscription to current tablet measurement (for immediate cancellation on stop)
   private currentTabletSubscription: Subscription | null = null;
+  private currentRequestId: string | null = null;
   private currentProgressSubscription: Subscription | null = null;
   private emittedProgressPaths = new Set<string>();
   activePlanRowIndex: number | null = null;
@@ -202,14 +217,29 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     private motionSettingsService: MotionSettingsService,
     private sharedService: SharedService,
     private errorNotificationService: ErrorNotificationService,
-    private http: HttpClient
+    private inlineAnalysis: InlineAnalysisService,
+    private http: HttpClient,
+    private lightStatusService: LightStatusService
   ) {}
 
-  onAnalysisRecipeSelected(recipe: PipelineDocument): void {
+  onAnalysisRecipeSelected(recipe: PipelineDocument | null): void {
     this.selectedAnalysisRecipe = recipe;
   }
 
   ngOnInit(): void {
+    this.doorStatusSub = this.lightStatusService.status$.subscribe(status => {
+      this.doorInterlock = status.door_interlock ?? UNKNOWN_DOOR_INTERLOCK;
+      const trip = this.doorInterlock.trip_count;
+      const changed = this.doorInterlock.known && this.lastObservedDoorTrip !== null
+        && trip !== this.lastObservedDoorTrip;
+      if (this.doorInterlock.known) this.lastObservedDoorTrip = trip;
+      if (this.measurementActive && !this.stopRequested && !doorsAllowUv(this.doorInterlock)) {
+        this.setDoorPaused(true);
+      }
+      if (this.measurementActive && !this.stopRequested && changed && doorsAllowUv(this.doorInterlock)) {
+        this.showDoorTripNotice();
+      }
+    });
     // Subscribe to connection status from shared service
     this.cameraSub = this.sharedService.cameraConnectionStatus$.subscribe(status => {
       const disconnectedNow = this.cameraStatusInitialized && this.cameraConnected && !status;
@@ -335,6 +365,14 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   ngOnDestroy(): void {
+    this.doorStatusSub?.unsubscribe();
+    this.preflightSub?.unsubscribe();
+    this.doorWaitSub?.unsubscribe();
+    ++this.measurementGeneration;
+    if (this.analysisSessionId) {
+      this.inlineAnalysis.finish(this.analysisSessionId, true);
+      this.analysisSessionId = null;
+    }
     this.stopProgressPolling();
     if (this.planRowScrollTimer) clearTimeout(this.planRowScrollTimer);
     this.cameraSub?.unsubscribe();
@@ -369,10 +407,14 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
   get measurementButtonDetail(): string | null {
     if (this.measurementActive) {
+      if (this.measurementStopping) return 'Mérés leállítása…';
+      if (this.doorPaused) return 'Mérés szünetel – zárja be az elülső ajtót és a felső fedelet.';
       if (this.reconnecting && this.reconnectMessage) return this.reconnectMessage;
       if (this.validationMessage) return this.validationMessage;
       return `Mérés folyamatban… (${this.currentTabletIndex}/${this.selectedCount})`;
     }
+    if (this.preflightActive) return 'Ajtóállapot ellenőrzése…';
+    if (!doorsAllowUv(this.doorInterlock)) return 'A méréshez mindkét ajtó ismert, zárt állapota szükséges.';
     if (this.isAutofocusing) return 'Autofókusz folyamatban…';
     if (this.scannerOperationActive) return 'Másik művelet folyamatban…';
     return this.getValidationMessage();
@@ -416,10 +458,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   // Start/Stop button enabled state
   canStart(): boolean {
     if (this.measurementActive) {
-      return true; // allow stopping
+      return !this.measurementStopping;
     }
 
-    if (this.isAutofocusing || this.scannerOperationActive) {
+    if (this.preflightActive || !doorsAllowUv(this.doorInterlock)
+      || this.isAutofocusing || this.scannerOperationActive) {
       return false;
     }
 
@@ -1038,6 +1081,25 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   // ===== Start / Stop measurement =====
 
   startMeasurement(): void {
+    if (this.measurementActive) {
+      this.stopMeasurement();
+      return;
+    }
+    if (this.preflightActive || this.scannerOperationActive || !doorsAllowUv(this.doorInterlock)) return;
+    if (this.selectedCount === 0) return;
+    this.preflightActive = true;
+    this.preflightSub = this.autoService.preflight().subscribe({
+      next: response => {
+        this.preflightActive = false;
+        this.doorInterlock = response.door_interlock;
+        this.lastObservedDoorTrip = response.door_interlock.trip_count;
+        if (doorsAllowUv(this.doorInterlock)) this.beginMeasurement();
+      },
+      error: () => { this.preflightActive = false; },
+    });
+  }
+
+  private beginMeasurement(): void {
     // Toggle behavior - if running, stop
     if (this.measurementActive) {
       this.stopMeasurement();
@@ -1058,6 +1120,9 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.validationMessage = null;
     this.sharedService.clearToolbarNotice();
     this.stopRequested = false;
+    this.measurementStopping = false;
+    this.lastDoorPauseCount = 0;
+    this.setDoorPaused(false);
     this.reconnectAttemptCount = 0;
     this.completedTablets.clear();
     this.failedTablets.clear();
@@ -1074,13 +1139,61 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.measurementActive = true;
     this.sharedService.setMeasurementActive(true);
 
-    // Check if already homed, then home if needed or proceed directly
-    this.checkHomedThenProceed(indices);
+    // Register the recipe snapshot before capture starts. Analysis setup failures
+    // are reported in Recept alkalmazás and never stop the imaging cycle.
+    const generation = ++this.measurementGeneration;
+    this.analysisSessionId = null;
+    if (!this.selectedAnalysisRecipe) {
+      this.checkHomedThenProceed(indices);
+      return;
+    }
+    this.inlineAnalysis.start(
+      this.selectedAnalysisRecipe, this.measurementName.trim(), this.measurementFolder,
+    ).subscribe({
+      next: session => {
+        if (generation !== this.measurementGeneration || !this.measurementActive) {
+          this.inlineAnalysis.finish(session.session_id, true);
+          return;
+        }
+        this.analysisSessionId = session.session_id;
+        this.checkHomedThenProceed(indices);
+      },
+      error: () => {
+        if (generation === this.measurementGeneration && this.measurementActive) {
+          this.checkHomedThenProceed(indices);
+        }
+      },
+    });
   }
 
   private checkHomedThenProceed(indices: number[]): void {
     // Always home at the start of auto measurement to ensure a known reference.
     this.homeMotionPlatformThenProceed(indices);
+  }
+
+  private setDoorPaused(paused: boolean): void {
+    if (this.doorPaused === paused) return;
+    this.doorPaused = paused;
+    if (paused) {
+      this.errorNotificationService.addError({
+        code: 'E1404', severity: 'warning', popupStyle: 'center', abortMeasurement: false,
+        message: 'A gép ajtaja és/vagy teteje nyitva van. A mérés folytatásához zárja vissza.',
+      });
+    } else {
+      this.errorNotificationService.removeError('E1404');
+    }
+  }
+
+  private waitForClosedDoors() {
+    return this.lightStatusService.status$.pipe(
+      tap(status => {
+        this.doorInterlock = status.door_interlock ?? UNKNOWN_DOOR_INTERLOCK;
+        if (!this.stopRequested) this.setDoorPaused(!doorsAllowUv(this.doorInterlock));
+      }),
+      filter(() => this.stopRequested || doorsAllowUv(this.doorInterlock)),
+      take(1),
+      tap(() => this.setDoorPaused(false)),
+    );
   }
 
   private homeMotionPlatformThenProceed(indices: number[]): void {
@@ -1092,10 +1205,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     const axesOrder: Array<'z' | 'y' | 'x' | 'a'> = ['z', 'y', 'x', 'a'];
 
     const homing$ = from(axesOrder).pipe(
-      concatMap((axis) => this.http.post(`${BASE_URL}/home_toolhead`, {
-        axes: [axis],
-        select_autofocus_filter: axis === 'a'
-      })),
+      concatMap((axis) => this.waitForClosedDoors().pipe(
+        switchMap(() => this.stopRequested ? EMPTY : this.http.post(`${BASE_URL}/home_toolhead`, {
+          axes: [axis], select_autofocus_filter: axis === 'a'
+        })),
+      )),
       last(),
       switchMap(() => this.http.get<{ x?: number | null; y?: number | null; z?: number | null }>(`${BASE_URL}/get_motion_platform_position`)),
       finalize(() => {
@@ -1106,6 +1220,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
 
     this.homingSubscription = homing$.subscribe({
       next: (position) => {
+        if (this.stopRequested) { this.finishMeasurement(false); return; }
         console.log('Motion platform and filter revolver homed successfully (Z→Y→X→A). Position:', position);
         this.validationMessage = null;
         
@@ -1148,13 +1263,19 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   stopMeasurement(): void {
+    if (this.measurementStopping) return;
     this.stopRequested = true;
+    this.measurementStopping = true;
 
     // Signal backend to abort autofocus immediately
-    this.http.post(`${BASE_URL}/abort-autofocus`, {}).subscribe({
+    this.autoService.cancelMeasurement(this.currentRequestId).subscribe({
       next: () => console.log('Autofocus abort signal sent to backend'),
       error: (err) => console.warn('Could not send abort signal:', err)
     });
+
+    // Retain ownership until the synchronous worker (including a door pause)
+    // has observed cancellation and completed its hardware cleanup.
+    if (this.currentTabletSubscription || this.homingSubscription) return;
 
     // Note: Lights will be turned off in finishMeasurement()
     // No need to duplicate the call here
@@ -1170,6 +1291,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   private cancelActiveOperations(): void {
+    this.currentRequestId = null;
     // Cancel current tablet measurement
     if (this.currentTabletSubscription) {
       this.currentTabletSubscription.unsubscribe();
@@ -1226,6 +1348,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       is_first_tablet: isFirstTablet,
       background_subtraction: this.backgroundSubtraction
     };
+    if (this.analysisSessionId) req.inline_analysis_session_id = this.analysisSessionId;
 
     // If stop was requested before starting this tablet, exit early
     if (this.stopRequested) {
@@ -1234,8 +1357,11 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     }
 
     this.startProgressPolling(requestId, tabletId);
+    this.currentRequestId = requestId;
     this.currentTabletSubscription = this.autoService.measureSingleTablet(req).subscribe({
       next: (resp) => {
+        this.currentRequestId = null;
+        this.observeDoorProgress(resp.door_paused, resp.door_pause_count);
         if (this.stopRequested) {
           this.currentTabletSubscription?.unsubscribe();
           this.currentTabletSubscription = null;
@@ -1291,6 +1417,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         }
       },
       error: (err) => {
+        this.currentRequestId = null;
         this.stopProgressPolling();
         this.currentTabletSubscription?.unsubscribe();
         this.currentTabletSubscription = null;
@@ -1301,6 +1428,13 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
         }
 
         // Check if this is a device disconnect
+        if (err?.error?.code === 'E1402') {
+          this.setDoorPaused(true);
+          this.doorWaitSub = this.waitForClosedDoors().subscribe(() => {
+            if (!this.stopRequested && this.measurementActive) void this.processTabletQueue(indices, queueIndex);
+          });
+          return;
+        }
         if (this.isDeviceDisconnectError(err)) {
           const device = this.detectDisconnectedDevice(err);
           this.attemptDeviceReconnect(
@@ -1325,6 +1459,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   private startProgressPolling(requestId: string, tabletId: number): void {
     this.stopProgressPolling();
     this.emittedProgressPaths.clear();
+    this.lastDoorPauseCount = 0;
     this.currentProgressSubscription = timer(100, 250).pipe(
       switchMap(() => this.autoService.getProgress(requestId).pipe(
         catchError(err => {
@@ -1334,6 +1469,7 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
       ))
     ).subscribe({
       next: progress => {
+        this.observeDoorProgress(progress.door_paused, progress.door_pause_count);
         this.setActivePlanRow(progress.active_plan_row_index);
         this.errorNotificationService.addWarnings(progress.warnings);
         for (const image of progress.images) {
@@ -1347,6 +1483,20 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
     this.currentProgressSubscription?.unsubscribe();
     this.currentProgressSubscription = null;
     this.setActivePlanRow(null);
+  }
+
+  private observeDoorProgress(paused = false, count = 0): void {
+    if (this.stopRequested) return;
+    if (count > this.lastDoorPauseCount && !paused) this.showDoorTripNotice();
+    this.lastDoorPauseCount = count;
+    this.setDoorPaused(paused || !doorsAllowUv(this.doorInterlock));
+  }
+
+  private showDoorTripNotice(): void {
+    this.errorNotificationService.addError({
+      code: 'E1405', severity: 'info', popupStyle: 'center', abortMeasurement: false,
+      message: 'Az ajtó és a fedél bezáródott. A mérés folytatódik.',
+    });
   }
 
   private setActivePlanRow(rowIndex: number | null): void {
@@ -1561,6 +1711,15 @@ export class AutoMeasurementComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   private finishMeasurement(success: boolean): void {
+    this.cancelActiveOperations();
+    this.doorWaitSub?.unsubscribe();
+    this.measurementStopping = false;
+    this.setDoorPaused(false);
+    ++this.measurementGeneration;
+    if (this.analysisSessionId) {
+      this.inlineAnalysis.finish(this.analysisSessionId, !success);
+      this.analysisSessionId = null;
+    }
     // Clean up reconnection state
     this.clearReconnectState();
     this.reconnectMessage = null;

@@ -1,4 +1,15 @@
 
+/* Tooltips render in the global overlay, outside the lamp component. */
+.lamp-door-tooltip .mat-mdc-tooltip-surface {
+  background-color: #333;
+  color: #fff;
+  opacity: 1;
+  border: 1px solid #666;
+  border-radius: 4px;
+  padding: 8px 12px;
+  box-shadow: 0 3px 10px #0008;
+}
+
 :root {
   /* Typography */
   --font-family-base: 'Arial', sans-serif;

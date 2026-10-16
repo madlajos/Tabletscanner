@@ -71,6 +71,7 @@ from light_control import (
     LightCommandError,
     LightConfigurationError,
     LightController,
+    DoorOpenError,
     contains_lamp_gcode,
 )
 import numpy as np
@@ -96,15 +97,22 @@ import pipeline_validators
 import recipe_manager
 import calibration_manager
 import measurement_progress
+from measurement_safety import (
+    MeasurementDoorGuard, MeasurementCancelled,
+    cancel_measurement_request, measurement_request_cancelled,
+)
 from pipeline_types import PipelineDocument
 from proc_elements.scale_bar import scale_bar_overlay as _apply_scale_bar_overlay
 from image_metadata import build_capture_metadata, serialize_capture_metadata
+from inline_analysis import inline_analysis_service, AnalysisCaptureCancelled
+from inline_analysis_api import create_inline_analysis_blueprint
 
 
 app = Flask(__name__)
 app.secret_key = 'Egis'
 CORS(app)
 app.debug = True
+app.register_blueprint(create_inline_analysis_blueprint(inline_analysis_service))
 
 setup_logger()
 _EPS = 1e-6
@@ -113,6 +121,9 @@ light_controller = LightController(
     lambda: porthandler.motion_platform or globals.motion_platform,
     porthandler.write_and_wait,
     operation_lock=porthandler.motion_lock,
+    door_status_getter=lambda: porthandler.door_interlock.snapshot(
+        porthandler.motion_platform or globals.motion_platform),
+    door_status_refresher=porthandler.refresh_door_status,
 )
 bgr_capture_coordinator = FilterCaptureSeriesCoordinator()
 BGR_HARDWARE_SETTLE_SECONDS = 0.5
@@ -133,6 +144,10 @@ def four_channel_lamp_timeout_monitor():
             pass
         except Exception:
             app.logger.exception('Four-channel lamp timeout monitor failed')
+        try:
+            porthandler.poll_door_interlock()
+        except Exception:
+            app.logger.exception('Door status polling failed')
         time.sleep(0.25)
 
 # Might need to be removed
@@ -1896,6 +1911,8 @@ def activate_light():
             'camera_params': camera_params,
             'filter_revolver': _filter_revolver_status() if filter_changed else None,
         }), 200
+    except DoorOpenError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.UV_DOOR_OPEN, 'popup': True}), 409
     except LampSettingsError as error:
         return jsonify({'error': str(error), 'code': ErrorCode.LAMP_SETTINGS_MISSING, 'popup': True}), 400
     except LightConfigurationError as error:
@@ -2339,8 +2356,14 @@ def _capture_and_save_image(target_folder: str, filename: str, background_subtra
     # Normalize path for cross-platform consistency
     target_folder = _normalize_path(target_folder)
 
+    validate_uv = prepared_frame is None and light_type in UV_LAMP_CHANNELS
+    capture_mode = light_controller.status()['active_mode'] if validate_uv else None
+    if validate_uv:
+        light_controller.capture_remaining_seconds(light_type, capture_mode)
     # Grab frame from camera
     frame_result = prepared_frame if prepared_frame is not None else _grab_owned_camera_frame()
+    if validate_uv:
+        light_controller.capture_remaining_seconds(light_type, capture_mode)
     
     if isinstance(frame_result, tuple):
         frame = frame_result[0]
@@ -2921,6 +2944,7 @@ def _capture_image_with_light(light_type: str, measurement_folder: str, measurem
 
 def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_name: str,
                               tablet_index: int, background_subtraction: bool = False,
+                              capture_coordinator=None,
                               on_image_saved=None) -> list:
     """Capture one persisted wavelength/filter row with the Octopus controller.
 
@@ -2933,9 +2957,15 @@ def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_na
     activated = False
     try:
         _apply_capture_plan_camera_settings(row)
-        light_controller.activate(wavelength, mode)
-        activated = True
-        time.sleep(0.3)
+        frame = None
+        if capture_coordinator is not None:
+            frame = capture_series_frame(globals.camera, light_controller, wavelength, mode, capture_coordinator)
+            if frame is None:
+                raise MeasurementCancelled('Measurement stopped during capture.')
+        else:
+            light_controller.activate(wavelength, mode)
+            activated = True
+            time.sleep(0.3)
 
         timestamp = _format_capture_timestamp(datetime.now())
         tablet_label = _tablet_index_to_label(tablet_index)
@@ -2945,6 +2975,7 @@ def _capture_capture_plan_row(row: dict, measurement_folder: str, measurement_na
             background_subtraction=background_subtraction,
             light_type=wavelength,
             filter_position=filter_position,
+            prepared_frame=frame,
             on_image_saved=on_image_saved,
         )
     finally:
@@ -3010,6 +3041,32 @@ def auto_measurement_progress():
     return jsonify(progress), 200
 
 
+@app.route('/api/auto_measurement/preflight', methods=['POST'])
+def auto_measurement_preflight():
+    """Recheck physical doors before homing or starting an automatic run."""
+    with porthandler.motion_lock:
+        platform = porthandler.motion_platform or globals.motion_platform
+        if not platform or not getattr(platform, 'is_open', False):
+            return jsonify({'error': 'Motion platform disconnected.',
+                            'code': ErrorCode.MOTIONPLATFORM_DISCONNECTED, 'popup': True}), 503
+        if globals.motion_busy:
+            return jsonify({'error': 'Motion platform busy.',
+                            'code': ErrorCode.SCANNER_BUSY, 'popup': True}), 409
+        doors = porthandler.refresh_door_status(platform)
+        if not doors['known'] or doors['uv_blocked']:
+            return jsonify({'error': ERROR_MESSAGES[ErrorCode.UV_DOOR_OPEN],
+                            'code': ErrorCode.UV_DOOR_OPEN, 'popup': True}), 409
+        return jsonify({'door_interlock': doors}), 200
+
+
+def _report_inline_analysis_failure(session_id, message):
+    """Analysis failures belong to its notification panel, never to motion."""
+    try:
+        inline_analysis_service.report_error(session_id, message)
+    except Exception:
+        app.logger.exception('Could not publish inline analysis failure')
+
+
 @app.route('/api/auto_measurement/step', methods=['POST'])
 def auto_measurement_step():
     """
@@ -3029,14 +3086,40 @@ def auto_measurement_step():
     """
     request_id = None
     progress_outcome = 'failed'
+    inline_session_id = None
+    inline_request_id = None
+    inline_capture_active = False
+    inline_inputs = []
+    tablet_index = None
+    safety = None
     try:
-        # Reset abort flag for each new tablet
+        data = request.get_json() or {}
+        request_id = data.get('request_id')
+        if measurement_request_cancelled(request_id):
+            return jsonify(status='success', tablet_index=data.get('tablet_index'),
+                           saved_images=[], cancelled=True), 200
+        inline_session_id = data.get('inline_analysis_session_id')
+        if inline_session_id:
+            # Analysis ownership starts before device work. Finish/abort may
+            # arrive concurrently and must wait for this request's cleanup.
+            import uuid
+            inline_request_id = uuid.uuid4().hex
+            try:
+                inline_analysis_service.begin_capture(inline_session_id, inline_request_id)
+                inline_capture_active = True
+            except AnalysisCaptureCancelled:
+                # A stopped browser request may reach Flask after finish.
+                # Check before clearing autofocus_abort or touching a device.
+                return jsonify(status='success', tablet_index=data.get('tablet_index'),
+                               saved_images=[], cancelled=True), 200
+            except Exception:
+                app.logger.exception('Could not register inline capture ownership; imaging continues')
+                _report_inline_analysis_failure(
+                    inline_session_id, 'A tabletta élő elemzése nem regisztrálható. A mérés folytatódik.')
+        # Reset abort only for a newly accepted tablet, never a cancelled run.
         if globals.autofocus_abort:
             globals.autofocus_abort = False
             app.logger.info("Autofocus abort flag cleared for new tablet")
-        
-        data = request.get_json() or {}
-        request_id = data.get('request_id')
         try:
             measurement_progress.start(request_id)
         except ValueError as error:
@@ -3080,11 +3163,23 @@ def auto_measurement_step():
                 'status': 'error',
                 'message': 'capture_plan is required. Legacy lamp_top/lamp_side requests are no longer supported.'
             }), 400
-        
+
         # ---------- Check devices ----------
         motion_platform, camera, err_response, err_status = _check_devices_connected()
         if err_response:
             return err_response, err_status
+
+        if is_first_tablet:
+            doors = porthandler.refresh_door_status(motion_platform)
+            if not doors['known'] or doors['uv_blocked']:
+                return jsonify({'error': ERROR_MESSAGES[ErrorCode.UV_DOOR_OPEN],
+                                'code': ErrorCode.UV_DOOR_OPEN, 'popup': True}), 409
+        safety = MeasurementDoorGuard(
+            motion_platform, light_controller, porthandler.refresh_door_status,
+            lambda paused: measurement_progress.set_door_pause(request_id, paused),
+            lambda: globals.autofocus_abort or measurement_request_cancelled(request_id),
+        )
+        safety.wait_closed()
 
         # Ensure folder exists
         try:
@@ -3115,12 +3210,12 @@ def auto_measurement_step():
             move_z = None
         
         app.logger.info(f"Tablet {tablet_index}: Moving to X={move_x}, Y={move_y}, Z={move_z if move_z else 'unchanged'}")
-        resp, status = _move_toolhead_absolute_impl(
+        resp, status = safety.run(lambda: _move_toolhead_absolute_impl(
             x_pos=move_x,
             y_pos=move_y,
             z_pos=move_z,
             preserve_height_reference=move_z is None,
-        )
+        ))
         if status != 200:
             _turn_off_all_lights()
             # If the move failed due to a device disconnect (503), propagate
@@ -3145,12 +3240,26 @@ def auto_measurement_step():
             motion_ok = _wait_for_motion_complete(motion_platform, timeout=30.0)
             if not motion_ok:
                 app.logger.warning(f"Tablet {tablet_index}: M400 timed out after move, proceeding cautiously")
+                if inline_capture_active:
+                    try:
+                        inline_analysis_service.report_error(
+                            inline_session_id,
+                            'Az X/Y mozgás befejezése nem igazolható. Az előző tabletta elemzése a következő igazolt mozgásig vagy a mérés végéig vár.',
+                        )
+                    except Exception:
+                        app.logger.exception('Could not record deferred inline analysis notice')
+            elif inline_capture_active:
+                try:
+                    inline_analysis_service.release_after_move(inline_session_id)
+                except Exception:
+                    app.logger.exception('Could not release inline analysis after movement; imaging continues')
+                    _report_inline_analysis_failure(
+                        inline_session_id, 'A tabletta elemzése nem indítható el. A mérés folytatódik.')
         except (OSError, PermissionError) as e:
             return _handle_motion_usb_disconnect(motion_platform, f"move to tablet {tablet_index}")
         
         # Settle time: wait for vibrations to stop so camera gets a still image
         time.sleep(0.2)
-        
         # =====================================================
         # STEP 3: Autofocus
         # =====================================================
@@ -3166,11 +3275,12 @@ def auto_measurement_step():
             
             # Autofocus uses its dedicated saved light/filter selection. The
             # first plan row still supplies the operator-selected camera values.
-            autofocus_settings, _ = _select_configured_autofocus_hardware(
-                motion_platform,
-                manage_motion_busy=True,
-                capture_plan_row=capture_plan[0] if capture_plan is not None else None,
-            )
+            def prepare_autofocus():
+                return _select_configured_autofocus_hardware(
+                    motion_platform, manage_motion_busy=True,
+                    capture_plan_row=capture_plan[0],
+                )
+            autofocus_settings, _ = safety.run(prepare_autofocus)
             height_offset_control.invalidate_reference()
             if capture_plan is None:
                 _apply_camera_settings_for_light('dome')
@@ -3188,29 +3298,31 @@ def auto_measurement_step():
                 # For the first tablet, calculate reference color values before autofocus
                 if is_first_tablet:
                     try:
-                        color_result = calc_color.calculate_median_and_span(
+                        color_result = safety.run(lambda: calc_color.calculate_median_and_span(
                             motion_platform, needed=True
-                        )
+                        ), prepare=prepare_autofocus)
                         if color_result.get('status') == 'OK':
                             ref = {k: v for k, v in color_result.items() if k != 'status'}
                             globals.color_values = ref
                             app.logger.info(f"Tablet {tablet_index}: Reference color values stored: {ref}")
                         else:
                             app.logger.warning(f"Tablet {tablet_index}: calc_color returned {color_result}")
+                    except MeasurementCancelled:
+                        raise
                     except Exception as e:
                         app.logger.warning(f"Tablet {tablet_index}: calc_color error: {e}")
             
             try:
                 if autofocus_enabled:
                     # Autofocus selected: run with before_auto=True for every tablet
-                    af_result = autofocus_main.autofocus_coarse(
+                    af_result = safety.run(lambda: autofocus_main.autofocus_coarse(
                         motion_platform, do_frame_touch_check=True, before_auto=True, debug=False
-                    )
+                    ), prepare=prepare_autofocus)
                 elif is_first_tablet:
                     # Autofocus unselected, first tablet: find focal plane with skip_empty_check + no color check
-                    af_result = autofocus_main.autofocus_coarse(
+                    af_result = safety.run(lambda: autofocus_main.autofocus_coarse(
                         motion_platform, skip_empty_check=True, before_auto=False, debug=False
-                    )
+                    ), prepare=prepare_autofocus)
                 
                 af_status = af_result.get('status', 'ERROR')
                 af_error_code = af_result.get('code')  # e.g. "E2000", "E2002", "E2003"
@@ -3234,15 +3346,17 @@ def auto_measurement_step():
                     # calculate reference color values (camera already at focused Z)
                     if not autofocus_enabled and is_first_tablet:
                         try:
-                            color_result = calc_color.calculate_median_and_span(
+                            color_result = safety.run(lambda: calc_color.calculate_median_and_span(
                                 motion_platform, needed=False
-                            )
+                            ), prepare=prepare_autofocus)
                             if color_result.get('status') == 'OK':
                                 ref = {k: v for k, v in color_result.items() if k != 'status'}
                                 globals.color_values = ref
                                 app.logger.info(f"Tablet {tablet_index}: Post-AF reference color values stored: {ref}")
                             else:
                                 app.logger.warning(f"Tablet {tablet_index}: calc_color (post-AF) returned {color_result}")
+                        except MeasurementCancelled:
+                            raise
                         except Exception as e:
                             app.logger.warning(f"Tablet {tablet_index}: calc_color (post-AF) error: {e}")
                 elif af_status == 'ABORTED':
@@ -3270,6 +3384,8 @@ def auto_measurement_step():
                     # For other AF errors, continue with image capture — the focus may still be acceptable
             except (OSError, PermissionError) as e:
                 return _handle_motion_usb_disconnect(motion_platform, f"autofocus tablet {tablet_index}")
+            except MeasurementCancelled:
+                raise
             except Exception as e:
                 if _is_camera_disconnect(e):
                     _turn_off_all_lights()
@@ -3303,7 +3419,10 @@ def auto_measurement_step():
 
             try:
                 # --- Pre-check: run check_only before manual_bgr_with_check ---
-                check_frame = _grab_owned_camera_frame(timeout_ms=5000, retries=2)
+                check_frame = safety.run(
+                    lambda: _grab_owned_camera_frame(timeout_ms=5000, retries=2),
+                    prepare=_turn_on_dome_light,
+                )
 
                 # Greyscale difference score
                 gds_result = check_only.grayscale_difference_score(check_frame)
@@ -3354,7 +3473,7 @@ def auto_measurement_step():
                 app.logger.info(f"Tablet {tablet_index}: check_only passed, proceeding with manual_bgr")
 
                 # --- Pre-check passed: run manual_bgr_with_check ---
-                mbgr_result = manual_bgr_with_check.manual_return()
+                mbgr_result = safety.run(manual_bgr_with_check.manual_return, prepare=_turn_on_dome_light)
                 mbgr_status = mbgr_result.get('status', 'ERROR')
                 if mbgr_status == 'OK':
                     contour = mbgr_result.get('final_contour')
@@ -3384,6 +3503,8 @@ def auto_measurement_step():
                 return _handle_motion_usb_disconnect(
                     motion_platform, f"manual_bgr tablet {tablet_index}"
                 )
+            except MeasurementCancelled:
+                raise
             except Exception as e:
                 if _is_camera_disconnect(e):
                     _turn_off_all_lights()
@@ -3410,10 +3531,11 @@ def auto_measurement_step():
             # values used to build the first-tablet reference. The previous
             # capture row may have left a UV filter selected, which makes a
             # VIS presence frame appear falsely underexposed.
-            _prepare_tablet_presence_check(motion_platform, capture_plan)
-
             try:
-                frame_bgr = _grab_owned_camera_frame(timeout_ms=5000, retries=2)
+                frame_bgr = safety.run(
+                    lambda: _grab_owned_camera_frame(timeout_ms=5000, retries=2),
+                    prepare=lambda: _prepare_tablet_presence_check(motion_platform, capture_plan),
+                )
 
                 # -- Greyscale difference score --
                 gds_result = check_only.grayscale_difference_score(frame_bgr)
@@ -3468,6 +3590,8 @@ def auto_measurement_step():
                 return _handle_motion_usb_disconnect(
                     motion_platform, f"check_only tablet {tablet_index}"
                 )
+            except MeasurementCancelled:
+                raise
             except Exception as e:
                 if _is_camera_disconnect(e):
                     _turn_off_all_lights()
@@ -3499,12 +3623,12 @@ def auto_measurement_step():
                         'Tablet %s: Capturing %s image with filter position %s',
                         tablet_index, wavelength, filter_position,
                     )
-                    _select_measurement_filter_position(motion_platform, filter_position)
-                    height_offset = height_offset_control.apply_active_combination(
+                    safety.run(lambda: _select_measurement_filter_position(motion_platform, filter_position))
+                    height_offset = safety.run(lambda: height_offset_control.apply_active_combination(
                         motion_platform,
                         _current_filter_settings(),
                         wavelength,
-                    )
+                    ))
                     if height_offset.get('warning'):
                         measurement_progress.record_warning(
                             request_id, height_offset['warning']
@@ -3516,7 +3640,11 @@ def auto_measurement_step():
                         )
 
                     def publish_saved_image(saved_path, masked):
-                        measurement_progress.record_image(request_id, {
+                        if inline_capture_active and not masked:
+                            # The save callback is authoritative about variants;
+                            # never infer source identity from a filename.
+                            inline_inputs.append({'path': saved_path})
+                        image_record = {
                             'path': saved_path,
                             'tablet_index': tablet_index,
                             'wavelength': wavelength,
@@ -3525,13 +3653,15 @@ def auto_measurement_step():
                             'exposure_time': row['exposure_time'],
                             'gain': row['gain'],
                             'masked': masked,
-                        })
+                        }
+                        measurement_progress.record_image(request_id, image_record)
 
-                    saved_paths = _capture_capture_plan_row(
+                    saved_paths = safety.run(lambda: _capture_capture_plan_row(
                         row, measurement_folder, measurement_name, tablet_index,
                         background_subtraction=background_subtraction,
+                        capture_coordinator=safety,
                         on_image_saved=publish_saved_image,
-                    )
+                    ), validate_after=False)
                     saved_images.extend(saved_paths)
                     captured_plan_rows.append({
                         'wavelength': wavelength,
@@ -3541,10 +3671,17 @@ def auto_measurement_step():
                         'gain': row['gain'],
                         'saved_images': saved_paths,
                     })
+                    # A door may open while a valid frame is being saved. Keep
+                    # that completed row, but pause before advancing/finishing.
+                    safety.wait_closed()
+                except MeasurementCancelled:
+                    raise
                 except (OSError, PermissionError) as error:
                     return _handle_motion_usb_disconnect(
                         motion_platform, f'{wavelength} capture tablet {tablet_index}'
                     )
+                except MeasurementCancelled:
+                    raise
                 except Exception as error:
                     app.logger.error(
                         'Tablet %s: Failed to capture %s/filter %s: %s',
@@ -3580,6 +3717,8 @@ def auto_measurement_step():
                 except Exception:
                     pass
                 return _handle_motion_usb_disconnect(motion_platform, f"dome capture tablet {tablet_index}")
+            except MeasurementCancelled:
+                raise
             except Exception as e:
                 app.logger.error(f"Tablet {tablet_index}: Failed to capture dome image: {e}")
                 try:
@@ -3622,6 +3761,8 @@ def auto_measurement_step():
                             app.logger.warning(
                                 f"Tablet {tablet_index}: Bar-light exposure gate failed ({gate_code}), skipping bar capture"
                             )
+                    except MeasurementCancelled:
+                        raise
                     except Exception as gate_err:
                         app.logger.warning(f"Tablet {tablet_index}: Bar-light exposure gate error, proceeding: {gate_err}")
 
@@ -3638,6 +3779,8 @@ def auto_measurement_step():
                 except Exception:
                     pass
                 return _handle_motion_usb_disconnect(motion_platform, f"bar capture tablet {tablet_index}")
+            except MeasurementCancelled:
+                raise
             except Exception as e:
                 app.logger.error(f"Tablet {tablet_index}: Failed to capture bar image: {e}")
                 try:
@@ -3660,6 +3803,8 @@ def auto_measurement_step():
         if capture_plan is not None:
             try:
                 light_controller.off()
+            except MeasurementCancelled:
+                raise
             except Exception as error:
                 app.logger.warning('Four-channel all-off after capture plan failed: %s', error)
         
@@ -3669,6 +3814,7 @@ def auto_measurement_step():
             'tablet_index': tablet_index,
             'saved_images': saved_images,
             'captured_plan_rows': captured_plan_rows,
+            'door_pause_count': (measurement_progress.snapshot(request_id) or {}).get('door_pause_count', 0),
         }
         if af_error_code:
             response_data['af_error_code'] = af_error_code
@@ -3676,6 +3822,11 @@ def auto_measurement_step():
         progress_outcome = 'completed'
         return jsonify(response_data), 200
         
+    except MeasurementCancelled:
+        progress = measurement_progress.snapshot(request_id) or {}
+        return jsonify(status='success', tablet_index=tablet_index,
+                       saved_images=[image['path'] for image in progress.get('images', [])],
+                       cancelled=True), 200
     except (OSError, PermissionError) as e:
         try:
             _turn_off_all_lights()
@@ -3700,6 +3851,21 @@ def auto_measurement_step():
             'message': str(e)
         }), 500
     finally:
+        if safety is not None:
+            try:
+                light_controller.off()
+            except Exception:
+                app.logger.exception('Could not switch off lights after automatic capture')
+        if inline_capture_active:
+            try:
+                inline_analysis_service.capture_finished(
+                    inline_session_id, inline_request_id, tablet_index,
+                    inputs=inline_inputs if progress_outcome == 'completed' else None,
+                )
+            except Exception:
+                app.logger.exception('Could not stage inline analysis capture; imaging continues')
+                _report_inline_analysis_failure(
+                    inline_session_id, 'A tabletta képei nem adhatók át az elemzésnek. A mérés folytatódik.')
         if request_id:
             measurement_progress.finish(request_id, progress_outcome)
 
@@ -3881,6 +4047,11 @@ def save_raw_image_endpoint():
                     time.sleep(0.3)
                 except Exception:
                     return jsonify({'error': 'Could not restore capture illumination.', 'code': ErrorCode.CAPTURE_LIGHT_REQUIRED, 'popup': True}), 503
+
+    try:
+        light_controller.capture_remaining_seconds(light_type, selected_light['active_mode'])
+    except CaptureIlluminationError as error:
+        return jsonify({'error': str(error), 'code': ErrorCode.CAPTURE_LIGHT_TIMEOUT, 'popup': True}), 422
 
     # --- Grab frame from camera ---
     img = grab_camera_image()  # your existing helper
@@ -4398,6 +4569,12 @@ def health_check():
 def abort_autofocus():
     """Signal autofocus routines to abort immediately."""
     try:
+        data = request.get_json(silent=True) or {}
+        if 'request_id' in data:
+            try:
+                cancel_measurement_request(data['request_id'])
+            except ValueError as error:
+                return jsonify({'error': str(error), 'code': ErrorCode.GENERIC, 'popup': False}), 400
         globals.autofocus_abort = True
         app.logger.info("Autofocus abort flag set")
         return jsonify({"status": "abort_signaled"}), 200

@@ -89,7 +89,18 @@ carefully because normal application use can modify the tracked JSON files.
   existing protocol deliberately waits elsewhere.
 - Keep finite serial timeouts. Current discovery uses 115200 baud, 0.2 s read timeout, 0.5 s
   write timeout, USB `0483:5740`, `M115`, and the mapping marker
-  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK`.
+  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME-DOORS1` and an initial valid `M119`
+  door report before publishing a real connection.
+- DIAG4/PG12 is the front door; DIAG5/PG13 is the top cover. Magnet present means closed.
+  Preserve fragmented/unsolicited `TS_DOORS` reports through serial drains. Compare `TRIP`
+  by inequality, including reset/wrap, and recheck it after UV ON as well as at capture
+  boundaries. Unknown door state blocks UV without dropping an existing thermal deadline.
+  VIS remains available. `GET /api/lights/status` reads cached state only.
+- Automatic measurement requires known closed doors before starting. `measurement_safety.py`
+  pauses the current request between bounded commands/acquisitions, releases camera/serial
+  locks while waiting, and retries only the interrupted phase after closure. Preserve completed
+  capture rows, cancellation ownership until cleanup, and independent thermal monitoring.
+  See [door-safety software checks](docs/DOOR_SAFETY.md).
 - Preserve backend clamping and cached position updates. Current limits are X 0–175, Y 0-165  mm and Z
   0–40 mm. UI limits are not an adequate safety boundary.
 - Respect `globals.motion_busy`; status polling must not interleave commands with homing,
@@ -130,6 +141,18 @@ carefully because normal application use can modify the tracked JSON files.
   success in production paths.
 
 ### Concurrency
+
+- Inline recipe application is owned by `inline_analysis.py` and its Blueprint, independently of
+  hardware. Automatic measurement passes `inline_analysis_session_id`; stage only complete original
+  capture sets, release them after confirmed next-tablet motion, and defer final flush until active
+  capture cleanup. Analysis failures must never propagate into physical capture failures. Guard
+  late requests belonging to cancelled sessions before resetting autofocus abort or touching devices.
+- `pipeline_live_inputs.py` binds captures without changing saved recipe source paths. RGB source
+  indices are metadata-based 1=red, 2=green, 3=blue within tablet/wavelength groups. Preserve output
+  metadata when image counts change, including focus stacking, and preserve gallery tablet identity.
+- The root `InlineAnalysisService` polls independently of tab lifetimes. The applier provides its own
+  `PipelineStateService` in external-preview mode; do not send inline results through editor preview
+  HTTP calls. Keep the scanner mounted when changing tabs. See `docs/INLINE_ANALYSIS.md` for limits.
 
 The backend is not globally single-threaded: Flask can handle concurrent requests and the lamp
 monitor is a daemon thread. Module globals and JSON caches are shared mutable state. Use the
@@ -286,10 +309,11 @@ cd ..
 .\build.bat
 ```
 
-Record baseline versus new failures. At the time this guide was created, the backend smoke test
-passes, while the frontend production build fails its component-style budget and all ten
-headless specs fail due to existing test setup/starter-test problems. Do not claim a green test
-suite until those failures are repaired.
+Record baseline versus new failures. The inline-analysis backend and focused frontend checks pass.
+The empty app test was replaced with navigation/error-badge tests; a full run now has 76 passing
+and six existing failing scanner/settings specs (before the additional passing PCA test).
+Production compilation still fails the existing initial-bundle and preview/inspector style budgets.
+Do not claim a green full suite; see `docs/INLINE_ANALYSIS.md` for commands and observed failures.
 
 For backend changes without hardware, add focused tests around pure helpers, pipeline execution,
 Flask test-client contracts, or mocked adapter boundaries. Do not require a physical camera or

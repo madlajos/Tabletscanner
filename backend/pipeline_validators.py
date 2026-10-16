@@ -7,7 +7,7 @@ from pipeline_types import StepError, StepInstance, PipelineDocument
 from pipeline_steps import STEP_DEFINITIONS
 
 
-def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
+def validate_pipeline(doc: PipelineDocument, live_inputs: bool = False) -> List[StepError]:
     """
     Validate a full pipeline document.
     Returns a list of StepError objects (empty list = valid).
@@ -73,7 +73,7 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
                     ))
 
         # Validate parameters
-        param_errors = _validate_params(i, step_inst, defn)
+        param_errors = _validate_params(i, step_inst, defn, live_inputs=live_inputs)
         errors.extend(param_errors)
 
     has_fit = any(s.enabled and s.step_def_id == "fit_curve" for s in doc.steps)
@@ -91,10 +91,12 @@ def validate_pipeline(doc: PipelineDocument) -> List[StepError]:
     return errors
 
 
-def _validate_params(step_index: int, inst: StepInstance, defn) -> List[StepError]:
+def _validate_params(step_index: int, inst: StepInstance, defn, live_inputs: bool = False) -> List[StepError]:
     """Validate parameter values against the step definition's schema."""
     errors = []
     for ps in defn.params:
+        if live_inputs and inst.step_def_id == "load_image" and ps.name in ("source", "file_order"):
+            continue
         value = inst.param_values.get(ps.name)
 
         # Required check

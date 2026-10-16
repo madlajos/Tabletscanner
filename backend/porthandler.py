@@ -3,8 +3,10 @@ import serial.tools.list_ports
 import logging
 import time
 import threading
+import re
 import globals
 from virtual_octopus import VirtualOctopusSerial
+from door_interlock import DoorInterlockState
 
 log = logging.getLogger(__name__)
 
@@ -12,7 +14,8 @@ log = logging.getLogger(__name__)
 motion_platform = None
 motion_platform_waiting_for_done = False
 motion_lock = threading.RLock()
-EXPECTED_FIRMWARE_MARKER = "TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME"
+EXPECTED_FIRMWARE_MARKER = "TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME-DOORS1"
+door_interlock = DoorInterlockState()
 
 def connect_to_serial_device(device_name, identification_command, expected_response, vid, pid):
     ports = list(serial.tools.list_ports.comports())
@@ -36,36 +39,11 @@ def connect_to_serial_device(device_name, identification_command, expected_respo
             time.sleep(0.2)  # tiny settle (STM32 CDC can spew right after open)
 
             if identification_command:
-                try:
-                    ser.reset_input_buffer()
-                    ser.reset_output_buffer()
-                except Exception:
-                    pass
-
-                # Send M115 and read with a tiny deadline; don't hang on readline()
-                ser.write((identification_command + '\n').encode('ascii', 'ignore'))
-                ser.flush()
-
-                ok = False
-                deadline = time.monotonic() + 1.0  # ~1s total
-                buf_lines = []
-                while time.monotonic() < deadline:
-                    iw = 0
-                    try:
-                        iw = ser.in_waiting
-                    except Exception:
-                        iw = 0
-                    if iw:
-                        line = ser.readline().decode(errors='ignore').strip()
-                        if line:
-                            buf_lines.append(line)
-                            if expected_response.lower() in line.lower():
-                                ok = True
-                                break
-                    else:
-                        time.sleep(0.02)
-
-                logging.info(f"Received response from {port_info.device}: {buf_lines!r}")
+                acknowledged, reply = write_and_wait(ser, identification_command, timeout=1.0)
+                identity = reply.decode('ascii', errors='ignore')
+                ok = acknowledged and re.search(
+                    rf'(?<![\w-]){re.escape(expected_response)}(?![\w-])', identity
+                )
                 if not ok:
                     logging.warning(f"Unexpected M115 reply on {port_info.device}, expected '{expected_response}'.")
                     ser.close()
@@ -76,17 +54,8 @@ def connect_to_serial_device(device_name, identification_command, expected_respo
                 ser.timeout = 0.2
                 ser.write_timeout = 0.5
                 # Optional: ser.inter_byte_timeout = 0.1
-                ser.reset_input_buffer()
                 ser.reset_output_buffer()
-                ser.write(b"M155 S0\n")  # stop auto temperature spam that corrupts reads
-                ser.flush()
-                time.sleep(0.1)
-                # drain immediate reply without blocking
-                while True:
-                    iw = getattr(ser, "in_waiting", 0) or 0
-                    if not iw:
-                        break
-                    _ = ser.read(iw)
+                write_and_wait(ser, 'M155 S0', timeout=0.5)
             except Exception as e:
                 logging.warning(f"Post-connect init failed (continuing): {e}")
 
@@ -117,6 +86,7 @@ def connect_to_motion_platform(use_virtual=False):
 
     if use_virtual:
         virtual_platform = VirtualOctopusSerial()
+        refresh_door_status(virtual_platform)
         with motion_lock:
             globals.motion_platform = virtual_platform
             motion_platform = virtual_platform
@@ -151,6 +121,17 @@ def connect_to_motion_platform(use_virtual=False):
             finally:
                 globals.motion_platform = None
                 motion_platform = None
+            return None
+        try:
+            doors_known = refresh_door_status(ser)['known']
+        except Exception:
+            log.exception('Initial door status query failed')
+            doors_known = False
+        if not doors_known:
+            logging.error('Refusing motion connection: firmware door status is unavailable.')
+            ser.close()
+            globals.motion_platform = None
+            motion_platform = None
             return None
         # Publish the port only after every physical output acknowledged OFF.
         globals.motion_platform = ser
@@ -203,15 +184,9 @@ def drain_serial_buffer(ser, timeout=0.15):
     Drain (discard) all pending bytes from the serial input buffer.
     Returns the drained bytes for diagnostic purposes.
     """
-    drained = bytearray()
-    try:
-        if hasattr(ser, "reset_input_buffer"):
-            # Read what's there first, then reset
-            iw = getattr(ser, "in_waiting", 0) or 0
-            if iw:
-                drained += ser.read(iw)
-            ser.reset_input_buffer()
-        else:
+    with motion_lock:
+        drained = bytearray()
+        try:
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 iw = getattr(ser, "in_waiting", 0) or 0
@@ -220,14 +195,15 @@ def drain_serial_buffer(ser, timeout=0.15):
                 chunk = ser.read(min(iw, 512))
                 if chunk:
                     drained += chunk
-    except Exception as e:
-        logging.debug(f"drain_serial_buffer error (ignored): {e}")
-    return bytes(drained)
+                    door_interlock.feed(ser, chunk)
+        except Exception as e:
+            logging.debug(f"drain_serial_buffer error (ignored): {e}")
+        return bytes(drained)
 
 
-def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
+def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=(), drain=True):
     """
-    Send a G-code command to the BTT SKR Mini E3 board and wait for the
+    Send a G-code command to the BTT Octopus board and wait for the
     expected response (default: 'ok').
 
     This is the **safe** way to send commands: it acquires the motion_lock,
@@ -255,9 +231,13 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
     expect_lower = expect.lower()
     failure_markers_lower = tuple(marker.lower() for marker in failure_markers)
 
+    # The checkpoint raises to its owning phase; it never waits with this lock.
+    from measurement_safety import before_serial_command
+    before_serial_command(command)
     with motion_lock:
         # 1. Drain any stale data so we don't confuse old replies with new ones
-        drain_serial_buffer(ser, timeout=0.1)
+        if drain:
+            drain_serial_buffer(ser, timeout=0.1)
 
         # 2. Send the command
         ser.write(cmd_bytes)
@@ -273,6 +253,7 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
                 chunk = ser.read(min(iw, 512))
                 if chunk:
                     buf += chunk
+                    door_interlock.feed(ser, chunk)
                     reply_lower = buf.lower()
                     if any(marker in reply_lower for marker in failure_markers_lower):
                         logging.warning(
@@ -281,13 +262,49 @@ def write_and_wait(ser, command, timeout=5.0, expect=b"ok", failure_markers=()):
                             bytes(buf[:256]),
                         )
                         return False, bytes(buf)
-                    if expect_lower in reply_lower:
-                        return True, bytes(buf)
+                    # Consume a complete acknowledgement line, including door
+                    # rejection/status text that precedes it.
+                    complete_lines = reply_lower.split(b'\n')[:-1]
+                    completed = (
+                        any(re.fullmatch(rb'ok(?:\s[^\r\n]*)?\r?', line) for line in complete_lines)
+                        if expect_lower == b'ok'
+                        else any(expect_lower in line + b'\n' for line in complete_lines)
+                    )
+                    if completed:
+                        return b'ts_door_open' not in reply_lower, bytes(buf)
             else:
                 time.sleep(0.01)
 
     logging.debug(f"write_and_wait timeout for '{command.strip()}': got {buf[:128]!r}")
     return False, bytes(buf)
+
+
+def refresh_door_status(ser, timeout=0.5):
+    """Request authoritative state; a missing report invalidates cached safety state."""
+    with motion_lock:
+        # Drain first so a stale unsolicited report cannot satisfy this query.
+        drain_serial_buffer(ser)
+        before = door_interlock.revision()
+        try:
+            acknowledged, _ = write_and_wait(ser, 'M119', timeout=timeout, drain=False)
+        except Exception:
+            door_interlock.invalidate(ser)
+            raise
+        if not acknowledged or door_interlock.revision() == before:
+            door_interlock.invalidate(ser)
+        return door_interlock.snapshot(ser)
+
+
+def poll_door_interlock():
+    """Background polling never queues behind or interleaves with a motion owner."""
+    if not motion_lock.acquire(blocking=False):
+        return
+    try:
+        ser = motion_platform or globals.motion_platform
+        if ser and getattr(ser, 'is_open', False) and not globals.motion_busy:
+            refresh_door_status(ser, timeout=0.2)
+    finally:
+        motion_lock.release()
 
 
 def probe_motion_controller(ser, timeout=0.3):
@@ -302,7 +319,6 @@ def probe_motion_controller(ser, timeout=0.3):
         ser,
         'M105',
         timeout=timeout,
-        expect=b'\n',
     )
     return completed and b'ok' in reply.lower(), reply
 

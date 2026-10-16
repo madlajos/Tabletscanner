@@ -5,10 +5,37 @@ import unittest
 
 from PIL import Image
 
-from image_metadata import build_capture_metadata, serialize_capture_metadata, tray_position_label
+from image_metadata import build_capture_metadata, canonical_channel_name, serialize_capture_metadata, tray_position_label
 
 
 class CaptureMetadataTests(unittest.TestCase):
+    def test_rgb_channel_uses_configured_filter_name_and_survives_exif(self):
+        for name, expected in [('Piros', 'red'), ('Zöld', 'green'), ('Kék', 'blue'),
+                               (' BLUE ', 'blue'), ('ZÖLD', 'green'), ('255 nm', None)]:
+            with self.subTest(name=name):
+                metadata = build_capture_metadata(
+                    settings={'filter_settings': {
+                        'slots': ['arbitrary-id'],
+                        'filters': [{'id': 'arbitrary-id', 'name': name}],
+                    }}, position={}, wavelength='uv255', filter_position=1,
+                    camera_values={}, requested_metadata={'channel': 'red'},
+                )
+                self.assertEqual(expected, metadata['channel'])
+                exif = Image.Exif()
+                exif[0x010E] = serialize_capture_metadata(metadata)
+                with tempfile.TemporaryDirectory() as folder:
+                    path = os.path.join(folder, 'channel.jpg')
+                    Image.new('RGB', (2, 2)).save(path, exif=exif)
+                    with Image.open(path) as saved:
+                        self.assertEqual(expected, json.loads(saved.getexif()[0x010E])['channel'])
+
+    def test_unassigned_or_unrecognized_filters_do_not_invent_rgb_channels(self):
+        for value in [None, 4, '450-500', 'Piros UV', '']:
+            self.assertIsNone(canonical_channel_name(value))
+        metadata = build_capture_metadata(settings={}, position={}, wavelength='vis',
+            filter_position=1, camera_values={}, requested_metadata={'channel': 'red'})
+        self.assertIsNone(metadata['channel'])
+
     def test_hungarian_metadata_round_trips_through_jpeg_exif(self):
         metadata = {'filter_name': 'Kék áteresztő szűrő'}
         exif = Image.Exif()

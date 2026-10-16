@@ -1,0 +1,76 @@
+<section class="applier" aria-label="Recept alkalmazás">
+  <header class="session-bar">
+    <div class="session-title"><strong>{{ session?.measurement_name || 'Recept alkalmazás' }}</strong><span>{{ session?.recipe_name || 'Válasszon képelemző receptet a Szkenner lapon, majd indítsa el az automata mérést.' }}</span></div>
+    @if (session) { <span class="session-status" role="status">{{ statusLabel(session.state) }} · {{ completedCount }} eredmény · {{ pendingCount }} várakozó</span> }
+  </header>
+  <div class="work-area">
+    <main class="results-area">
+      <div class="preview-area">
+        <app-pipeline-preview />
+        @if (!session || !selectedResultId) {
+          <div class="waiting-message" role="status">
+            <strong>{{ session ? 'Várakozás a teljes tablettaképsorozatra' : 'Még nincs elemzési eredmény' }}</strong>
+            <p>Az elemzés a felvételek elkészülte és a következő pozícióra mozgás után indul.</p>
+            @if ((session?.input_scope || analysis.inputScope) === 'cumulative' && analysis.mode === 'measurement_end') { <p>Az összesítő számítás a mérés végén indul.</p> }
+          </div>
+        }
+        @if (errors.length) {
+          <div class="analysis-notifications" aria-label="Elemzési hibák" aria-live="polite">
+            @for (error of errors; track error.id) {
+              <div class="analysis-error" role="alert">
+                <div><strong>Elemzési hiba <span>{{ error.code }}</span></strong><p>{{ error.error }}</p><small>A képrögzítés folytatódik.</small></div>
+                <button type="button" (click)="analysis.dismissError(error.id)" aria-label="Elemzési hiba bezárása">×</button>
+              </div>
+            }
+          </div>
+        }
+      </div>
+      <section class="gallery" aria-label="Elemzett tabletták">
+        <header><strong>Tabletták és eredmények</strong><label><input type="checkbox" [ngModel]="analysis.followLatest" (ngModelChange)="analysis.setFollowLatest($event)" />Legújabb eredmény követése</label></header>
+        <div class="gallery-items">
+          @for (tablet of session?.tablets || []; track tablet.tablet_id) {
+            <button type="button" class="gallery-card" [class.selected]="isTabletSelected(tablet)" [class.failed]="tablet.status === 'failed'"
+              [disabled]="!tablet.result_id" [attr.aria-pressed]="isTabletSelected(tablet)" (click)="selectTablet(tablet)">
+              @if (thumbnail(tablet.result_id, tabletImageIndex(tablet)); as image) { <img [src]="image" [alt]="tablet.label + ' elemzési eredménye'" /> }
+              @else { <span class="result-symbol" aria-hidden="true">{{ tablet.status === 'failed' ? '!' : '▤' }}</span> }
+              <strong>{{ tablet.label }}</strong><span>{{ tablet.image_count }} kép · {{ statusLabel(tablet.status) }}</span>
+            </button>
+          }
+          @for (result of cumulativeResults; track result.result_id) {
+            <button type="button" class="gallery-card cumulative" [class.selected]="result.result_id === selectedResultId" [class.failed]="result.status === 'failed'"
+              [attr.aria-pressed]="result.result_id === selectedResultId" (click)="analysis.selectResult(result.result_id)">
+              @if (thumbnail(result.result_id); as image) { <img [src]="image" [alt]="result.label" /> }
+              @else { <span class="result-symbol" aria-hidden="true">Σ</span> }
+              <strong>{{ result.label }}</strong><span>{{ result.input_count }} bemenet · {{ statusLabel(result.status) }}</span>
+            </button>
+          }
+          @if (!session?.tablets?.length) { <p class="gallery-empty">Az elkészült tabletták itt jelennek meg.</p> }
+        </div>
+      </section>
+    </main>
+    <aside class="details" aria-label="Részletek">
+      <h2>Részletek</h2>
+      <section class="detail-block">
+        <label class="scope-label" for="inline-input-scope">Elemzés bemenete</label>
+        <select id="inline-input-scope" [ngModel]="session?.input_scope || analysis.inputScope || 'tablet'" (ngModelChange)="setInputScope($event)">
+          <option value="tablet">Egy tabletta teljes képsorozata</option><option value="cumulative">Összes tabletta együtt</option>
+        </select>
+        <label class="mode-toggle"><input type="checkbox" role="switch" [ngModel]="analysis.mode === 'measurement_end'" (ngModelChange)="setMode($event)" />Összesítés csak a mérés végén</label>
+        <p>{{ analysis.mode === 'measurement_end' ? 'Az összesítő recept egyszer, a mérés lezárásakor számítódik.' : 'Az összesítő recept minden új tabletta után újraszámítódik.' }}</p>
+        <p class="live-input-note">Élő képbemenet: a metaadatok alapján, tablettánként és hullámhosszonként. RGB sorrend: 1 = Piros, 2 = Zöld, 3 = Kék.</p>
+      </section>
+      @if (session) {
+        <section class="detail-block">
+          <app-inline-output-settings [definition]="lastDefinition" [step]="lastStep" (parameterChange)="updateParameter($event)" />
+          <button type="button" class="rerun-button" (click)="analysis.configure({ pipeline: pipelineState.getPipeline() })" [disabled]="!session.tablets.length">Újraszámítás</button>
+        </section>
+      }
+      @if (resultEntries.length) {
+        <section class="detail-block result-data">
+          <h3>Kimeneti adatok</h3><button type="button" (click)="downloadData()">Adatok letöltése</button>
+          @for (entry of resultEntries; track entry.key) { <details><summary>{{ entry.key }}</summary><pre>{{ entry.text }}</pre></details> }
+        </section>
+      }
+    </aside>
+  </div>
+</section>

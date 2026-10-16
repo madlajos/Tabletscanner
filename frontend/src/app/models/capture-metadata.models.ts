@@ -1,6 +1,7 @@
 export interface CaptureMetadata {
   wavelength?: string | null;
   filter_name?: string | null;
+  channel?: 'red' | 'green' | 'blue' | null;
   filter_position?: number | null;
   filter_wavelength?: string | null;
   tray_position?: string | null;

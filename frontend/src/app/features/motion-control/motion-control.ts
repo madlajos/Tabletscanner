@@ -4,11 +4,13 @@ import { interval, Subscription, of } from 'rxjs';
 import { switchMap, catchError, timeout, finalize } from 'rxjs/operators';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { ErrorNotificationService } from '../../services/error-notification.service';
 import { SharedService } from '../../shared.service';
 import { firstValueFrom } from 'rxjs';
 import { BASE_URL } from '../../api-config';
-import { LightChannel, LightStatus } from '../../models/light.models';
+import { LightChannel, LightStatus, doorsAllowUv, UNKNOWN_DOOR_INTERLOCK } from '../../models/light.models';
+import { LightStatusService } from '../../services/light-status.service';
 import {
   FilterDefinition,
   HeightOffsetApplication,
@@ -29,7 +31,7 @@ import { SettingsUpdatesService } from '../../services/settings-updates.service'
   selector: 'app-motion-control',
   // Important for Angular 15+ when using `imports` here:
   standalone: true,
-  imports: [CommonModule, FormsModule, FilterRevolverComponent, FocusAnchorComponent, FilterCaptureButtonsComponent],
+  imports: [CommonModule, FormsModule, MatTooltipModule, FilterRevolverComponent, FocusAnchorComponent, FilterCaptureButtonsComponent],
   templateUrl: './motion-control.html',
   styleUrls: ['./motion-control.scss'], // fixed key (plural)
 })
@@ -82,6 +84,7 @@ export class MotionControl implements OnInit, OnDestroy {
 
   lightBusy = false;
   lightStatus: LightStatus = {
+    door_interlock: UNKNOWN_DOOR_INTERLOCK,
     active_channel: null,
     active_mode: null,
     channels: { uv255: false, uv310: false, uv365: false, vis: false },
@@ -134,7 +137,8 @@ export class MotionControl implements OnInit, OnDestroy {
     private filterSettingsService: FilterSettingsService,
     private motionSettingsService: MotionSettingsService,
     private filterRevolverService: FilterRevolverService,
-    private settingsUpdatesService: SettingsUpdatesService
+    private settingsUpdatesService: SettingsUpdatesService,
+    private lightStatusService: LightStatusService
   ) { }
 
   ngOnInit(): void {
@@ -402,13 +406,36 @@ export class MotionControl implements OnInit, OnDestroy {
   }
 
   startFourChannelLightPolling(): void {
-    this.syncFourChannelLightStatus();
-    this.fourChannelLightPolling = interval(1000).subscribe(() => this.syncFourChannelLightStatus());
+    this.fourChannelLightPolling = this.lightStatusService.status$.subscribe(status => {
+      if (this.lightBusy) {
+        this.lightStatus = { ...this.lightStatus, door_interlock: status.door_interlock };
+        return;
+      }
+      this.lightStatus = status;
+      if (!this.isAutofocusing && status.height_offset_reference) {
+        this.autofocusDone = status.height_offset_reference.available
+          && status.height_offset_reference.source === 'autofocus';
+      }
+      this.applyHeightOffsetPosition(status.height_offset);
+    });
+  }
+
+  get uvBlocked(): boolean {
+    return !doorsAllowUv(this.lightStatus.door_interlock);
+  }
+
+  lampDoorTooltip(channel: LightChannel): string {
+    if (!this.isConnected || channel === 'vis' || !this.uvBlocked || this.isLampActive(channel)) return '';
+    const doors = this.lightStatus.door_interlock;
+    if (!doors?.known) return 'Az ajtóállapot ismeretlen. Az UV bekapcsolása előtt ellenőrizze, hogy az ajtó és a fedél zárva van.';
+    if (doors.front_open && doors.top_open) return 'Az ajtó és a fedél nyitva van. Az UV bekapcsolásához zárja be mindkettőt.';
+    if (doors.front_open) return 'Az ajtó nyitva van. Az UV bekapcsolásához zárja be az ajtót.';
+    return 'A fedél nyitva van. Az UV bekapcsolásához zárja be a fedelet.';
   }
 
   private syncFourChannelLightStatus(): void {
     if (!this.isConnected || this.lightBusy) return;
-    this.http.get<LightStatus>(`${BASE_URL}/lights/status`).subscribe({
+    this.lightStatusService.getStatus().subscribe({
       next: status => {
         this.lightStatus = status;
         if (!this.isAutofocusing && status.height_offset_reference) {
@@ -587,8 +614,9 @@ export class MotionControl implements OnInit, OnDestroy {
 
   private toggleFourChannelLight(channel: LightChannel, mode?: 'dimmed' | 'full', forceOn = false): void {
     if (this.lightBusy || this.controlsDisabled) return;
-    this.lightBusy = true;
     const activating = !this.isLampActive(channel) || forceOn;
+    if (activating && channel !== 'vis' && this.uvBlocked) return;
+    this.lightBusy = true;
     if (activating && channel === 'vis') {
       this.filterStatusGeneration++;
       this.filterRevolverBusy = true;

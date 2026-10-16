@@ -1,0 +1,32 @@
+:host { display: block; height: 100%; min-height: 0; color: #dae3ef; }
+.applier { display: flex; flex-direction: column; height: 100%; min-height: 0; background: #171c23; }
+.session-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #344151; }
+.session-title { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px; }
+.session-title strong { font-size: 16px; }.session-title span, .session-status { color: #a6b6c8; font-size: 12px; }
+.work-area { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(245px, 310px); min-height: 0; }
+.results-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.preview-area { flex: 1; min-height: 0; position: relative; }
+app-pipeline-preview { display: block; width: 100%; height: 100%; }
+.waiting-message { position: absolute; inset: 48px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #1e1e1e; padding: 24px; text-align: center; pointer-events: none; }
+.waiting-message p { max-width: 480px; font-size: 13px; line-height: 1.6; color: #a6b6c8; }
+.gallery { border-top: 1px solid #344151; padding: 10px 12px; }
+.gallery header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 9px; font-size: 12px; }
+.gallery header label { display: flex; align-items: center; gap: 6px; color: #acbacb; }
+.gallery-items { display: flex; gap: 10px; overflow-x: auto; padding: 3px 2px 8px; min-height: 118px; }
+.gallery-card { display: flex; flex-direction: column; gap: 5px; align-items: center; width: 148px; min-width: 148px; padding: 7px; border: 1px solid #405064; background: #222c38; border-radius: 7px; cursor: pointer; color: #dae3ef; }
+.gallery-card.selected { border: 2px solid #73b9ff; padding: 6px; background: #253c55; }.gallery-card.failed { border-color: #e17580; }.gallery-card:disabled { cursor: default; opacity: .7; }
+.gallery-card img, .result-symbol { width: 128px; height: 70px; object-fit: contain; }.result-symbol { display: grid; place-content: center; font-size: 30px; color: #80a5cd; }
+.gallery-card strong { font-size: 12px; }.gallery-card span:not(.result-symbol) { font-size: 10px; line-height: 1.4; }.gallery-empty { margin: auto; font-size: 12px; color: #a1afc0; }
+.details { overflow-y: auto; min-width: 0; border-left: 1px solid #344151; background: #20262f; }.details h2 { font-size: 14px; margin: 0; padding: 14px; border-bottom: 1px solid #344151; }
+.detail-block { padding: 14px; border-bottom: 1px solid #344151; font-size: 12px; }.scope-label { display: block; margin-bottom: 7px; }
+.detail-block > select { width: 100%; min-width: 0; color: #dae3ef; background: #171c23; padding: 8px; border: 1px solid #485767; border-radius: 5px; }
+.mode-toggle { display: flex; align-items: flex-start; gap: 8px; margin-top: 15px; line-height: 1.5; }input { accent-color: #70b7ff; }
+.detail-block p { color: #a1afc0; font-size: 11px; line-height: 1.5; }.live-input-note { border-left: 2px solid #5489b8; padding-left: 9px; margin-top: 15px; }
+.detail-block button { color: #deedff; border: 1px solid #4a719b; background: #294868; border-radius: 5px; padding: 7px 10px; cursor: pointer; }.detail-block button:disabled { opacity: .5; cursor: default; }
+.result-data h3 { font-size: 13px; margin-top: 0; }.result-data details { margin-top: 12px; overflow-wrap: anywhere; }.result-data summary { cursor: pointer; color: #afceef; }.result-data pre { white-space: pre-wrap; font-size: 10px; max-height: 320px; overflow: auto; }
+.analysis-notifications { position: absolute; top: 56px; right: 16px; z-index: 20; width: min(430px, calc(100% - 32px)); max-height: 65%; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.analysis-error { display: flex; gap: 12px; justify-content: space-between; border: 1px solid #c75b69; border-radius: 7px; padding: 13px; background: #44252e; }
+.analysis-error strong { font-size: 13px; }.analysis-error strong span { font-size: 10px; color: #e9afb6; }.analysis-error p { font-size: 12px; line-height: 1.5; margin: 7px 0; }.analysis-error small { color: #e4b9c0; }
+.analysis-error button { align-self: flex-start; background: none; border: 0; color: #f6dce2; cursor: pointer; font-size: 23px; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid #7dbbff; outline-offset: 2px; }
+@media (max-width: 900px) { .work-area { grid-template-columns: minmax(0, 1fr) 245px; } }

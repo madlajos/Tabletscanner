@@ -160,9 +160,14 @@
 
   <h3 class="control-subsection-title" id="lamp-control-title">Lámpavezérlés</h3>
   <div class="lamp-buttons" aria-labelledby="lamp-control-title">
-    <button *ngFor="let lamp of lampButtons" class="lamp-button" [class.active]="isLampActive(lamp.channel)"
+    <span *ngFor="let lamp of lampButtons" class="lamp-button-wrapper"
+      [matTooltip]="lampDoorTooltip(lamp.channel)"
+      matTooltipClass="lamp-door-tooltip"
+      [attr.tabindex]="lampDoorTooltip(lamp.channel) ? 0 : null"
+      [attr.aria-label]="lampDoorTooltip(lamp.channel) ? lamp.label + ' UV lámpa' : null">
+    <button class="lamp-button" [class.active]="isLampActive(lamp.channel)"
       (click)="onLampClick(lamp.channel)" (dblclick)="onLampDoubleClick(lamp.channel)"
-      [disabled]="!isConnected || measurementActive || isAutofocusing"
+      [disabled]="!isConnected || measurementActive || isAutofocusing || (lamp.channel !== 'vis' && uvBlocked && !isLampActive(lamp.channel))"
       [attr.aria-label]="lamp.label + ' lámpa'">
       <img [src]="lampAsset(lamp)" [alt]="lamp.label" class="lamp-icon" />
       <span class="brightness-indicator" aria-hidden="true"
@@ -173,6 +178,7 @@
         <span class="brightness-segment lower"></span>
       </span>
     </button>
+    </span>
   </div>
 
   <section class="filter-revolver-control" aria-labelledby="filter-revolver-control-title">

@@ -16,10 +16,20 @@
   <button
     class="nav-tab"
     [class.active]="activeSection === 'applier'"
+    [class.analysis-error]="(inlineAnalysis.unreadErrors$ | async)! > 0"
+    [attr.aria-label]="(inlineAnalysis.unreadErrors$ | async)! > 0 ? 'Recept alkalmazás – új elemzési hiba' : 'Recept alkalmazás'"
     (click)="switchSection('applier')"
   >
     Recept alkalmazás
+    @if ((inlineAnalysis.unreadErrors$ | async)! > 0) {
+      <span class="analysis-notification" aria-hidden="true">!</span>
+    }
   </button>
+  <ng-container *ngIf="sharedService.motionPlatformConnectionStatus$ | async">
+    <app-door-interlock-status *ngIf="lightStatus.status$ | async as status"
+      class="nav-door-status"
+      [doors]="status.door_interlock || unknownDoors"></app-door-interlock-status>
+  </ng-container>
 </nav>
 
 <!-- Keep the scanner workspace mounted while recipe tabs are open. Automatic

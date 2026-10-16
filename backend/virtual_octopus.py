@@ -34,6 +34,8 @@ class VirtualOctopusSerial:
             # travel seam. The backend periodically normalizes its coordinate.
             'A': (float('-inf'), float('inf')),
         }
+        self._doors = {'front': False, 'top': False}
+        self._door_trips = 0
         self._light_pwm = {}
         self.command_history = []
 
@@ -87,15 +89,34 @@ class VirtualOctopusSerial:
         with self._lock:
             self.is_open = True
 
+    def set_door_open(self, door, opened):
+        """Simulate either physical Hall sensor and the autonomous UV cutoff."""
+        with self._lock:
+            if door not in self._doors:
+                raise ValueError('Unknown door')
+            if opened and not self._doors[door]:
+                self._door_trips = (self._door_trips + 1) & 0xffffffff
+            self._doors[door] = bool(opened)
+            if opened:
+                for selector in (1, 2, 3):
+                    self._light_pwm[selector] = 0
+            self._input.extend(self._door_report())
+
+    def _door_report(self):
+        return (f"TS_DOORS FRONT:{int(self._doors['front'])} TOP:{int(self._doors['top'])} "
+                f"UV_BLOCKED:{int(any(self._doors.values()))} TRIP:{self._door_trips}\n").encode('ascii')
+
     def _execute(self, command):
         upper = command.upper()
         code = upper.split(maxsplit=1)[0]
 
         if code == 'M115':
             return (
-                b'FIRMWARE_NAME:Marlin TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME '
+                b'FIRMWARE_NAME:Marlin TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME-DOORS1 '
                 b'MACHINE_TYPE:Tablet Scanner BTT Octopus V1.1\nok\n'
             )
+        if code == 'M119':
+            return self._door_report() + b'ok\n'
         if code == 'M105':
             return b'ok T:25.00 /0.00 @:0\n'
         if code == 'M114':
@@ -129,6 +150,8 @@ class VirtualOctopusSerial:
             if selector and pwm:
                 selector_number = int(selector.group(1))
                 pwm_value = max(0, min(255, int(pwm.group(1))))
+                if pwm_value and selector_number in (1, 2, 3) and any(self._doors.values()):
+                    return b'Error:TS_DOOR_OPEN\n' + self._door_report() + b'ok\n'
                 if pwm_value:
                     for output in range(4):
                         self._light_pwm[output] = 0

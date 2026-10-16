@@ -17,6 +17,7 @@ from pipeline_types import (
 )
 from pipeline_steps import STEP_DEFINITIONS, STEP_EXECUTORS
 from pipeline_validators import validate_pipeline
+from pipeline_live_inputs import classify_inline_input_scope
 
 import logging
 logger = logging.getLogger(__name__)
@@ -27,6 +28,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PROC_ELEMENT_MESSAGES: dict[str, str] = {
+    "E2180": "Az élő recept még nem kapott teljes tablettafelvételt.",
+    "E2181": "Az RGB bemenethez minden képhez egyértelmű tabletta-, hullámhossz- és csatornaadat szükséges.",
+    "E2182": "Hiányos RGB felvétel: azonos tablettához és hullámhosszhoz Piros, Zöld és Kék kép szükséges.",
+    "E2183": "Nem egyértelmű RGB felvétel: egy tablettához és hullámhosszhoz több azonos csatornájú kép tartozik.",
+    "E2184": "Az egyik élő felvétel fájlja nem található vagy nem olvasható; a hiányos képsor nem elemezhető.",
     # geometric image alignment
     "E4101": "Nincs illeszthető bemeneti kép.",
     "E4102": "Nincs kiválasztott vagy elérhető referencia-képág.",
@@ -699,11 +705,15 @@ def extract_side_outputs(data: Optional[dict], preview_image_index: int = -1) ->
     side["image_count"] = len(images)
 
     # Loaded file paths (basenames for UI) — prefer originals for single-image mode
-    paths = data.get("_original_paths", data.get("paths", []))
+    paths = (data.get("paths", []) if data.get("_inline_capture_input")
+             else data.get("_original_paths", data.get("paths", [])))
     if paths:
         import os
         side["loaded_paths"] = [os.path.basename(p) for p in paths]
         side["loaded_full_paths"] = paths
+
+    if data.get("_inline_capture_input"):
+        side["image_metadata"] = _serialize_value(data.get("image_metadata", []))
 
     # History
     history = data.get("history", [])
@@ -745,7 +755,8 @@ def _encode_preview_image_from_data(data: Optional[dict], requested_index: int =
     if not success:
         return None
 
-    paths = data.get("_original_paths", data.get("paths", [])) or []
+    paths = ((data.get("paths", []) if data.get("_inline_capture_input")
+              else data.get("_original_paths", data.get("paths", []))) or [])
     source_name = ""
     if paths:
         source_idx = max(0, min(requested_index, len(paths) - 1))
@@ -889,6 +900,7 @@ def _build_branch_merge_preview(
     single_image_index: int,
     omitted_indices: Optional[list],
     thumbnail_max_dim: int,
+    live_inputs: Optional[list[dict]] = None,
 ) -> dict:
     requested_index = max(0, single_image_index if single_image_index >= 0 else 0)
     current_start = _find_branch_start(doc.steps, merge_step_index)
@@ -939,6 +951,7 @@ def _build_branch_merge_preview(
             single_image_index=single_image_index,
             omitted_indices=omitted_indices,
             thumbnail_max_dim=thumbnail_max_dim,
+            live_inputs=live_inputs,
         )
         if source_result.success:
             if isinstance(source_result.data, dict):
@@ -951,6 +964,7 @@ def _build_branch_merge_preview(
                         single_image_index=0,
                         omitted_indices=omitted_indices,
                         thumbnail_max_dim=thumbnail_max_dim,
+                        live_inputs=live_inputs,
                     )
                 first_images = first_result.data.get("images") if first_result.success and isinstance(first_result.data, dict) else None
                 branch_start_id = doc.steps[source_start].instance_id
@@ -990,6 +1004,7 @@ def _build_branch_merge_preview(
             single_image_index=0,
             omitted_indices=omitted_indices,
             thumbnail_max_dim=thumbnail_max_dim,
+            live_inputs=live_inputs,
         )
         if current_first_result.success:
             current_first_data = current_first_result.data
@@ -1046,6 +1061,7 @@ def execute_pipeline(
     single_image_index: int = -1,
     omitted_indices: list = None,
     thumbnail_max_dim: int = 0,
+    live_inputs: Optional[list[dict]] = None,
 ) -> PipelineResult:
     """
     Execute pipeline steps 0..up_to_step (inclusive).
@@ -1058,6 +1074,9 @@ def execute_pipeline(
     If *thumbnail_max_dim* > 0, images are down-scaled after the
     ``load_image`` step so that subsequent processing is much faster.
     Intended for montage / thumbnail preview, not analytical accuracy.
+
+    When *live_inputs* is provided, every enabled load-image node consumes
+    those explicit capture records. Saved paths and order are left intact.
     """
     if up_to_step < 0 or up_to_step >= len(doc.steps):
         up_to_step = len(doc.steps) - 1
@@ -1066,7 +1085,7 @@ def execute_pipeline(
     # Keep the original document for cross-branch execution dependencies.
     from dataclasses import replace
     validation_doc = replace(doc, steps=doc.steps[:up_to_step + 1])
-    validation_errors = validate_pipeline(validation_doc)
+    validation_errors = validate_pipeline(validation_doc, live_inputs=live_inputs is not None)
     if validation_errors:
         return PipelineResult(success=False, errors=validation_errors)
 
@@ -1074,7 +1093,8 @@ def execute_pipeline(
     # A reference sequence is a collection-level view: loading only the
     # currently selected image would hide references located on other images.
     sequence_preview_all_images = (
-        doc.steps[up_to_step].step_def_id == "reference_sequence"
+        live_inputs is not None
+        or doc.steps[up_to_step].step_def_id == "reference_sequence"
         or any(
             step.enabled and step.step_def_id == 'calculate_intensity_stats'
             and step.param_values.get('display_mode', 'per_image') in ('pooled', 'grouped')
@@ -1137,6 +1157,9 @@ def execute_pipeline(
         params["_step_index"] = i
         params["_step_def_id"] = step_inst.step_def_id
 
+        if step_inst.step_def_id == "load_image" and live_inputs is not None:
+            params["_live_inputs"] = live_inputs
+
         # Pass single_image_index hint to load_image executor
         if (step_inst.step_def_id == "load_image"
                 and single_image_index >= 0
@@ -1155,7 +1178,13 @@ def execute_pipeline(
                 single_image_index,
                 omitted_indices,
                 thumbnail_max_dim,
+                live_inputs,
             )
+            if live_inputs is not None and branch_merge_preview.get("branch_errors"):
+                errors = [StepError(**error)
+                          for branch in branch_merge_preview["branch_errors"]
+                          for error in branch["errors"]]
+                return PipelineResult(success=False, errors=errors, executed_up_to=i, data=data)
             params["_branch_merge_inputs"] = branch_merge_preview.pop("_merge_input_data", [])
             params["_branch_reference_sources"] = branch_merge_preview.pop("_branch_reference_sources", [])
             merge_primary_data = branch_merge_preview.pop("_merge_primary_data", None)
@@ -1186,6 +1215,7 @@ def execute_pipeline(
                     single_image_index=single_image_index,
                     omitted_indices=omitted_indices,
                     thumbnail_max_dim=thumbnail_max_dim,
+                    live_inputs=live_inputs,
                 )
                 if reference_result.success and isinstance(reference_result.data, dict):
                     params["_alignment_reference_images"] = reference_result.data.get("images") or []
@@ -1218,6 +1248,7 @@ def execute_pipeline(
                             single_image_index=-1,
                             omitted_indices=None,
                             thumbnail_max_dim=thumbnail_max_dim,
+                            live_inputs=live_inputs,
                         )
                         source_results = source_result.data.get("results") if source_result.success and isinstance(source_result.data, dict) else None
                         crop_rows = source_results.get("reference_crops") if isinstance(source_results, dict) else None
@@ -1262,6 +1293,8 @@ def execute_pipeline(
             message = PROC_ELEMENT_MESSAGES.get(
                 error_code, f"Feldolgozási hiba: {error_code}"
             )
+            if data.get("error_detail"):
+                message += " " + str(data["error_detail"])
             return PipelineResult(
                 success=False,
                 errors=[StepError(

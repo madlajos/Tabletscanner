@@ -15,7 +15,7 @@ import { RecipeBrowserComponent } from '../recipe-browser/recipe-browser.compone
 })
 export class AnalysisRecipeSelectorComponent {
   @Input() disabled = false;
-  @Output() recipeSelected = new EventEmitter<PipelineDocument>();
+  @Output() recipeSelected = new EventEmitter<PipelineDocument | null>();
 
   selectedRecipeName = '';
   dialogOpen = false;
@@ -23,6 +23,13 @@ export class AnalysisRecipeSelectorComponent {
   errorMessage = '';
 
   constructor(private recipeService: RecipeService) {}
+
+  clearSelection(): void {
+    if (this.disabled || this.loadingSelection) return;
+    this.selectedRecipeName = '';
+    this.errorMessage = '';
+    this.recipeSelected.emit(null);
+  }
 
   openDialog(): void {
     if (this.disabled || this.loadingSelection) return;

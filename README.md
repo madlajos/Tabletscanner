@@ -16,7 +16,7 @@ The planned BTT Octopus four-channel illumination and scanner-settings redesign 
 | --- | --- | --- |
 | Scanner workspace | Implemented: device control, live view, manual capture, autofocus, and automatic measurement | `frontend/src/app/features/` |
 | Recipe editor | Implemented: visual pipeline building, preview, calibration, and recipe CRUD | `frontend/src/app/features/recipe-creator/` |
-| Recipe application | Placeholder only; batch application is not implemented yet | `frontend/src/app/features/recipe-applier/` |
+| Recipe application | Inline analysis of complete tablet captures, asynchronous results, gallery, and cumulative calculations | `frontend/src/app/features/recipe-applier/`, `backend/inline_analysis.py` |
 | Desktop distribution | Implemented locally with Electron, PyInstaller, and Electron Builder | `electron/`, `build.bat` |
 | Motion firmware | Marlin configuration is retained; the complete local firmware tree is not tracked | `Firmware/Marlin/` |
 
@@ -66,9 +66,18 @@ Python backend from its resources directory.
 - Motion access is implemented by `porthandler.py` and `motioncontrols.py`. The controller is
   detected as USB `0483:5740`, identified with `M115`, and driven with Marlin G-code at 115200
   baud. Real hardware must report the mapping-specific marker
-  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME`; generic or older Marlin builds are rejected.
+  `TS-LIGHT-V3-P0F0-P1F1-P2HE0-P3HE1-LOCK-RHOME-DOORS1`; generic or older Marlin builds are rejected.
 - Autofocus and measurement helpers live in `autofocus_main.py`, `manual_bgr_with_check.py`,
   `check_only.py`, and related image-analysis modules.
+- Door Hall switches on DIAG4 (front) and DIAG5 (top) autonomously cut UV in
+  firmware. The backend retains serial door reports, blocks UV while open or unknown,
+  and publishes both inputs in `/api/lights/status`; the scanner shows the door state.
+  Automatic measurement requires known closed doors. Opening either door pauses its current
+  request with a Hungarian popup; closing both resumes it and retries interrupted acquisition
+  without repeating saved rows. `measurement_safety.py` owns these cooperative checkpoints;
+  the shared frontend light-status service keeps door and lamp indicators synchronized.
+  See [software behavior and validation](docs/DOOR_SAFETY.md).
+  See [door wiring, protocol, and deployment checks](TabletScanner_Firmware_UV_MultiLED/Firmware/docs/TabletScannerDoorInterlock.md).
 - The backend starts a daemon lamp-timeout monitor and Flask may serve concurrent requests.
   Camera and serial operations therefore require the existing locks.
 
@@ -149,6 +158,22 @@ durable backend job queue. Progress and reconnect state therefore currently live
 component. An early progress poll returns a non-error `pending` snapshot until the corresponding
 step worker registers the request. Running snapshots also expose the active plan row and nonfatal
 Z-clamp warnings so the plan can follow the hardware and use the common warning presentation.
+
+Selecting **Képelemző recept** attaches a recipe snapshot to the measurement. The backend stages
+each complete tablet's original captures and releases them for analysis after the next acknowledged
+XY move. Measurement completion/stop flushes the last complete tablet after the active capture has
+cleaned up; incomplete tablet sets are excluded. Analysis runs in a separate bounded worker and
+never owns the camera or serial connection. Failures appear on **Recept alkalmazás**, with a red
+notification on its navigation tab when it is not open; imaging continues. The scanner stays
+mounted while other tabs are open.
+
+**Recept alkalmazás** reuses the editor preview and toolbar with isolated state, shows the last
+enabled node, and provides tablet thumbnails, output settings, and JSON result export. Choose
+one tablet's complete capture set or all tablets together; cumulative calculations can run after
+each released tablet or only at measurement end. Results and recipe snapshots are stored under
+`<measurement folder>/elemzes/<session id>/`. Existing saved recipes and operator settings are
+not rewritten. See [inline analysis contracts and validation](docs/INLINE_ANALYSIS.md) for RGB
+binding, limits, lifecycle details, and the hardware-free A4/B4/C4 browser check.
 
 The seamless **255 / 310 / 365 / VIS / RGB+UV** control below the filter rotation controls sends
 the selected wavelengths, in that order, to `POST /api/bgr-capture-series`. No lamp needs to be
@@ -375,8 +400,10 @@ As of this overview:
 - The production frontend build compiles but exits nonzero because
   `step-inspector.component.ts` exceeds the configured component-style budget. The initial
   bundle also exceeds the warning budget.
-- The headless frontend test run reports 10 failing specs. The immediate failures include an
-  invalid standalone-component test setup, an empty suite, and stale Angular starter tests.
+- The empty, invalid standalone app test has been replaced with navigation/error-badge coverage.
+  The inline-analysis validation run completed 82 specs: 76 passed and six existing scanner/settings
+  specs failed. The subsequently expanded focused inline/PCA suite passes all 18 specs. The full
+  suite is not green; failure details are recorded in `docs/INLINE_ANALYSIS.md`.
 - There is no lint command, backend test configuration, end-to-end test target, or CI workflow.
 
 These are baseline failures, not evidence that a new documentation-only change caused a

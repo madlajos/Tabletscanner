@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "Teszt234234",
+  "description": "",
+  "steps": [
+    {
+      "instance_id": "80fc4925-0ea7-418b-ba3e-6adbc0d0f3f3",
+      "step_def_id": "load_image",
+      "param_values": {
+        "source": "C:/Users/madlajos/Desktop/TabletScanner_IMGS/CVDMEGINT/testrtzrzwrtzwr/testrtzrzwrtzwr_0911_152110_E10_vis_filter4.jpg",
+        "file_order": ""
+      },
+      "order": 0,
+      "enabled": true
+    },
+    {
+      "instance_id": "e6faf915-8220-49ec-ad5c-ac1266ad22a0",
+      "step_def_id": "detect_circles",
+      "param_values": {
+        "detection_channel": "GRAY",
+        "dp": 1.2,
+        "detect_scale": 1,
+        "edge_threshold": 19,
+        "min_diameter": 1328,
+        "max_diameter": 1400,
+        "radius_adjustment_percent": 100,
+        "apply_mask": true,
+        "mask_background": "black",
+        "invert_mask": false,
+        "polarity": "dark"
+      },
+      "order": 1,
+      "enabled": true
+    },
+    {
+      "instance_id": "f114a75f-5b73-420e-97be-f115620e1b4c",
+      "step_def_id": "calculate_intensity_stats",
+      "param_values": {
+        "percentiles": "5,25,50,75,95",
+        "display_mode": "per_image",
+        "group_labels": "[]",
+        "chart_enabled": true,
+        "chart_metric": "mean"
+      },
+      "order": 2,
+      "enabled": true
+    }
+  ],
+  "connections": [],
+  "branch_names": {},
+  "created_at": "2026-09-11T13:27:24.738185+00:00",
+  "modified_at": "2026-09-11T13:27:24.738185+00:00"
+}

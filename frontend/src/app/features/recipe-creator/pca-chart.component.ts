@@ -1,5 +1,6 @@
 import { Component, Input, Output, EventEmitter, OnChanges, SimpleChanges, ViewChild, ElementRef, AfterViewInit, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { MatIconModule } from '@angular/material/icon';
 
 export interface PCAData {
@@ -13,7 +14,7 @@ export interface PCAData {
 @Component({
   selector: 'app-pca-chart',
   standalone: true,
-  imports: [CommonModule, MatIconModule],
+  imports: [CommonModule, FormsModule, MatIconModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="pca-chart-container">
@@ -21,7 +22,7 @@ export interface PCAData {
         <div class="controls-section">
           <div class="control-group">
             <label>X tengely:</label>
-            <select (change)="onPCChange('x', $event)" [value]="pcX">
+            <select (change)="onPCChange('x', $event)" [ngModel]="pcX" aria-label="PCA X tengely">
               @for (i of getComponentOptions(); track i) {
                 <option [value]="i">PC{{ i + 1 }} ({{ (data.explained_ratio[i] * 100).toFixed(1) }}%)</option>
               }
@@ -29,7 +30,7 @@ export interface PCAData {
           </div>
           <div class="control-group">
             <label>Y tengely:</label>
-            <select (change)="onPCChange('y', $event)" [value]="pcY">
+            <select (change)="onPCChange('y', $event)" [ngModel]="pcY" aria-label="PCA Y tengely">
               @for (i of getComponentOptions(); track i) {
                 <option [value]="i">PC{{ i + 1 }} ({{ (data.explained_ratio[i] * 100).toFixed(1) }}%)</option>
               }
@@ -46,7 +47,7 @@ export interface PCAData {
             <span class="pca-stat-label">PC{{ pcY + 1 }}:</span>
             <span class="pca-stat-value">{{ (data.explained_ratio[pcY] * 100).toFixed(1) }}%</span>
             <span class="pca-stat-label">Kumulatív:</span>
-            <span class="pca-stat-value">{{ ((data.cumulative_ratio[pcX] + (data.cumulative_ratio[pcY] - (pcX > 0 ? data.cumulative_ratio[pcX - 1] : 0))) * 100).toFixed(1) }}%</span>
+            <span class="pca-stat-value">{{ ((data.cumulative_ratio[pcX > pcY ? pcX : pcY] ?? 0) * 100).toFixed(1) }}%</span>
             <span class="pca-stat-label">n:</span>
             <span class="pca-stat-value">{{ data.scores.length }}</span>
           </div>

@@ -6,8 +6,8 @@ import { Subscription, combineLatest, forkJoin } from 'rxjs';
 import { DataType } from '../../models/pipeline.models';
 import { PipelineStateService } from '../../services/pipeline-state.service';
 import { RecipeService } from '../../services/recipe.service';
-import { ScatterChartComponent } from './scatter-chart.component';
-import { PCAChartComponent } from './pca-chart.component';
+import { ScatterChartComponent, CurveFitData } from './scatter-chart.component';
+import { PCAChartComponent, PCAData } from './pca-chart.component';
 import { ParticleSizeDistributionPreviewComponent } from './particle-size-distribution-preview.component';
 import { IntensityPreviewComponent } from './intensity-preview.component';
 import { IntensitySummary } from '../../models/intensity.models';
@@ -74,7 +74,7 @@ interface ReferenceColorPreviewState {
         <div class="toolbar-content">
           <div class="toolbar-tools">
             <button class="tool-btn icon-tool-btn" [class.active]="rulerActive"
-                    (click)="toggleRuler()" title="Vonalz\u00f3 (t\u00e1vols\u00e1gm\u00e9r\u00e9s)">
+                    (click)="toggleRuler()" title="Vonalzó (távolságmérés)" aria-label="Vonalzó (távolságmérés)">
               \uD83D\uDCCF
             </button>
                 <button class="tool-btn icon-tool-btn" [class.active]="scaleActive"
@@ -178,7 +178,7 @@ interface ReferenceColorPreviewState {
             }
           <div class="toolbar-spacer"></div>
           <!-- Montage button - shows if more than 1 image -->
-          @if (imageCount > 1) {
+          @if (imageCount > 1 && !pipelineState.isExternalPreview) {
             <button class="tool-btn icon-tool-btn"
                     (click)="generateAndShowMontage()" 
                     [disabled]="generatingMontage"
@@ -310,6 +310,10 @@ interface ReferenceColorPreviewState {
                    style="cursor: pointer;" />
             </div>
           </div>
+        } @else if (externalCurveFit && !showGraphViewer) {
+          <app-scatter-chart [data]="externalCurveFit" [label]="'Görbeillesztés'" [width]="1000" [height]="650" />
+        } @else if (externalPca && !showGraphViewer) {
+          <app-pca-chart [data]="externalPca" />
         } @else if (histogramSummary && !showGraphViewer) {
           <app-histogram-preview [imageSrc]="imageSrc" [summary]="histogramSummary"
             [imageIndex]="currentIndex" [imageName]="imageNames[currentIndex] || ''"
@@ -2368,6 +2372,8 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   @ViewChild('imageRoiContainer') imageRoiContainer!: ElementRef<HTMLDivElement>;
 
   imageSrc: string | null = null;
+  externalCurveFit: CurveFitData | null = null;
+  externalPca: PCAData | null = null;
   referenceResizeDisplaySrc: string | null = null;
   referenceResizeOverlaySrc: string | null = null;
   referenceResizeOverlayOpacity = 0;
@@ -3034,7 +3040,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   private subs: Subscription[] = [];
 
   constructor(
-    private pipelineState: PipelineStateService,
+    public pipelineState: PipelineStateService,
     private cdr: ChangeDetectorRef,
     private recipeService: RecipeService,
   ) {}
@@ -3084,6 +3090,14 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
         this.pipelineState.pipeline$,
         this.pipelineState.previewImageIndex$
       ]).subscribe(([so, stepIdx, pipeline, imgIdx]) => {
+        const fits: unknown = so?.['curve_fits'];
+        const scores: unknown = so?.['histogram_pca_scores'];
+        this.externalCurveFit = this.pipelineState.isExternalPreview && pipeline.steps[stepIdx]?.step_def_id === 'fit_curve'
+          && Array.isArray(fits) && fits.length ? fits[fits.length - 1] as CurveFitData : null;
+        this.externalPca = this.pipelineState.isExternalPreview && pipeline.steps[stepIdx]?.step_def_id === 'histogram_pca'
+          && Array.isArray(scores) && scores.length
+          ? { scores: scores as number[][], explained_ratio: so['histogram_pca_explained_ratio'] ?? [], cumulative_ratio: so['histogram_pca_cumulative_ratio'] ?? [] }
+          : null;
         this.imageNames = so?.['loaded_paths'] ?? [];
         if (this.splitPreviewIndices && stepIdx !== this.splitPreviewNodeIndex) {
           this.clearNodeSplitPreview();
@@ -3505,6 +3519,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   }
 
   private updateParticleMontage(pipeline: any, stepIndex: number): void {
+    if (this.pipelineState.isExternalPreview) return;
     const step = stepIndex >= 0 ? pipeline?.steps?.[stepIndex] : null;
     const mode = step?.step_def_id === 'characterize_particles'
       ? step.param_values?.['distribution_mode'] ?? 'pooled'
@@ -5693,6 +5708,7 @@ export class PipelinePreviewComponent implements OnInit, OnDestroy {
   // === Montage feature ===
 
   async generateAndShowMontage(): Promise<void> {
+    if (this.pipelineState.isExternalPreview) return;
     if (this.generatingMontage || this.imageCount < 2 || !this.currentPipeline || this.selectedStepIndex < 0) {
       console.warn('Montage generation skipped:', {
         generatingMontage: this.generatingMontage,

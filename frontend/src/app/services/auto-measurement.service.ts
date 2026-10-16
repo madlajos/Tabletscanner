@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { BASE_URL } from '../api-config';
-import { CaptureRequestRow } from '../models/light.models';
+import { CaptureRequestRow, DoorInterlockStatus } from '../models/light.models';
 import { CaptureWarning } from '../models/capture-metadata.models';
 
 export interface AutoMeasurementSettings {
@@ -45,6 +45,7 @@ export interface TabletStepRequest {
   capture_plan: CaptureRequestRow[];
   is_first_tablet?: boolean;
   background_subtraction?: boolean;
+  inline_analysis_session_id?: string;
 }
 
 export interface CapturedPlanRow extends CaptureRequestRow {
@@ -63,6 +64,8 @@ export interface MeasurementProgressResponse {
   images: MeasurementProgressImage[];
   warnings: CaptureWarning[];
   active_plan_row_index: number | null;
+  door_paused?: boolean;
+  door_pause_count?: number;
 }
 
 export interface TabletStepResponse {
@@ -73,6 +76,9 @@ export interface TabletStepResponse {
   captured_plan_rows?: CapturedPlanRow[];
   af_error_code?: string;
   af_error_message?: string;
+  cancelled?: boolean;
+  door_paused?: boolean;
+  door_pause_count?: number;
 }
 
 @Injectable({
@@ -80,6 +86,18 @@ export interface TabletStepResponse {
 })
 export class AutoMeasurementService {
   constructor(private http: HttpClient) {}
+
+  preflight(): Observable<{ door_interlock: DoorInterlockStatus }> {
+    return this.http.post<{ door_interlock: DoorInterlockStatus }>(
+      `${BASE_URL}/auto_measurement/preflight`, {},
+    );
+  }
+
+  cancelMeasurement(requestId: string | null): Observable<{ status: 'abort_signaled' }> {
+    return this.http.post<{ status: 'abort_signaled' }>(
+      `${BASE_URL}/abort-autofocus`, requestId ? { request_id: requestId } : {},
+    );
+  }
 
   /**
    * Process a single tablet measurement step.

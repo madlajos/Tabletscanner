@@ -121,6 +121,9 @@ _load_image_def = StepDefinition(
 
 
 def _exec_load_image(data: dict, params: dict) -> dict:
+    if "_live_inputs" in params:
+        from pipeline_live_inputs import load_live_images
+        return load_live_images(params["_live_inputs"], params.get("_thumbnail_max_dim", 0))
     path = params.get("source", "")
     if not path:
         from proc_elements import create_data

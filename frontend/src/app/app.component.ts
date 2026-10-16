@@ -20,6 +20,10 @@ import { RecipeCreatorComponent } from './features/recipe-creator/recipe-creator
 import { RecipeApplierComponent } from './features/recipe-applier/recipe-applier.component';
 import { SharedService, AppSection } from './shared.service';
 import { SoftwareSettingsComponent } from './features/software-settings/software-settings.component';
+import { InlineAnalysisService } from './services/inline-analysis.service';
+import { DoorInterlockStatusComponent } from './components/door-interlock-status/door-interlock-status.component';
+import { LightStatusService } from './services/light-status.service';
+import { UNKNOWN_DOOR_INTERLOCK } from './models/light.models';
 
 
 @Component({
@@ -41,6 +45,7 @@ import { SoftwareSettingsComponent } from './features/software-settings/software
     RecipeCreatorComponent,
     RecipeApplierComponent,
     SoftwareSettingsComponent,
+    DoorInterlockStatusComponent,
   ],
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.css']
@@ -50,6 +55,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   title = 'Untitled';  
   activeSection: AppSection = 'scanner';
   softwareSettingsOpen = false;
+  readonly unknownDoors = UNKNOWN_DOOR_INTERLOCK;
   @ViewChild('sidenav') sidenav!: MatSidenav;
 
   constructor(
@@ -59,12 +65,15 @@ export class AppComponent implements OnInit, AfterViewInit {
     private lightbox: Lightbox,
     private cdRef: ChangeDetectorRef,
     public sharedService: SharedService,
+    public inlineAnalysis: InlineAnalysisService,
+    public lightStatus: LightStatusService,
   ) {}
 
   async ngOnInit(): Promise<void> {
     // Subscribe to active section changes
     this.sharedService.activeSection$.subscribe((section) => {
       this.activeSection = section;
+      this.inlineAnalysis.setTabVisible(section === 'applier');
     });
 
     // Wait for the backend readiness check.

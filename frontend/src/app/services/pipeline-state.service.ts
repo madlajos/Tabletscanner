@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, OnDestroy } from '@angular/core';
 import { BehaviorSubject, Subject, Subscription, debounceTime } from 'rxjs';
 import {
   StepDefinition,
@@ -33,7 +33,12 @@ const STEP_IO_OVERRIDES: Record<string, StepIoOverride> = {
 };
 
 @Injectable({ providedIn: 'root' })
-export class PipelineStateService {
+export class PipelineStateService implements OnDestroy {
+  /** External results reuse viewer tools without executing the editor preview route. */
+  isExternalPreview = false;
+  private readonly externalPreviewRequestSubject = new Subject<{ pipeline: PipelineDocument; imageIndex: number; reason: 'parameters' | 'refresh' | 'image' }>();
+  readonly externalPreviewRequests$ = this.externalPreviewRequestSubject.asObservable();
+  private readonly lifetimeSubscriptions = new Subscription();
   private readonly pipelineErrors = new PipelineErrors();
   private validationSubscription?: Subscription;
   private previewSubscription?: Subscription;
@@ -183,7 +188,11 @@ export class PipelineStateService {
 
   constructor(private recipeService: RecipeService) {
     // Auto-preview on pipeline change (debounced)
-    this.pipelineChangedSubject.pipe(debounceTime(400)).subscribe(() => {
+    this.lifetimeSubscriptions.add(this.pipelineChangedSubject.pipe(debounceTime(400)).subscribe(() => {
+      if (this.isExternalPreview) {
+        this.externalPreviewRequestSubject.next({ pipeline: this.getPipeline(), imageIndex: this.getPreviewImageIndex(), reason: 'parameters' });
+        return;
+      }
       this.validate();
       // Skip auto-preview for fit_curve (manual play/apply button)
       const idx = this.selectedStepIndexSubject.value;
@@ -207,7 +216,40 @@ export class PipelineStateService {
         }
       }
       this.requestPreview();
-    });
+    }));
+  }
+
+  loadExternalPipeline(doc: PipelineDocument): void {
+    this.isExternalPreview = true;
+    this.previewSubscription?.unsubscribe();
+    this.validationSubscription?.unsubscribe();
+    this.pipelineErrors.reset();
+    this.pipelineSubject.next(this.normalizePipelineDocument(doc));
+    this.recipeNameSubject.next(doc.name);
+    const enabled = doc.steps.map((step, index) => step.enabled === false ? -1 : index).filter(index => index >= 0);
+    this.selectedStepIndexSubject.next(enabled[enabled.length - 1] ?? -1);
+    this.validationErrorsSubject.next([]);
+    this.dirtySubject.next(false);
+  }
+
+  applyExternalPreview(response: PreviewResponse | null, imageIndex = 0, loading = false): void {
+    this.previewLoadingSubject.next(loading);
+    this.previewImageIndexSubject.next(imageIndex);
+    this.previewImageOverrideSubject.next(null);
+    this.dualMapPreviewSubject.next(null);
+    this.previewImageSubject.next(response?.image_base64 ? `data:image/jpeg;base64,${response.image_base64}` : null);
+    this.previewImageIsGrayscaleSubject.next(response?.is_grayscale ?? false);
+    this.imageCountSubject.next(response?.image_count ?? 0);
+    this.imageDimsSubject.next({ w: response?.image_width ?? 0, h: response?.image_height ?? 0 });
+    this.sideOutputsSubject.next(response?.side_outputs ?? {});
+    this.validationErrorsSubject.next(response?.errors ?? []);
+  }
+
+  ngOnDestroy(): void {
+    this.lifetimeSubscriptions.unsubscribe();
+    this.previewSubscription?.unsubscribe();
+    this.validationSubscription?.unsubscribe();
+    this.externalPreviewRequestSubject.complete();
   }
 
   // --- Catalog ---
@@ -534,6 +576,7 @@ export class PipelineStateService {
   }
 
   selectStep(index: number): void {
+    if (this.isExternalPreview) return;
     this.splitPreviewRequestSubject.next(null);
     this.previewSubscription?.unsubscribe();
     this.previewLoadingSubject.next(false);
@@ -581,6 +624,7 @@ export class PipelineStateService {
 
   /** Preview a specific step index (used to show input image for ROI editing). */
   requestPreviewForStep(stepIndex: number, forceAllImages: boolean = false): void {
+    if (this.isExternalPreview) { this.requestPreview(); return; }
     this.previewSubscription?.unsubscribe();
     const pipeline = this.getPipeline();
     const imageIndex = this.previewImageIndexSubject.value;
@@ -647,6 +691,7 @@ export class PipelineStateService {
   }
 
   requestSplitPreview(stepIndex: number, firstIndex = stepIndex - 1): void {
+    if (this.isExternalPreview) return;
     const pipeline = this.getPipeline();
     if (firstIndex < 0 || firstIndex >= pipeline.steps.length || firstIndex === stepIndex
       || stepIndex < 0 || stepIndex >= pipeline.steps.length) return;
@@ -1010,6 +1055,10 @@ export class PipelineStateService {
   // --- Preview ---
 
   requestPreview(forceAllImages: boolean = false): void {
+    if (this.isExternalPreview) {
+      this.externalPreviewRequestSubject.next({ pipeline: this.getPipeline(), imageIndex: this.getPreviewImageIndex(), reason: 'refresh' });
+      return;
+    }
     this.previewSubscription?.unsubscribe();
     const pipeline = this.getPipeline();
     const stepIndex = this.selectedStepIndexSubject.value;
@@ -1117,6 +1166,10 @@ export class PipelineStateService {
     const clamped = Math.max(0, Math.min(index, count - 1));
     if (clamped !== this.previewImageIndexSubject.value) {
       this.previewImageIndexSubject.next(clamped);
+      if (this.isExternalPreview) {
+        this.externalPreviewRequestSubject.next({ pipeline: this.getPipeline(), imageIndex: clamped, reason: 'image' });
+        return;
+      }
       const stepIndex = this.selectedStepIndexSubject.value;
       const pipeline = this.getPipeline();
       if (stepIndex >= 0 && stepIndex < pipeline.steps.length) {

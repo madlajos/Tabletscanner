@@ -10,6 +10,13 @@
       placeholder="Nincs kiválasztva"
       aria-label="Kiválasztott képelemző recept"
     />
+    @if (selectedRecipeName) {
+      <button type="button" class="browse-recipe-button" (click)="clearSelection()"
+        [disabled]="disabled || loadingSelection" title="Képelemzés kikapcsolása"
+        aria-label="Képelemzés kikapcsolása">
+        <mat-icon>close</mat-icon>
+      </button>
+    }
     <button
       type="button"
       class="browse-recipe-button"

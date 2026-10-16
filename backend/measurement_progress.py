@@ -37,6 +37,17 @@ def set_active_plan_row(request_id: str, row_index: int | None) -> None:
         operation['updated_at'] = monotonic()
 
 
+def set_door_pause(request_id: str, paused: bool) -> None:
+    with _lock:
+        operation = _operations.get(request_id)
+        if operation is None:
+            return
+        if paused and not operation.get('door_paused', False):
+            operation['door_pause_count'] = operation.get('door_pause_count', 0) + 1
+        operation['door_paused'] = paused
+        operation['updated_at'] = monotonic()
+
+
 def record_image(request_id: str, image: dict) -> None:
     with _lock:
         operation = _operations.get(request_id)

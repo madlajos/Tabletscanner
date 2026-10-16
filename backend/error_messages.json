@@ -1,4 +1,8 @@
 {
+  "E4501": "Érvénytelen élő képelemzési beállítás. Ellenőrizze a receptet és a mérés adatait.",
+  "E4502": "Az elemzési munkamenet vagy eredmény nem található. Indítson új elemzést.",
+  "E4503": "A képelemzés nem sikerült. A mérés folytatódik; a részletes hiba a Recept alkalmazás lapon látható.",
+  "E4504": "Az elemzés elérte a feldolgozási korlátot. A felvételek megmaradtak; csökkentse a képcsoportot vagy indítsa újra az elemzést.",
   "W1205": "A Z korrekció elérte a mozgáshatárt ({target_z} mm). A felvétel itt készül. Hiányzó Z eltolás: {missing_offset_mm} mm.",
   "E3611": "Érvénytelen keresési csatorna (GRAY, R, G vagy B szükséges).",
   "E2307": "Érvénytelen hisztogram-megjelenítési mód.",
@@ -69,5 +73,9 @@
   "E3608": "Az érvénytelen sugárszorzó 0-nál nagyobb érték kell legyen.",
   "E3609": "Érvénytelen maszk háttérszín (black vagy white szükséges).",
   "E3610": "A detektálási méretaránynak 0-nál nagyobb értéknek kell lennie.",
+  "E1402": "Az UV-fény bekapcsolásához zárja be az elülső ajtót és a felső fedelet. Az ajtóállapotnak ismertnek kell lennie.",
+  "E1404": "A gép ajtaja és/vagy teteje nyitva van. A mérés folytatásához zárja vissza.",
+  "E1405": "Az ajtó és a fedél bezáródott. A mérés folytatódik.",
+  "E1403": "A szkenner másik műveletet végez. Várja meg annak befejezését.",
   "GENERIC": "Váratlan hiba lépett fel"
 }

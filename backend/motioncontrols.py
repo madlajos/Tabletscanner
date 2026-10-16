@@ -4,6 +4,7 @@ import globals
 from flask import jsonify
 from typing import Dict
 import logging
+from measurement_safety import MeasurementDoorInterrupted, MeasurementCancelled
 log = logging.getLogger(__name__)
 
 _POS_RE = re.compile(r'X:\s*(-?\d+(?:\.\d+)?)\s+Y:\s*(-?\d+(?:\.\d+)?)\s+Z:\s*(-?\d+(?:\.\d+)?)', re.I)
@@ -75,7 +76,7 @@ def home_axes(motion_platform, *axes):
         raise HomingTimeoutError(axes_str, timeout_seconds, reply)
     except HomingError:
         raise
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, MeasurementDoorInterrupted, MeasurementCancelled):
         raise  # let caller handle USB disconnect
     except Exception as e:
         log.error(f"Error sending homing command to Motion platform: {e}")
@@ -97,7 +98,7 @@ def disable_steppers(motion_platform, *axes):
         if not ok:
             log.warning(f"Disable steppers command '{command}' was not acknowledged")
         return ok
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, MeasurementDoorInterrupted, MeasurementCancelled):
         raise  # let caller handle USB disconnect
     except Exception as e:
         log.error(f"Error sending Disable Steppers command: {e}")
@@ -195,7 +196,7 @@ def move_to_position(motion_platform, x_pos=None, y_pos=None, z_pos=None):
         if not ok:
             log.warning(f"Move command '{move_command}' timed out waiting for 'ok'")
 
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, MeasurementDoorInterrupted, MeasurementCancelled):
         raise  # let caller handle USB disconnect
     except Exception as e:
         log.error(f"Error occurred while sending move to position command: {e}")
@@ -230,7 +231,7 @@ def move_relative(motion_platform, x=None, y=None, z=None):
         if not ok:
             log.warning(f"Relative move '{move_command}' timed out waiting for 'ok'")
 
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, MeasurementDoorInterrupted, MeasurementCancelled):
         raise  # let caller handle USB disconnect
     except Exception as e:
         log.error(f"Error occurred while sending move command: {e}")

@@ -100,6 +100,41 @@ def automatic_rgb_composite(data, blue_image=1, green_image=2, red_image=3,
                             apply_gamma=True, final_blur=3):
     if not isinstance(data, dict) or data.get("error"):
         return data
+    if data.get("_inline_capture_input"):
+        from pipeline_live_inputs import live_rgb_groups
+        groups = live_rgb_groups(data)
+        if data.get("error"):
+            return data
+        output_images, output_paths, masks, metrics = [], [], [], []
+        source_paths = data.get("paths") or []
+        for indices, metadata in groups:
+            # The existing numerical operation runs independently on each
+            # complete tablet/wavelength set, in metadata-defined RGB order.
+            subset = {"images": [data["images"][index] for index in indices],
+                      "paths": [source_paths[index] for index in indices],
+                      "results": {}, "meta": {}, "history": [], "error": None}
+            result = automatic_rgb_composite(
+                subset, blue_image, green_image, red_image, min_scale, max_scale,
+                search_size, white_balance_strength, target_luminance, apply_gamma, final_blur,
+            )
+            if result.get("error"):
+                data["error"] = result["error"]
+                return data
+            output_images.extend(result["images"])
+            output_paths.extend(result["paths"])
+            masks.append(result["results"]["automatic_rgb_signal_mask"])
+            metrics.append({**result["results"]["automatic_rgb_metrics"],
+                            "tablet_id": metadata["tablet_id"],
+                            "wavelength": metadata["wavelength"]})
+        data.update(images=output_images, paths=output_paths, count=len(output_images),
+                    image_metadata=[metadata for _, metadata in groups])
+        data.setdefault("results", {})["automatic_rgb_signal_mask"] = masks
+        data["results"]["automatic_rgb_metrics"] = metrics
+        data.setdefault("meta", {})["automatic_rgb_composite"] = {
+            "source_binding": "metadata_rgb", "group_count": len(groups), "groups": metrics,
+        }
+        data.setdefault("history", []).append("automatic_rgb_composite")
+        return data
     images = data.get("images") or []
     try:
         indices = [int(blue_image) - 1, int(green_image) - 1, int(red_image) - 1]

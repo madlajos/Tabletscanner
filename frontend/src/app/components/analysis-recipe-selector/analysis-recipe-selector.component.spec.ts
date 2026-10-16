@@ -19,6 +19,7 @@ describe('AnalysisRecipeSelectorComponent', () => {
 
     const browse = fixture.nativeElement.querySelector('.browse-recipe-button') as HTMLButtonElement;
     browse.click();
+    fixture.detectChanges();
     http.expectOne(`${BASE_URL}/recipes`).flush({
       recipes: [{ name: 'Élő mérés', description: 'Teszt recept', step_count: 3 }],
     });
@@ -43,5 +44,21 @@ describe('AnalysisRecipeSelectorComponent', () => {
     expect(selected).toHaveBeenCalledWith(document);
     expect(fixture.nativeElement.querySelector('.recipe-dialog')).toBeNull();
     http.verify();
+  });
+
+  it('allows turning analysis off and locks that choice during measurement', () => {
+    const fixture = TestBed.createComponent(AnalysisRecipeSelectorComponent);
+    const component = fixture.componentInstance;
+    const selected = jasmine.createSpy('selected');
+    component.recipeSelected.subscribe(selected);
+    component.selectedRecipeName = 'Crop';
+    component.disabled = true;
+    component.clearSelection();
+    expect(component.selectedRecipeName).toBe('Crop');
+    expect(selected).not.toHaveBeenCalled();
+    component.disabled = false;
+    component.clearSelection();
+    expect(component.selectedRecipeName).toBe('');
+    expect(selected).toHaveBeenCalledOnceWith(null);
   });
 });

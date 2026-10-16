@@ -395,6 +395,15 @@
   flex-wrap: nowrap;
 }
 
+.lamp-button-wrapper {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+
+  &:focus-visible { outline: 2px solid #e9bd43; outline-offset: 2px; border-radius: 4px; }
+  .lamp-button:disabled { pointer-events: none; }
+}
+
 .lamp-button {
   @extend %button-base;
 

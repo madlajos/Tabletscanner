@@ -15,6 +15,8 @@ body {
 /* Navigation bar */
 .app-nav {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 0;
   background: #1e1e1e;
   border-bottom: 1px solid #333;
@@ -24,7 +26,13 @@ body {
   min-height: 40px;
 }
 
+.nav-door-status {
+  margin-left: auto;
+  padding: 4px 0 4px 12px;
+}
+
 .nav-tab {
+  align-self: stretch;
   padding: 10px 20px;
   background: transparent;
   border: none;
@@ -43,6 +51,30 @@ body {
 .nav-tab.active {
   color: #e0e0e0;
   border-bottom-color: #3b82f6;
+}
+
+.nav-tab.analysis-error {
+  color: #ffb4b4;
+  background: #651f28;
+  border-bottom-color: #ff6b6b;
+}
+
+.analysis-notification {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: white;
+  font-weight: bold;
+}
+
+.nav-tab:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: -3px;
 }
 
 .app-grid {

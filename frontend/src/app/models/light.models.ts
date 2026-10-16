@@ -25,7 +25,25 @@ export interface AdvancedLampSettings {
   output_selectors: Record<LightChannel, string>;
 }
 
+export interface DoorInterlockStatus {
+  known: boolean;
+  front_open: boolean | null;
+  top_open: boolean | null;
+  uv_blocked: boolean;
+  trip_count: number | null;
+}
+
+export const UNKNOWN_DOOR_INTERLOCK: DoorInterlockStatus = {
+  known: false, front_open: null, top_open: null, uv_blocked: true, trip_count: null,
+};
+
+export function doorsAllowUv(doors: DoorInterlockStatus | undefined): boolean {
+  return doors?.known === true && doors.front_open === false
+    && doors.top_open === false && doors.uv_blocked === false;
+}
+
 export interface LightStatus {
+  door_interlock?: DoorInterlockStatus;
   active_channel: LightChannel | null;
   active_mode: LightActivationMode;
   channels: Record<LightChannel, boolean>;

@@ -93,7 +93,13 @@ def create_pseudo_image(
     if not images:
         data["error"] = "E2150"
         return data
-    if len(images) % 3:
+    live_groups = None
+    if data.get("_inline_capture_input"):
+        from pipeline_live_inputs import live_rgb_groups
+        live_groups = live_rgb_groups(data)
+        if data.get("error"):
+            return data
+    elif len(images) % 3:
         data["error"] = "E2154"
         return data
 
@@ -115,10 +121,12 @@ def create_pseudo_image(
         parsed_selectors.append((relative_index, channel, scale_percent, multiplier, should_move))
 
     output_images = []
-    for group_start in range(0, len(images), 3):
+    source_groups = ([indices for indices, _ in live_groups] if live_groups is not None
+                     else [list(range(start, start + 3)) for start in range(0, len(images), 3)])
+    for group_indices in source_groups:
         output_channels = []
         for relative_index, channel, scale_percent, multiplier, should_move in parsed_selectors:
-            extracted = _extract_channel(images[group_start + relative_index], channel)
+            extracted = _extract_channel(images[group_indices[relative_index]], channel)
             if extracted is None:
                 data["error"] = "E2151"
                 return data
@@ -135,7 +143,11 @@ def create_pseudo_image(
     data["_original_paths"] = list(source_paths)
     data["images"] = output_images
     data["count"] = len(output_images)
-    data["paths"] = source_paths[::3]
+    if live_groups is not None:
+        data["image_metadata"] = [metadata for _, metadata in live_groups]
+        data["paths"] = [source_paths[indices[0]] for indices, _ in live_groups]
+    else:
+        data["paths"] = source_paths[::3]
     data.setdefault("meta", {})["pseudo_image"] = {
         "blue_source": blue_source,
         "green_source": green_source,
@@ -158,6 +170,7 @@ def create_pseudo_image(
         "offset": {"x": int(offset_x), "y": int(offset_y)},
         "group_size": 3,
         "group_count": len(output_images),
+        "source_binding": "metadata_rgb" if live_groups is not None else "file_order",
     }
     data.setdefault("history", []).append("create_pseudo_image")
     return data

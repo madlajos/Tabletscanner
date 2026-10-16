@@ -140,6 +140,10 @@ def grab_and_convert_frame(camera, timeout_ms=5000, retries=2):
     Raises:
         RuntimeError: If camera not open/grabbing, or grab fails
     """
+    from measurement_safety import (
+        acquisition_checkpoint, MeasurementDoorInterrupted, MeasurementCancelled,
+    )
+    acquisition_checkpoint()
     if not (camera and camera.IsOpen()):
         raise RuntimeError("Camera not open")
     
@@ -164,7 +168,10 @@ def grab_and_convert_frame(camera, timeout_ms=5000, retries=2):
             # same acquisition available to an owned-operation live view.
             frame_copy = frame_bgr.copy()
             publish_owned_preview_frame(frame_copy)
+            acquisition_checkpoint()
             return frame_copy
+        except (MeasurementDoorInterrupted, MeasurementCancelled):
+            raise
         except Exception as e:
             last_error = e
         finally:

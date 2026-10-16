@@ -5,8 +5,24 @@ from __future__ import annotations
 from typing import Any, Mapping
 import json
 import math
+import unicodedata
 
 from settings_manager import DEFAULT_FIRST_TABLET_X_MM, DEFAULT_FIRST_TABLET_Y_MM, DEFAULT_TABLET_SPACING_MM
+
+
+def canonical_channel_name(filter_name: Any) -> str | None:
+    """Translate configured RGB filter names without inferring from slot or color."""
+    if not isinstance(filter_name, str):
+        return None
+    normalized = ''.join(
+        char for char in unicodedata.normalize('NFKD', filter_name.strip().casefold())
+        if not unicodedata.combining(char)
+    )
+    return {
+        'piros': 'red', 'red': 'red',
+        'zold': 'green', 'green': 'green',
+        'kek': 'blue', 'blue': 'blue',
+    }.get(normalized)
 
 
 def tray_position_label(settings, position):
@@ -128,6 +144,7 @@ def build_capture_metadata(
             selected_filter.get("wavelength_range") if selected_filter else None
         ),
         "filter_name": selected_filter.get("name") if selected_filter else None,
+        "channel": canonical_channel_name(selected_filter.get("name")) if selected_filter else None,
         "exposure_time": _rounded_number(live_or_requested("exposure_time", "exposure_time"), 0),
         "gain": _rounded_number(live_or_requested("gain", "gain"), 4),
         "gamma": _rounded_number(live_or_requested("gamma", "gamma"), 4),
